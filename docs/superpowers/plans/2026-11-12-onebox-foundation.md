@@ -934,7 +934,8 @@ describe('visibility plugin', () => {
 
   it('marks decorations with data-visible', () => {
     const state = setVisible(makeState(6), [])
-    const decos = visibilityKey.get(state).props.decorations!(state) as DecorationSet
+    const plugin = visibilityKey.get(state)!
+    const decos = plugin.props.decorations!.call(plugin, state) as DecorationSet
     const found = decos.find()
     expect(found.length).toBe(2)
     expect(found.map((d) => d.spec.visible)).toEqual([false, true])
@@ -942,22 +943,24 @@ describe('visibility plugin', () => {
 
   it('memoizes decorations when nothing changed', () => {
     const state = setVisible(makeState(6), [0])
-    const plugin = visibilityKey.get(state)
-    const a = plugin.props.decorations!(state)
-    const b = plugin.props.decorations!(state)
+    const plugin = visibilityKey.get(state)!
+    const a = plugin.props.decorations!.call(plugin, state)
+    const b = plugin.props.decorations!.call(plugin, state)
     expect(a).toBe(b)
   })
 
   it('rebuilds decorations when the doc changes', () => {
     const state = setVisible(makeState(6), [0])
-    const plugin = visibilityKey.get(state)
-    const a = plugin.props.decorations!(state)
+    const plugin = visibilityKey.get(state)!
+    const a = plugin.props.decorations!.call(plugin, state)
     const next = state.apply(state.tr.insertText('x', 1))
-    const b = plugin.props.decorations!(next)
+    const b = plugin.props.decorations!.call(plugin, next)
     expect(a).not.toBe(b)
   })
 })
 ```
+
+注：`PluginKey.get()` 返回 `Plugin | undefined`，且 `props.decorations` 的类型带 `this: P`（prosemirror-view 1.42.9 d.ts:838），所以测试里必须 `!` + `.call(plugin, state)`，否则 tsc 报错。**实现侧不得依赖 `this`** —— PM 自身是脱离插件对象调用该 prop 的，运行时 `this` 并不成立；本实现用闭包 `cache` 与 `visibilityKey.getState(state)`，不读 `this`。
 
 - [ ] **Step 2: 运行测试确认失败**
 
