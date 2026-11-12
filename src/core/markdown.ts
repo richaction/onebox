@@ -72,10 +72,19 @@ const serializer = new MarkdownSerializer(
     listItem: base.list_item,
     // Tiptap 用 language / start，prosemirror-markdown 默认用 params / order
     codeBlock(state, node) {
-      state.write('```' + ((node.attrs.language as string | null) || '') + '\n')
-      state.text(node.textContent, false)
+      const text = node.textContent
+      // 围栏必须长于内容中任何行首围栏串，否则内层围栏提前闭合、正文被截断改写。
+      // 代码块是受支持语法，没有只读闸门兜底，所以这里必须自身正确。
+      let longest = 0
+      for (const line of text.split('\n')) {
+        const m = /^(`{3,}|~{3,})/.exec(line)
+        if (m) longest = Math.max(longest, m[1].length)
+      }
+      const fence = '`'.repeat(Math.max(3, longest + 1))
+      state.write(fence + ((node.attrs.language as string | null) || '') + '\n')
+      state.text(text, false)
       state.ensureNewLine()
-      state.write('```')
+      state.write(fence)
       state.closeBlock(node)
     },
     orderedList(state, node) {
@@ -123,20 +132,40 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
     }
   }
 
-  let inFence = false
+  let fenceChar = ''
+  let fenceLen = 0
+  let inHtmlComment = false
   let prev = ''
   for (const line of text.split('\n')) {
-    if (/^\s{0,3}(```|~~~)/.test(line)) {
-      inFence = !inFence
+    // 围栏按字符与长度配对闭合：4 反引号围栏内的 ``` 行不应翻转状态
+    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (f) {
+      if (!fenceChar) {
+        fenceChar = f[1][0]
+        fenceLen = f[1].length
+      } else if (f[1][0] === fenceChar && f[1].length >= fenceLen) {
+        fenceChar = ''
+        fenceLen = 0
+      }
       prev = line
       continue
     }
-    if (!inFence) {
+    if (!fenceChar) {
       if (isTableDelimiter(line, prev)) found.add('table')
-      // 任意缩进 + 允许空标签：漏检会让文件以可编辑打开，保存时正文被转义改写
-      if (/^\s*[-*+]\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
+      // 任意缩进、有序标记、引用前缀、空标签：漏检会让文件以可编辑打开，
+      // 保存时任务列表标记被转义改写成字面文本
+      if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
       if (/\[\^[^\]]+\]/.test(line)) found.add('footnote')
       if (/<\/?[a-zA-Z][^>]*>/.test(line)) found.add('html')
+      // 多行 HTML 注释：起始行未同行闭合时进入注释态。单行注释逐字往返无损，
+      // 不纳入检测；多行注释的结束符会被转义成 \-->，在第三方编辑器里永不闭合、
+      // 吞掉后文。
+      const open = line.indexOf('<!--')
+      if (open >= 0 && !line.slice(open + 4).includes('-->')) inHtmlComment = true
+      if (inHtmlComment) {
+        found.add('html')
+        if (line.includes('-->')) inHtmlComment = false
+      }
     }
     prev = line
   }

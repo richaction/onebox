@@ -49,9 +49,23 @@ describe('markdown round trip', () => {
     expect(roundTrip('### 三级\n')).toContain('### 三级')
   })
 
-  it('never emits underline markup', () => {
-    const out = roundTrip('普通文本\n')
-    expect(out).not.toContain('<u>')
+  it('emits no HTML for any supported mark', () => {
+    const out = roundTrip('**b** *i* ~~s~~ `c` [l](https://e.com)\n')
+    expect(out).not.toMatch(/<[a-zA-Z/]/)
+  })
+
+  it('sizes the fence to survive nested backtick runs', () => {
+    const md = '````md\n```\nx\n```\n````\n'
+    const once = parseMarkdown(md, schema)
+    const out = serializeMarkdown(once)
+    expect(out.startsWith('````')).toBe(true)
+    expect(parseMarkdown(out, schema).eq(once)).toBe(true)
+  })
+
+  it('keeps tilde-fenced content containing backtick fences', () => {
+    const md = '~~~\n```\nx\n```\n~~~\n'
+    const once = parseMarkdown(md, schema)
+    expect(parseMarkdown(serializeMarkdown(once), schema).eq(once)).toBe(true)
   })
 })
 
@@ -124,7 +138,34 @@ describe('parse tolerance', () => {
     }
   })
 
-  it('preserves html comments verbatim', () => {
-    expect(roundTrip('before\n\n<!-- hidden -->\n\nafter\n')).toContain('<!-- hidden -->')
+  it('preserves single-line html comments', () => {
+    const md = 'before\n\n<!-- hidden -->\n\nafter\n'
+    const once = parseMarkdown(md, schema)
+    const out = serializeMarkdown(once)
+    expect(out).toContain('<!-- hidden -->')
+    expect(parseMarkdown(out, schema).eq(once)).toBe(true)
+  })
+})
+
+describe('detection regression cases', () => {
+  it('detects ordered-list task items', () => {
+    expect(detectUnsupported('1. [x] done\n2. [ ] todo\n')).toContain('taskList')
+  })
+
+  it('detects blockquoted task items', () => {
+    expect(detectUnsupported('> - [x] done\n')).toContain('taskList')
+  })
+
+  it('detects multi-line html comments', () => {
+    expect(detectUnsupported('before\n\n<!--\nhidden\n-->\n\nafter\n')).toContain('html')
+  })
+
+  it('does not flag a single-line html comment', () => {
+    expect(detectUnsupported('a <!-- x --> b\n')).toEqual([])
+  })
+
+  it('pairs fences by char and length so a 4-backtick fence does not invert state', () => {
+    const md = '````\n```\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+    expect(detectUnsupported(md)).toContain('table')
   })
 })
