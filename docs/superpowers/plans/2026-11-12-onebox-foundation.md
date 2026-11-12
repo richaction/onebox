@@ -769,6 +769,7 @@ Expected: 退出码 0
 
 ```ts
 import { describe, expect, it } from 'vitest'
+import { EditorState } from '@tiptap/pm/state'
 import { HeightCache, estimateHeight } from '../src/core/viewport/heights'
 import { schema } from '../src/core/schema'
 
@@ -814,6 +815,23 @@ describe('estimateHeight', () => {
     expect(estimateHeight(para('x'.repeat(160)))).toBe(48)
     expect(estimateHeight(para('x'.repeat(161)))).toBe(72)
   })
+
+  it('counts explicit newlines, not just characters', () => {
+    const code = schema.node('codeBlock', null, [schema.text('a\n'.repeat(9) + 'a')])
+    expect(estimateHeight(code)).toBe(240)
+  })
+})
+
+describe('node identity across transactions', () => {
+  it('keeps an unmodified block reference so the cache still hits', () => {
+    const doc = schema.node('doc', null, [para('aaa'), para('bbb')])
+    const cache = new HeightCache()
+    const second = doc.child(1)
+    cache.set(second, 90)
+    const next = EditorState.create({ doc }).tr.insertText('x', 1).doc
+    expect(next.child(1)).toBe(second)
+    expect(cache.get(next.child(1))).toBe(90)
+  })
 })
 ```
 
@@ -834,8 +852,11 @@ const CHARS_PER_LINE = 80
 const MIN_HEIGHT = 28
 
 export function estimateHeight(block: Node): number {
-  const lines = Math.ceil(block.textContent.length / CHARS_PER_LINE)
-  return Math.max(MIN_HEIGHT, lines * LINE_HEIGHT)
+  const text = block.textContent
+  // 显式换行与自动折行取较大者：只看字符数会把 10 行短代码块估成 1 行
+  const explicitLines = text.split('\n').length
+  const wrappedLines = Math.ceil(text.length / CHARS_PER_LINE)
+  return Math.max(MIN_HEIGHT, Math.max(explicitLines, wrappedLines) * LINE_HEIGHT)
 }
 
 // 以块节点对象为键：PM 节点不可变，未修改的块跨 transaction 仍是同一引用（命中），
@@ -856,7 +877,7 @@ export class HeightCache {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/heights.test.ts`
-Expected: PASS（7 passed）
+Expected: PASS（9 passed）
 
 - [ ] **Step 5: 提交并报告**
 
@@ -876,6 +897,7 @@ Expected: PASS（7 passed）
   - `createVisibilityPlugin(): Plugin<VisibilityState>`
   - `forcedVisiblePositions(state: EditorState): Set<number>`
   - `isBlockVisible(state: EditorState, pos: number): boolean` — **nodeView 必须用这个，不能直接读 `state.visible`**，否则选区强制可见的块会被误渲染成占位
+  - `sameSet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean` — **导出供 Task 7 复用**，避免 `nextVisibleSet` 再写一份同样的比较逻辑
 
 - [ ] **Step 1: 写失败测试**
 
@@ -939,6 +961,49 @@ describe('visibility plugin', () => {
     const found = decos.find()
     expect(found.length).toBe(2)
     expect(found.map((d) => d.spec.visible)).toEqual([false, true])
+    // attrs（第 3 参数）才是驱动 PM 销毁重建的那一半，必须单独断言：
+    // 只测 spec 的话，删掉 attrs 参数仍然全绿，而整个架构会失效。
+    // 公开 d.ts 只暴露 from/to/spec，attrs 在运行时挂在 type 上。
+    expect(
+      found.map(
+        (d) => (d as unknown as { type: { attrs: Record<string, string> } }).type.attrs['data-visible'],
+      ),
+    ).toEqual(['false', 'true'])
+  })
+
+  it('maps visible positions through document changes', () => {
+    const state = setVisible(makeState(6), [5])
+    const next = state.apply(state.tr.insertText('x', 1))
+    expect([...visibilityKey.getState(next)!.visible]).toEqual([6])
+  })
+
+  it('drops visible positions whose block was deleted', () => {
+    const state = setVisible(makeState(6), [0, 5])
+    const next = state.apply(state.tr.delete(0, 5))
+    expect([...visibilityKey.getState(next)!.visible]).toEqual([0])
+  })
+
+  it('forces every block in a range selection visible', () => {
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('aaa')]),
+      schema.node('paragraph', null, [schema.text('bbb')]),
+      schema.node('paragraph', null, [schema.text('ccc')]),
+    ])
+    const state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 1, 12),
+      plugins: [createVisibilityPlugin()],
+    })
+    expect([...forcedVisiblePositions(state)].sort((a, b) => a - b)).toEqual([0, 5, 10])
+  })
+
+  it('rebuilds decorations when the visible set changes', () => {
+    const state = setVisible(makeState(6), [0])
+    const plugin = visibilityKey.get(state)!
+    const a = plugin.props.decorations!.call(plugin, state)
+    const next = setVisible(state, [5])
+    const b = plugin.props.decorations!.call(plugin, next)
+    expect(a).not.toBe(b)
   })
 
   it('memoizes decorations when nothing changed', () => {
@@ -984,7 +1049,14 @@ export const visibilityKey = new PluginKey<VisibilityState>('onebox-visibility')
 
 export function forcedVisiblePositions(state: EditorState): Set<number> {
   const forced = new Set<number>()
-  for (const pos of [state.selection.from, state.selection.to]) {
+  const { from, to } = state.selection
+  // 范围选区必须覆盖途经的每一个顶层块，只取两端会漏掉中间块；
+  // AllSelection（Cmd+A）的 from=0 / to=content.size 更是只命中首块。
+  state.doc.nodesBetween(from, to, (node, pos, parent) => {
+    if (parent === state.doc) forced.add(pos)
+  })
+  // 折叠选区或端点落在块边界时 nodesBetween 可能不回调，补上两端解析结果
+  for (const pos of [from, to]) {
     const $pos = state.doc.resolve(pos)
     forced.add($pos.depth === 0 ? pos : $pos.before(1))
   }
@@ -993,10 +1065,17 @@ export function forcedVisiblePositions(state: EditorState): Set<number> {
 
 export function isBlockVisible(state: EditorState, pos: number): boolean {
   if (visibilityKey.getState(state)?.visible.has(pos)) return true
+  const { from, to } = state.selection
+  // 折叠选区是输入与滚动时的绝对多数情况，走无分配快路径：
+  // 2 万块初次渲染会调用本函数 2 万次，每次都建 Set + 两次 resolve 开销显著
+  if (from === to) {
+    const $pos = state.doc.resolve(from)
+    return pos === ($pos.depth === 0 ? from : $pos.before(1))
+  }
   return forcedVisiblePositions(state).has(pos)
 }
 
-function sameSet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+export function sameSet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
   if (a.size !== b.size) return false
   for (const v of a) if (!b.has(v)) return false
   return true
@@ -1016,7 +1095,16 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
       init: () => ({ visible: new Set<number>() }),
       apply(tr, value) {
         const meta = tr.getMeta(visibilityKey) as { visible: ReadonlySet<number> } | undefined
-        return meta ? { visible: meta.visible } : value
+        if (meta) return { visible: meta.visible }
+        if (!tr.docChanged) return value
+        // 文档变更会移动其后所有顶层块的起始位置。不映射就会让下方每个块
+        // 的可见性判定失效、被打成占位——每次敲键都触发一轮销毁重建。
+        const mapped = new Set<number>()
+        for (const pos of value.visible) {
+          const result = tr.mapping.mapResult(pos)
+          if (!result.deleted) mapped.add(result.pos)
+        }
+        return { visible: mapped }
       },
     },
     props: {
@@ -1056,7 +1144,7 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/visibility.test.ts`
-Expected: PASS（7 passed）
+Expected: PASS（11 passed）
 
 若 `forces the selection block visible` 得到 `[0]` 而非 `[5]`，说明测试里 `selectionPos` 落在了 block1；确认 doc 位置计算（paragraph nodeSize = 1 + 文本长度 + 1）。
 
@@ -1318,7 +1406,7 @@ Expected: 退出码 0
 - Test: `tests/observer.test.ts`
 
 **Interfaces:**
-- Consumes: `ViewportObserver`（Task 6 定义）、`visibilityKey`（Task 5）
+- Consumes: `ViewportObserver`（Task 6 定义）、`visibilityKey` 与 `sameSet`（Task 5 导出，**复用而非重写集合比较**）
 - Produces:
   - `nextVisibleSet(prev: ReadonlySet<number>, next: ReadonlySet<number>): ReadonlySet<number> | null` — 集合未变返回 `null`
   - `blockPosOf(view: EditorView, el: Element): number`
@@ -1370,23 +1458,13 @@ Expected: FAIL — 无法解析 `../src/core/viewport/observer`
 ```ts
 import type { EditorView } from '@tiptap/pm/view'
 import type { ViewportObserver } from './blockNodeView'
-import { visibilityKey } from './visibility'
+import { sameSet, visibilityKey } from './visibility'
 
 export function nextVisibleSet(
   prev: ReadonlySet<number>,
   next: ReadonlySet<number>,
 ): ReadonlySet<number> | null {
-  if (prev.size === next.size) {
-    let same = true
-    for (const v of next) {
-      if (!prev.has(v)) {
-        same = false
-        break
-      }
-    }
-    if (same) return null
-  }
-  return next
+  return sameSet(prev, next) ? null : next
 }
 
 export function blockPosOf(view: EditorView, el: Element): number {
@@ -2234,7 +2312,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 67 项（harness 1 + schema 5 + markdown 30 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 64 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 73 项（harness 1 + schema 5 + markdown 30 + heights 9 + visibility 11 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 70 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2298,7 +2376,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：67 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：73 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
