@@ -137,7 +137,8 @@ describe('createBlockNodeView', () => {
     const nv = createBlockNodeView(nested, view, () => 2, new HeightCache(), () => null)
     expect(nv.contentDOM).toBeDefined()
     expect(nv.dom.tagName).toBe('P')
-    expect(nv.dom.className).not.toContain('onebox-block')
+    // 语义元素自身就是内容容器，PM 才会把文字渲染进 <p>；套一层 div 就不相等了
+    expect(nv.contentDOM).toBe(nv.dom)
   })
 
   it('renders a paragraph nested in a blockquote normally', () => {
@@ -217,6 +218,68 @@ describe('createBlockNodeView', () => {
     )
     expect(nv.ignoreMutation!({ target: nv.dom } as never)).toBe(true)
     expect(nv.ignoreMutation!({ target: nv.contentDOM } as never)).toBe(false)
+    // PM 渲染进 contentDOM 的后代文本节点同样不能被忽略
+    const text = document.createTextNode('aaa')
+    nv.contentDOM!.appendChild(text)
+    expect(nv.ignoreMutation!({ target: text } as never)).toBe(false)
+  })
+
+  it('never ignores selection mutations', () => {
+    // PM 默认实现（view dist:1125）对 selection mutation 恒返回 false；
+    // 吞掉它 PM 就不再从 DOM 回读选区。占位块（无 contentDOM）也一样。
+    const view = makeView([0])
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    expect(nv.ignoreMutation!({ type: 'selection', target: nv.dom } as never)).toBe(false)
+
+    const hidden = makeView([])
+    const placeholder = createBlockNodeView(
+      hidden.state.doc.child(0), hidden, () => 0, new HeightCache(), () => null,
+    )
+    expect(placeholder.contentDOM).toBeUndefined()
+    expect(
+      placeholder.ignoreMutation!({ type: 'selection', target: placeholder.dom } as never),
+    ).toBe(false)
+  })
+
+  it('does not register nested blocks with the observer', () => {
+    // 嵌套段落若也进 observer，观测目标数会随文档嵌套深度成倍增长
+    const seen: string[] = []
+    const observer = {
+      observe: () => seen.push('observe'),
+      unobserve: () => seen.push('unobserve'),
+      disconnect: () => {},
+    }
+    const list = schema.node('bulletList', null, [
+      schema.node('listItem', null, [schema.node('paragraph', null, [schema.text('item')])]),
+    ])
+    const doc = schema.node('doc', null, [list])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 3),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const view = { state } as unknown as EditorView
+    const nested = state.doc.child(0).child(0).child(0)
+    const nv = createBlockNodeView(nested, view, () => 2, new HeightCache(), () => observer)
+    expect(seen).toEqual([])
+    // 嵌套块不注册观测，也没有需要清理的东西，故不提供 destroy
+    expect(nv.destroy).toBeUndefined()
+  })
+
+  it('recomputes a hidden placeholder height when its content changes', () => {
+    const view = makeView([])
+    const block = view.state.doc.child(0)
+    const heights = new HeightCache()
+    heights.set(block, 123)
+    const nv = createBlockNodeView(block, view, () => 0, heights, () => null)
+    expect(nv.dom.style.height).toBe('123px')
+    // 200 字符 → ceil(200/80)=3 行 → 72px；新节点无缓存，走 estimateHeight
+    const taller = schema.node('paragraph', null, [schema.text('x'.repeat(200))])
+    expect(nv.update!(taller, [], undefined as never)).toBe(true)
+    expect(nv.dom.style.height).toBe('72px')
   })
 })
 

@@ -11,6 +11,10 @@ export interface ViewportObserver {
   disconnect(): void
 }
 
+type BlockNodeViewFactory = (
+  node: Node, view: EditorView, getPos: () => number | undefined,
+) => NodeView
+
 export function createBlockNodeView(
   node: Node,
   view: EditorView,
@@ -39,6 +43,7 @@ export function createBlockNodeView(
   }
 
   const visible = isBlockVisible(view.state, pos)
+  const observer = getObserver()
 
   const dom = document.createElement('div')
   dom.className = 'onebox-block'
@@ -46,6 +51,11 @@ export function createBlockNodeView(
 
   let contentDOM: HTMLElement | undefined
   let resizeObserver: ResizeObserver | undefined
+
+  const placeholderHeight = (block: Node) => {
+    const cached = heights.get(block)
+    return cached && cached > 0 ? cached : estimateHeight(block)
+  }
 
   if (visible) {
     // 用节点自身的 toDOM 渲染，保留 h1/pre>code/ul/ol/hr 语义。
@@ -58,17 +68,18 @@ export function createBlockNodeView(
     // horizontalRule 是 leaf，renderSpec 不返回 contentDOM，这是正确行为
     contentDOM = rendered.contentDOM ?? undefined
     resizeObserver = new ResizeObserver(() => {
+      // 外壳必须是 BFC（Task 9 的 display: flow-root）：否则子元素的 margin 折叠到
+      // 外壳之外，offsetHeight 小于实际占据高度，每个占位块都系统性偏矮。
       const h = dom.offsetHeight
       // 挂载在 display:none 祖先下时 offsetHeight 为 0，缓存 0 会让占位塌成 0px
       if (h > 0) heights.set(current, h)
     })
     resizeObserver.observe(dom)
   } else {
-    const cached = heights.get(current)
-    dom.style.height = `${cached && cached > 0 ? cached : estimateHeight(current)}px`
+    dom.style.height = `${placeholderHeight(current)}px`
   }
 
-  getObserver()?.observe(dom)
+  observer?.observe(dom)
 
   return {
     dom,
@@ -81,14 +92,18 @@ export function createBlockNodeView(
       // toDOM，markup 变了必须返回 false 让它重建，否则级别 2→3 仍留在 <h2>。
       if (!nextNode.sameMarkup(current)) return false
       current = nextNode
+      // 隐藏块的内容也会被 transaction 改到（撤销、跨块替换），占位高度须跟着重算
+      if (!visible) dom.style.height = `${placeholderHeight(current)}px`
       return true
     },
     destroy() {
       resizeObserver?.disconnect()
-      getObserver()?.unobserve(dom)
+      observer?.unobserve(dom)
     },
     ignoreMutation(mutation) {
-      return !contentDOM || !contentDOM.contains(mutation.target)
+      // PM 自己的默认实现从不忽略 selection mutation（view dist:1125）。吞掉它
+      // 会让 PM 不再从 DOM 回读选区。ViewMutationRecord 的联合类型里含 'selection'。
+      return mutation.type !== 'selection' && (!contentDOM || !contentDOM.contains(mutation.target))
     },
   }
 }
@@ -96,11 +111,8 @@ export function createBlockNodeView(
 export function blockNodeViews(
   heights: HeightCache,
   getObserver: () => ViewportObserver | null,
-): Record<string, (node: Node, view: EditorView, getPos: () => number | undefined) => NodeView> {
-  const out: Record<
-    string,
-    (node: Node, view: EditorView, getPos: () => number | undefined) => NodeView
-  > = {}
+): Record<string, BlockNodeViewFactory> {
+  const out: Record<string, BlockNodeViewFactory> = {}
   for (const name of TOP_LEVEL_BLOCK_TYPES) {
     out[name] = (node, view, getPos) => createBlockNodeView(node, view, getPos, heights, getObserver)
   }
