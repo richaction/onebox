@@ -820,6 +820,26 @@ describe('estimateHeight', () => {
     const code = schema.node('codeBlock', null, [schema.text('a\n'.repeat(9) + 'a')])
     expect(estimateHeight(code)).toBe(240)
   })
+
+  it('counts nested textblocks so a multi-item list is not one line', () => {
+    const list = schema.node(
+      'bulletList',
+      null,
+      Array.from({ length: 5 }, () =>
+        schema.node('listItem', null, [schema.node('paragraph', null, [schema.text('item')])]),
+      ),
+    )
+    expect(estimateHeight(list)).toBe(120)
+  })
+
+  it('counts paragraphs inside a blockquote', () => {
+    const quote = schema.node(
+      'blockquote',
+      null,
+      Array.from({ length: 3 }, () => schema.node('paragraph', null, [schema.text('q')])),
+    )
+    expect(estimateHeight(quote)).toBe(72)
+  })
 })
 
 describe('node identity across transactions', () => {
@@ -853,10 +873,17 @@ const MIN_HEIGHT = 28
 
 export function estimateHeight(block: Node): number {
   const text = block.textContent
-  // 显式换行与自动折行取较大者：只看字符数会把 10 行短代码块估成 1 行
+  // 显式换行、自动折行、嵌套文本块数三者取最大：
+  // 只看字符数会把 10 行短代码块估成 1 行；而 textContent 不在子块间插分隔符，
+  // 5 项列表也只有 25 字符，同样被估成 1 行（实测 28px vs 约 120px）。
   const explicitLines = text.split('\n').length
   const wrappedLines = Math.ceil(text.length / CHARS_PER_LINE)
-  return Math.max(MIN_HEIGHT, Math.max(explicitLines, wrappedLines) * LINE_HEIGHT)
+  let textblocks = 0
+  block.descendants((node) => {
+    if (node.isTextblock) textblocks++
+  })
+  const lines = Math.max(explicitLines, wrappedLines, textblocks)
+  return Math.max(MIN_HEIGHT, lines * LINE_HEIGHT)
 }
 
 // 以块节点对象为键：PM 节点不可变，未修改的块跨 transaction 仍是同一引用（命中），
@@ -877,7 +904,7 @@ export class HeightCache {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/heights.test.ts`
-Expected: PASS（9 passed）
+Expected: PASS（11 passed）
 
 - [ ] **Step 5: 提交并报告**
 
@@ -2312,7 +2339,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 73 项（harness 1 + schema 5 + markdown 30 + heights 9 + visibility 11 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 70 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 75 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 11 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 72 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2376,7 +2403,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：73 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：75 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
