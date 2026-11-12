@@ -1010,6 +1010,23 @@ describe('visibility plugin', () => {
     expect([...visibilityKey.getState(next)!.visible]).toEqual([0])
   })
 
+  it('keeps a block visible when only its markup changes', () => {
+    // setNodeMarkup 产生 ReplaceAroundStep，mapResult 会把块起点判为 deleted，
+    // 导致改标题级别时该在屏块塌成占位
+    const doc = schema.node('doc', null, [
+      schema.node('heading', { level: 2 }, [schema.text('aaa')]),
+      schema.node('paragraph', null, [schema.text('bbb')]),
+    ])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 8),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0, 5]) }))
+    const next = state.apply(state.tr.setNodeMarkup(0, undefined, { level: 3 }))
+    expect([...visibilityKey.getState(next)!.visible].sort((a, b) => a - b)).toEqual([0, 5])
+  })
+
   it('forces every block in a range selection visible', () => {
     const doc = schema.node('doc', null, [
       schema.node('paragraph', null, [schema.text('aaa')]),
@@ -1126,12 +1143,18 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
         if (!tr.docChanged) return value
         // 文档变更会移动其后所有顶层块的起始位置。不映射就会让下方每个块
         // 的可见性判定失效、被打成占位——每次敲键都触发一轮销毁重建。
+        //
+        // 不能用 mapResult 的 deleted 判断块是否消失：setNodeMarkup 产生
+        // ReplaceAroundStep，assoc=1 时本块起点被判 deleted、assoc=-1 时下一块
+        // 起点被判 deleted，两种都会误踢在屏块。deleted 表达的是位置映射语义，
+        // 不是块的存在性。改为 map 取新位置，再按新文档真实的顶层块起点过滤。
         const mapped = new Set<number>()
-        for (const pos of value.visible) {
-          const result = tr.mapping.mapResult(pos)
-          if (!result.deleted) mapped.add(result.pos)
-        }
-        return { visible: mapped }
+        for (const pos of value.visible) mapped.add(tr.mapping.map(pos))
+        const kept = new Set<number>()
+        tr.doc.forEach((_node, pos) => {
+          if (mapped.has(pos)) kept.add(pos)
+        })
+        return { visible: kept }
       },
     },
     props: {
@@ -1171,7 +1194,7 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/visibility.test.ts`
-Expected: PASS（11 passed）
+Expected: PASS（12 passed）
 
 若 `forces the selection block visible` 得到 `[0]` 而非 `[5]`，说明测试里 `selectionPos` 落在了 block1；确认 doc 位置计算（paragraph nodeSize = 1 + 文本长度 + 1）。
 
@@ -2494,7 +2517,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 84 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 11 + blockNodeView 17 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 81 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 85 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 17 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 82 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2560,7 +2583,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：84 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：85 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
