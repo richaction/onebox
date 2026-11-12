@@ -16,7 +16,8 @@
 
 - **精确版本，无 `^` / `~`**：solid-js `1.9.19`、vite `8.3.8`、vite-plugin-solid `2.11.16`、typescript `5.9.3`、vitest `5.1.0`、happy-dom `21.0.4`、@tiptap/core `3.33.1`、@tiptap/pm `3.33.1`、@tiptap/starter-kit `3.33.1`、prosemirror-markdown `1.13.9`、markdown-it `14.3.3`、@types/markdown-it `14.2.0`、@tauri-apps/api `2.12.4`、@tauri-apps/cli `2.12.4`、@tauri-apps/plugin-dialog `2.8.4`。Rust crate 用大版本约束，由 `Cargo.lock` 锁定。
 - **markdown-it 必须锁 14.3.3，不可用 15.x**：prosemirror-markdown 依赖 `markdown-it ^14.0.0`，装 15 会产生两份实例。
-- **不自动 commit**：用户要求只在其明确指示时提交。每个任务最后一步是「停下报告并等用户确认」，不是 `git commit`。
+- **提交授权（用户已明确批准）**：本次执行中每个任务完成后自动 commit 到 `feat/foundation` 分支。**不 push、不合入 main、不动远程。** 用户仍在真机验收后才决定合入。每个任务最后一步是 commit + 简短报告，然后继续下一个任务，不要停下等确认。
+- **`node_modules/` 从 Task 1 起就必须被忽略**：Task 1 创建 `.gitignore` 时即写入 `node_modules/`、`dist/`、`.DS_Store`，不要等到 Task 8。任何任务都不得 `git add -A` / `git add .`，只按文件名加。
 - **节点名用 Tiptap 实际注册名（camelCase）**：`paragraph`、`heading`、`blockquote`、`codeBlock`、`bulletList`、`orderedList`、`horizontalRule`、`listItem`、`hardBreak`。spec 中出现的 snake_case 是 ProseMirror 原生名，不适用于本项目。
 - **属性名用 Tiptap 的**：`heading.level`、`codeBlock.language`、`orderedList.start`、`link.href`。prosemirror-markdown 默认用 `params` / `order`，必须覆写。
 - **禁止私有 Markdown 语法**：不注册非 GFM 节点。**必须禁用 StarterKit 的 `underline`**（`<u>` 非 GFM）。不往正文写 HTML 注释、块 ID、自定义容器。
@@ -24,6 +25,7 @@
 - **界面极简**：无 Tooltip、无弹窗、无 toast、无解释文案。状态信息只在状态栏以极短标记呈现。
 - **按需最小验证**：只跑当前任务相关的测试文件（`pnpm vitest run tests/<file>.test.ts`），不要每个任务都重跑全量。全量只在 Task 10 收尾跑一次。
 - **测试只用临时文件**，绝不读写用户真实文档。
+- **每个任务的「提交并报告」步骤统一含义**：`git add <本任务涉及的具体文件>` → `git commit`（消息用 `feat:` / `test:` / `chore:` 前缀，简述该任务交付物）→ 返回状态、commit 短 hash、一行测试结论、疑虑。**不要 push，不要停下等用户确认，继续下一个任务。**
 - **安装系统依赖前必须先向用户确认命令**（Task 8 的 rustup）。
 - **第一阶段不做**：表格、任务列表、脚注、图片、内嵌 HTML、pulldown-cmark 分片解析、块拖拽、悬浮菜单、斜杠命令、Mermaid/KaTeX、`.editor-meta.json`、Kobalte、TanStack Virtual、打包图标与分发。
 
@@ -60,6 +62,7 @@
 
 **Files:**
 - Create: `package.json`, `vite.config.ts`, `tsconfig.json`, `index.html`, `src/index.tsx`, `src/App.tsx`
+- Modify: `.gitignore`（已存在，含 `.DS_Store`）
 - Test: `tests/harness.test.ts`
 
 **Interfaces:**
@@ -88,6 +91,14 @@ Run: `pnpm test`
 Expected: FAIL — `pnpm: command not found` 之外的情形应为 `vitest: not found`（依赖尚未安装）
 
 - [ ] **Step 3: 创建配置文件**
+
+`.gitignore` 全量替换为（`node_modules/` 必须从本任务起就被忽略，否则 Task 1-7 有把它提交进去的风险）：
+
+```
+.DS_Store
+node_modules/
+dist/
+```
 
 `package.json`：
 
@@ -230,9 +241,9 @@ Run: `pnpm dev`（后台运行）
 
 Expected: `"onebox"`
 
-- [ ] **Step 8: 停下报告，等用户确认**
+- [ ] **Step 8: 提交并报告**
 
-报告：骨架可运行、测试与类型检查通过。不要 commit。
+报告：骨架可运行、测试与类型检查通过。按 Global Constraints 的「提交并报告」含义提交，包含 `.gitignore` 与 `pnpm-lock.yaml`。
 
 ---
 
@@ -329,7 +340,7 @@ Expected: PASS（5 passed）
 Run: `pnpm typecheck`
 Expected: 退出码 0
 
-- [ ] **Step 6: 停下报告，等用户确认**
+- [ ] **Step 6: 提交并报告**
 
 ---
 
@@ -594,7 +605,7 @@ Expected: PASS（14 passed）
 Run: `pnpm typecheck`
 Expected: 退出码 0
 
-- [ ] **Step 6: 停下报告，等用户确认**
+- [ ] **Step 6: 提交并报告**
 
 ---
 
@@ -705,7 +716,7 @@ export class HeightCache {
 Run: `pnpm vitest run tests/heights.test.ts`
 Expected: PASS（7 passed）
 
-- [ ] **Step 5: 停下报告，等用户确认**
+- [ ] **Step 5: 提交并报告**
 
 ---
 
@@ -909,7 +920,7 @@ Expected: PASS（7 passed）
 Run: `pnpm typecheck`
 Expected: 退出码 0
 
-- [ ] **Step 6: 停下报告，等用户确认**
+- [ ] **Step 6: 提交并报告**
 
 ---
 
@@ -1151,7 +1162,7 @@ if (!('ResizeObserver' in globalThis)) {
 Run: `pnpm typecheck`
 Expected: 退出码 0
 
-- [ ] **Step 6: 停下报告，等用户确认**
+- [ ] **Step 6: 提交并报告**
 
 ---
 
@@ -1303,7 +1314,7 @@ Expected: PASS（5 passed）
 Run: `pnpm typecheck`
 Expected: 退出码 0
 
-- [ ] **Step 6: 停下报告，等用户确认**
+- [ ] **Step 6: 提交并报告**
 
 报告时说明：IntersectionObserver 与 `blockPosOf` 的真实行为无法在 happy-dom 验证，留待 Task 10 的 Chrome 验证。若 2 万块量级下 IO 成为瓶颈，备选方案是「按 `getBoundingClientRect().top` 对 `view.dom.children` 二分查找可见区间」，本阶段不实现。
 
@@ -1475,14 +1486,11 @@ pub fn run() {
 }
 ```
 
-`.gitignore` 追加：
+`.gitignore` 追加（`node_modules/`、`dist/`、`.DS_Store` 已由 Task 1 写入，不要重复）：
 
 ```
-node_modules/
-dist/
 src-tauri/target/
 src-tauri/gen/schemas/
-.DS_Store
 ```
 
 - [ ] **Step 4: 运行 Rust 测试确认失败**
@@ -1548,9 +1556,9 @@ Expected: 退出码 0
 Run: `pnpm tauri dev`（后台运行，首次编译耗时数分钟）
 Expected: 弹出标题为 onebox 的桌面窗口，内容为 Task 1 的 `onebox` 文本
 
-- [ ] **Step 9: 停下报告，等用户确认**
+- [ ] **Step 9: 提交并报告**
 
-报告 `Cargo.lock` 已生成，需与 `pnpm-lock.yaml` 一并在用户指示时提交。
+提交 `src-tauri/`（含 `Cargo.lock`）、`src/io/`、`.gitignore`。**`Cargo.lock` 必须提交**，它是 Rust 侧的版本锁定依据。`src-tauri/target/` 已被忽略，不要加。
 
 ---
 
@@ -1848,7 +1856,7 @@ Run: `pnpm dev`，用 chrome-devtools MCP 打开 `http://localhost:1420`，`eval
 
 Expected: `blocks` ≥ 6，`withContent` ≥ 1，`text` 含 `onebox`
 
-- [ ] **Step 8: 停下报告，等用户确认**
+- [ ] **Step 8: 提交并报告**
 
 ---
 
@@ -2143,11 +2151,11 @@ Run: `pnpm tauri dev`
 
 判断规则（spec §9）：**若 10 万字符档即出现明显掉帧或 DOM 数不可接受，直接升级方案 B，不等到第四阶段。** 把读数与结论写进报告。
 
-- [ ] **Step 11: 停下报告，等用户确认**
+- [ ] **Step 11: 提交并报告**
 
 报告内容：51 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
-**不要 commit。** 用户明确要求时才提交，提交范围包含 `pnpm-lock.yaml` 与 `src-tauri/Cargo.lock`。
+按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
 ---
 
