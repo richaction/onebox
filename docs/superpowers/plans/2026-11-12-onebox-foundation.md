@@ -454,6 +454,45 @@ describe('detectUnsupported', () => {
   it('does not mistake a horizontal rule for a table', () => {
     expect(detectUnsupported('上文\n\n---\n\n下文\n')).toEqual([])
   })
+
+  it('detects reference-style images', () => {
+    expect(detectUnsupported('![alt][r]\n\n[r]: ./a.png\n')).toContain('image')
+  })
+
+  it('detects collapsed and shortcut images', () => {
+    expect(detectUnsupported('![alt][]\n\n[alt]: ./a.png\n')).toContain('image')
+    expect(detectUnsupported('![alt]\n\n[alt]: ./a.png\n')).toContain('image')
+  })
+
+  it('detects images with nested brackets in alt', () => {
+    expect(detectUnsupported('![a[b]](c)\n')).toContain('image')
+  })
+
+  it('detects task lists at any indentation', () => {
+    expect(detectUnsupported('parent\n    - [x] nested done\n')).toContain('taskList')
+  })
+
+  it('detects empty-label task items', () => {
+    expect(detectUnsupported('- [x]\n')).toContain('taskList')
+  })
+})
+
+describe('parse tolerance', () => {
+  it('never throws on any image form', () => {
+    for (const md of [
+      '![alt](./a.png)\n',
+      '![alt][r]\n\n[r]: ./a.png\n',
+      '![alt][]\n\n[alt]: ./a.png\n',
+      '![alt]\n\n[alt]: ./a.png\n',
+      '![a[b]](c)\n',
+    ]) {
+      expect(() => parseMarkdown(md, schema), md).not.toThrow()
+    }
+  })
+
+  it('preserves html comments verbatim', () => {
+    expect(roundTrip('before\n\n<!-- hidden -->\n\nafter\n')).toContain('<!-- hidden -->')
+  })
 })
 ```
 
@@ -514,6 +553,9 @@ function buildParser(schema: Schema): MarkdownParser {
     hr: { node: 'horizontalRule' },
     hardbreak: { node: 'hardBreak' },
     text: { node: 'text' },
+    // 无 image 节点。忽略而非抛异常：不支持的文件走只读闸门，磁盘内容不受影响，
+    // 但解析必须成功，否则文件根本打不开。
+    image: { ignore: true },
     em: { mark: 'italic' },
     strong: { mark: 'bold' },
     s: { mark: 'strike' },
@@ -577,6 +619,16 @@ function isTableDelimiter(line: string, prev: string): boolean {
 
 export function detectUnsupported(text: string): UnsupportedKind[] {
   const found = new Set<UnsupportedKind>()
+
+  // 图片用 tokenizer 自身的 token 流判定：markdown-it 能识别 inline / reference /
+  // collapsed / shortcut 全部形式，正则穷尽不了。 fenced code 内的图片天然不产生
+  // image token，无需另行跳过。
+  for (const block of tokenizer.parse(text, {})) {
+    for (const tok of block.children ?? []) {
+      if (tok.type === 'image') found.add('image')
+    }
+  }
+
   let inFence = false
   let prev = ''
   for (const line of text.split('\n')) {
@@ -587,10 +639,10 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
     }
     if (!inFence) {
       if (isTableDelimiter(line, prev)) found.add('table')
-      if (/^\s{0,3}[-*+]\s+\[[ xX]\]\s/.test(line)) found.add('taskList')
+      // 任意缩进 + 允许空标签：漏检会让文件以可编辑打开，保存时正文被转义改写
+      if (/^\s*[-*+]\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
       if (/\[\^[^\]]+\]/.test(line)) found.add('footnote')
       if (/<\/?[a-zA-Z][^>]*>/.test(line)) found.add('html')
-      if (/!\[[^\]]*\]\([^)]*\)/.test(line)) found.add('image')
     }
     prev = line
   }
@@ -601,7 +653,7 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/markdown.test.ts`
-Expected: PASS（14 passed）
+Expected: PASS（21 passed）
 
 若 `is idempotent at doc level` 失败，先打印 `serializeMarkdown(once)` 与原文对比定位差异节点，不要直接放宽断言。
 
@@ -2094,7 +2146,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 51 项（harness 1 + schema 5 + markdown 14 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 48 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 58 项（harness 1 + schema 5 + markdown 21 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 55 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2158,7 +2210,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：51 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：58 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
