@@ -45,6 +45,11 @@ function buildParser(schema: Schema): MarkdownParser {
     hr: { node: 'horizontalRule' },
     hardbreak: { node: 'hardBreak' },
     text: { node: 'text' },
+    // 无 image 节点。忽略而非抛异常：不支持的文件走只读闸门，磁盘内容不受影响，
+    // 但解析必须成功，否则文件根本打不开。
+    // markdown-it 的 image 是单 token（无 _open/_close），必须显式 noCloseToken，
+    // 否则 ignore 只注册 image_open/image_close，image 本身仍无 handler 而抛异常。
+    image: { ignore: true, noCloseToken: true },
     em: { mark: 'italic' },
     strong: { mark: 'bold' },
     s: { mark: 'strike' },
@@ -108,6 +113,16 @@ function isTableDelimiter(line: string, prev: string): boolean {
 
 export function detectUnsupported(text: string): UnsupportedKind[] {
   const found = new Set<UnsupportedKind>()
+
+  // 图片用 tokenizer 自身的 token 流判定：markdown-it 能识别 inline / reference /
+  // collapsed / shortcut 全部形式，正则穷尽不了。 fenced code 内的图片天然不产生
+  // image token，无需另行跳过。
+  for (const block of tokenizer.parse(text, {})) {
+    for (const tok of block.children ?? []) {
+      if (tok.type === 'image') found.add('image')
+    }
+  }
+
   let inFence = false
   let prev = ''
   for (const line of text.split('\n')) {
@@ -118,10 +133,10 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
     }
     if (!inFence) {
       if (isTableDelimiter(line, prev)) found.add('table')
-      if (/^\s{0,3}[-*+]\s+\[[ xX]\]\s/.test(line)) found.add('taskList')
+      // 任意缩进 + 允许空标签：漏检会让文件以可编辑打开，保存时正文被转义改写
+      if (/^\s*[-*+]\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
       if (/\[\^[^\]]+\]/.test(line)) found.add('footnote')
       if (/<\/?[a-zA-Z][^>]*>/.test(line)) found.add('html')
-      if (/!\[[^\]]*\]\([^)]*\)/.test(line)) found.add('image')
     }
     prev = line
   }

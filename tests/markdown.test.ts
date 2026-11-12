@@ -88,4 +88,43 @@ describe('detectUnsupported', () => {
   it('does not mistake a horizontal rule for a table', () => {
     expect(detectUnsupported('上文\n\n---\n\n下文\n')).toEqual([])
   })
+
+  it('detects reference-style images', () => {
+    expect(detectUnsupported('![alt][r]\n\n[r]: ./a.png\n')).toContain('image')
+  })
+
+  it('detects collapsed and shortcut images', () => {
+    expect(detectUnsupported('![alt][]\n\n[alt]: ./a.png\n')).toContain('image')
+    expect(detectUnsupported('![alt]\n\n[alt]: ./a.png\n')).toContain('image')
+  })
+
+  it('detects images with nested brackets in alt', () => {
+    expect(detectUnsupported('![a[b]](c)\n')).toContain('image')
+  })
+
+  it('detects task lists at any indentation', () => {
+    expect(detectUnsupported('parent\n    - [x] nested done\n')).toContain('taskList')
+  })
+
+  it('detects empty-label task items', () => {
+    expect(detectUnsupported('- [x]\n')).toContain('taskList')
+  })
+})
+
+describe('parse tolerance', () => {
+  it('never throws on any image form', () => {
+    for (const md of [
+      '![alt](./a.png)\n',
+      '![alt][r]\n\n[r]: ./a.png\n',
+      '![alt][]\n\n[alt]: ./a.png\n',
+      '![alt]\n\n[alt]: ./a.png\n',
+      '![a[b]](c)\n',
+    ]) {
+      expect(() => parseMarkdown(md, schema), md).not.toThrow()
+    }
+  })
+
+  it('preserves html comments verbatim', () => {
+    expect(roundTrip('before\n\n<!-- hidden -->\n\nafter\n')).toContain('<!-- hidden -->')
+  })
 })
