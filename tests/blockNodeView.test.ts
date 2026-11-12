@@ -102,6 +102,7 @@ describe('createBlockNodeView', () => {
   })
 
   it('gives a leaf horizontalRule no contentDOM', () => {
+    // 位置：paragraph('a') nodeSize=3 → hr 在 pos 3，doc content size=4
     const doc = schema.node('doc', null, [
       schema.node('paragraph', null, [schema.text('a')]),
       schema.node('horizontalRule'),
@@ -111,11 +112,68 @@ describe('createBlockNodeView', () => {
       selection: TextSelection.create(doc, 1),
       plugins: [createVisibilityPlugin()],
     })
-    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([5]) }))
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([3]) }))
     const view = { state } as unknown as EditorView
-    const nv = createBlockNodeView(state.doc.child(1), view, () => 5, new HeightCache(), () => null)
+    const nv = createBlockNodeView(state.doc.child(1), view, () => 3, new HeightCache(), () => null)
     expect(nv.dom.querySelector('hr')).not.toBeNull()
     expect(nv.contentDOM).toBeUndefined()
+  })
+
+  it('renders a paragraph nested in a list item normally, not as a placeholder', () => {
+    // nodeViews 按类型名注册，对所有深度生效。嵌套段落 pos=2、depth>0，
+    // 若走占位分支会把整个列表项的内容销毁（li.textContent 变成空）。
+    const list = schema.node('bulletList', null, [
+      schema.node('listItem', null, [schema.node('paragraph', null, [schema.text('item')])]),
+    ])
+    const doc = schema.node('doc', null, [list])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 3),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const view = { state } as unknown as EditorView
+    const nested = state.doc.child(0).child(0).child(0)
+    const nv = createBlockNodeView(nested, view, () => 2, new HeightCache(), () => null)
+    expect(nv.contentDOM).toBeDefined()
+    expect(nv.dom.tagName).toBe('P')
+    expect(nv.dom.className).not.toContain('onebox-block')
+  })
+
+  it('renders a paragraph nested in a blockquote normally', () => {
+    const quote = schema.node('blockquote', null, [
+      schema.node('paragraph', null, [schema.text('q')]),
+    ])
+    const doc = schema.node('doc', null, [quote])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 2),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const view = { state } as unknown as EditorView
+    const nested = state.doc.child(0).child(0)
+    const nv = createBlockNodeView(nested, view, () => 1, new HeightCache(), () => null)
+    expect(nv.contentDOM).toBeDefined()
+    expect(nv.dom.tagName).toBe('P')
+  })
+
+  it('recreates when heading level changes', () => {
+    const view = singleBlockView(schema.node('heading', { level: 2 }, [schema.text('h')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    const next = schema.node('heading', { level: 3 }, [schema.text('h')])
+    expect(nv.update!(next, [], undefined as never)).toBe(false)
+  })
+
+  it('recreates when code block language changes', () => {
+    const view = singleBlockView(schema.node('codeBlock', { language: 'ts' }, [schema.text('x')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    const next = schema.node('codeBlock', { language: 'js' }, [schema.text('x')])
+    expect(nv.update!(next, [], undefined as never)).toBe(false)
   })
 
   it('returns false from update when visibility flips', () => {

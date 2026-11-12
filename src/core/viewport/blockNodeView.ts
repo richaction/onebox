@@ -20,7 +20,25 @@ export function createBlockNodeView(
 ): NodeView {
   let current = node
   const pos = getPos()
-  const visible = pos !== undefined && isBlockVisible(view.state, pos)
+
+  // PM 的 nodeViews 按【类型名】注册，对所有深度生效：listItem / blockquote 里的
+  // 段落同样会进这个工厂。它们的 pos 不是顶层位置，isBlockVisible 必然 false，
+  // 若走占位分支就会把列表项与引用的内容整段销毁。非顶层一律正常渲染、不参与虚拟化。
+  const topLevel = pos !== undefined && view.state.doc.resolve(pos).depth === 0
+  if (!topLevel) {
+    const nested = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
+    return {
+      dom: nested.dom,
+      contentDOM: nested.contentDOM ?? undefined,
+      update(next) {
+        if (!next.sameMarkup(current)) return false
+        current = next
+        return true
+      },
+    }
+  }
+
+  const visible = isBlockVisible(view.state, pos)
 
   const dom = document.createElement('div')
   dom.className = 'onebox-block'
@@ -59,6 +77,9 @@ export function createBlockNodeView(
       const p = getPos()
       const nextVisible = p !== undefined && isBlockVisible(view.state, p)
       if (nextVisible !== visible) return false
+      // toDOM 的产物带 attrs（h2 的级别、code 的 language-*）。PM 不会重新应用
+      // toDOM，markup 变了必须返回 false 让它重建，否则级别 2→3 仍留在 <h2>。
+      if (!nextNode.sameMarkup(current)) return false
       current = nextNode
       return true
     },
