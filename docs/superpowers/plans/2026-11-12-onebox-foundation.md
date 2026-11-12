@@ -433,6 +433,16 @@ describe('markdown round trip', () => {
     const once = parseMarkdown(md, schema)
     expect(parseMarkdown(serializeMarkdown(once), schema).eq(once)).toBe(true)
   })
+
+  it('sizes the fence for an indented closing fence inside the content', () => {
+    const md = '````\n   ```\nx\n````\n'
+    const once = parseMarkdown(md, schema)
+    expect(parseMarkdown(serializeMarkdown(once), schema).eq(once)).toBe(true)
+  })
+
+  it('still emits exactly three backticks for an ordinary code block', () => {
+    expect(roundTrip('```ts\nconst x = 1\n```\n').startsWith('```ts\n')).toBe(true)
+  })
 })
 
 describe('detectUnsupported', () => {
@@ -531,7 +541,8 @@ describe('detection regression cases', () => {
   })
 
   it('pairs fences by char and length so a 4-backtick fence does not invert state', () => {
-    const md = '````\n```\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+    // 内层围栏必须是奇数个：偶数个在朴素翻转实现下也会净归零，测不到缺陷
+    const md = '````\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
     expect(detectUnsupported(md)).toContain('table')
   })
 })
@@ -626,7 +637,9 @@ const serializer = new MarkdownSerializer(
       // 代码块是受支持语法，没有只读闸门兜底，所以这里必须自身正确。
       let longest = 0
       for (const line of text.split('\n')) {
-        const m = /^(`{3,}|~{3,})/.exec(line)
+        // CommonMark 允许闭合围栏缩进 ≤3 空格，扫描必须同样容忍，
+        // 否则缩进的 ``` 不被计入、外层围栏取 3、内容被提前闭合截断
+        const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
         if (m) longest = Math.max(longest, m[1].length)
       }
       const fence = '`'.repeat(Math.max(3, longest + 1))
@@ -725,7 +738,7 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/markdown.test.ts`
-Expected: PASS（28 passed）
+Expected: PASS（30 passed）
 
 若 `is idempotent at doc level` 失败，先打印 `serializeMarkdown(once)` 与原文对比定位差异节点，不要直接放宽断言。
 
@@ -2218,7 +2231,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 65 项（harness 1 + schema 5 + markdown 28 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 62 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 67 项（harness 1 + schema 5 + markdown 30 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 64 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2282,7 +2295,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：65 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：67 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
