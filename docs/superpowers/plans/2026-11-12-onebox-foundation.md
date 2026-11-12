@@ -19,6 +19,7 @@
 - **提交授权（用户已明确批准）**：本次执行中每个任务完成后自动 commit 到 `feat/foundation` 分支。**不 push、不合入 main、不动远程。** 用户仍在真机验收后才决定合入。每个任务最后一步是 commit + 简短报告，然后继续下一个任务，不要停下等确认。
 - **`node_modules/` 从 Task 1 起就必须被忽略**：Task 1 创建 `.gitignore` 时即写入 `node_modules/`、`dist/`、`.DS_Store`，不要等到 Task 8。任何任务都不得 `git add -A` / `git add .`，只按文件名加。
 - **节点名用 Tiptap 实际注册名（camelCase）**：`paragraph`、`heading`、`blockquote`、`codeBlock`、`bulletList`、`orderedList`、`horizontalRule`、`listItem`、`hardBreak`。spec 中出现的 snake_case 是 ProseMirror 原生名，不适用于本项目。
+- **mark 名用 Tiptap 实际注册名**：`bold`、`italic`、`code`、`strike`、`link`。**不是** `strong` / `em` —— 那是 prosemirror-markdown 默认 schema 的名字。已实测确认：`getSchema([StarterKit.configure({underline:false})]).marks` 的键为 `link, bold, code, italic, strike`；`bold` 渲染 `<strong>`、`italic` 渲染 `<em>`，GFM 语义完整。markdown-it 的 token 名仍是 `strong` / `em` / `s`，映射时两侧名字不同，必须显式对应。
 - **属性名用 Tiptap 的**：`heading.level`、`codeBlock.language`、`orderedList.start`、`link.href`。prosemirror-markdown 默认用 `params` / `order`，必须覆写。
 - **禁止私有 Markdown 语法**：不注册非 GFM 节点。**必须禁用 StarterKit 的 `underline`**（`<u>` 非 GFM）。不往正文写 HTML 注释、块 ID、自定义容器。
 - **`src/core/` 不得 import `solid-js` 或任何 `@tauri-apps/*`**：内核保持框架无关、可独立单测。前端与桌面底座的唯一耦合点是 `src/io/types.ts`。
@@ -274,7 +275,7 @@ describe('GFM schema', () => {
   })
 
   it('registers GFM marks', () => {
-    for (const name of ['strong', 'em', 'code', 'strike', 'link']) {
+    for (const name of ['bold', 'italic', 'code', 'strike', 'link']) {
       expect(schema.marks[name], name).toBeDefined()
     }
   })
@@ -513,8 +514,8 @@ function buildParser(schema: Schema): MarkdownParser {
     hr: { node: 'horizontalRule' },
     hardbreak: { node: 'hardBreak' },
     text: { node: 'text' },
-    em: { mark: 'em' },
-    strong: { mark: 'strong' },
+    em: { mark: 'italic' },
+    strong: { mark: 'bold' },
     s: { mark: 'strike' },
     code_inline: { mark: 'code', noCloseToken: true },
     link: { mark: 'link', getAttrs: (tok) => ({ href: tok.attrGet('href') }) },
@@ -552,7 +553,11 @@ const serializer = new MarkdownSerializer(
     },
   },
   {
-    ...defaultMarkdownSerializer.marks,
+    // 默认 marks 的键是 em/strong，本项目 schema 的键是 italic/bold，必须逐个改名而非展开
+    bold: defaultMarkdownSerializer.marks.strong,
+    italic: defaultMarkdownSerializer.marks.em,
+    code: defaultMarkdownSerializer.marks.code,
+    link: defaultMarkdownSerializer.marks.link,
     strike: { open: '~~', close: '~~', mixable: true, expelEnclosingWhitespace: true },
   },
 )
