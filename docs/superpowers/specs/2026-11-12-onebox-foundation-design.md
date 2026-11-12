@@ -233,7 +233,7 @@ plugin state 是可见块的起始位置集合，通过 `tr.setMeta(visibilityKe
 ```ts
 export function createBlockNodeView(
   node: Node, view: EditorView, getPos: () => number | undefined,
-  outerDeco: readonly Decoration[], innerDeco: DecorationSource
+  heights: HeightCache, getObserver: () => ViewportObserver | null
 ): NodeView
 ```
 
@@ -250,11 +250,19 @@ export function createBlockNodeView(
 - **可见** → `{ dom: 块外壳, contentDOM: 内容容器 }`，PM 原生渲染子节点并接管输入
 - **不可见** → `{ dom: 占位 div }`，`style.height` 取 `HeightCache` 或 `estimateHeight`，**不提供 contentDOM**
 
-`update(node, outerDeco, innerDeco)`：**可见性翻转 → 返回 `false`，触发 PM 销毁重建**；其余情况一律返回 `true`（节点内容变化由 PM 自行更新子节点）。
+`update(node, outerDeco, innerDeco)`：**可见性翻转 → 返回 `false`**；**`!node.sameMarkup(current)` → 返回 `false`**（attrs 变了必须重建，见上）；其余返回 `true`，节点内容由 PM 自行更新子节点。返回 `true` 且块处于隐藏态时，必须按新节点重算占位高度——隐藏块的内容也会被撤销、跨块替换等 transaction 改到。
 
-`destroy()`：断开该块的 ResizeObserver。
+`destroy()`：断开该块的 ResizeObserver，并向 observer 注销。observer 实例在构造时取一次并捕获，不在 destroy 时重新调用 `getObserver()`。
 
-`ignoreMutation`：忽略 contentDOM 之外（块外壳 UI 部分）的 mutation，避免 PM 把 UI 变更解析成文档内容。
+`ignoreMutation`：忽略 contentDOM 之外（块外壳 UI 部分）的 mutation，避免 PM 把 UI 变更解析成文档内容。**但 `type === 'selection'` 的 mutation 一律不忽略**——PM 自身的默认实现（`prosemirror-view` dist:1125）对 selection 恒返回 false，吞掉它 PM 就不再从 DOM 回读选区。
+
+#### 高度测量不变量
+
+`HeightCache` 存的是块外壳的 `offsetHeight`，占位块把它写进 `style.height`。二者相等的前提是**外壳为 BFC**：`.onebox-block { display: flow-root }`。
+
+`position: relative` 不建立 BFC，`p` / `h2` / `ul` / `pre` 的 UA margin 会折叠到外壳之外，可见块实际占据 `offsetHeight + margin` 而占位块只占 `offsetHeight`，每块约 16px 系统性偏矮，3000 块累计数万像素滚动漂移。**不能靠「测量时加上 margin」修**：margin 折叠出去后外壳自身的 computed margin 仍是 0，加进去补不回子元素的 margin。唯一正确的修法是让外壳成为 BFC，或清零内容 margin 并把间距放到外壳 padding 上。第一阶段选前者。
+
+该不变量无法用 happy-dom 单测验证（不做布局），由 Task 10 在真 Chrome 量「同一块可见时占据高度 vs 转占位后高度」，要求差值 ≤ 1px。
 
 #### 机制验证（已核实源码）
 

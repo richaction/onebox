@@ -1364,7 +1364,8 @@ describe('createBlockNodeView', () => {
     const nv = createBlockNodeView(nested, view, () => 2, new HeightCache(), () => null)
     expect(nv.contentDOM).toBeDefined()
     expect(nv.dom.tagName).toBe('P')
-    expect(nv.dom.className).not.toContain('onebox-block')
+    // 语义元素自身就是内容容器，PM 才会把文字渲染进 <p>；套一层 div 就不相等了
+    expect(nv.contentDOM).toBe(nv.dom)
   })
 
   it('renders a paragraph nested in a blockquote normally', () => {
@@ -1444,6 +1445,68 @@ describe('createBlockNodeView', () => {
     )
     expect(nv.ignoreMutation!({ target: nv.dom } as never)).toBe(true)
     expect(nv.ignoreMutation!({ target: nv.contentDOM } as never)).toBe(false)
+    // PM 渲染进 contentDOM 的后代文本节点同样不能被忽略
+    const text = document.createTextNode('aaa')
+    nv.contentDOM!.appendChild(text)
+    expect(nv.ignoreMutation!({ target: text } as never)).toBe(false)
+  })
+
+  it('never ignores selection mutations', () => {
+    // PM 默认实现（view dist:1125）对 selection mutation 恒返回 false；
+    // 吞掉它 PM 就不再从 DOM 回读选区。占位块（无 contentDOM）也一样。
+    const view = makeView([0])
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    expect(nv.ignoreMutation!({ type: 'selection', target: nv.dom } as never)).toBe(false)
+
+    const hidden = makeView([])
+    const placeholder = createBlockNodeView(
+      hidden.state.doc.child(0), hidden, () => 0, new HeightCache(), () => null,
+    )
+    expect(placeholder.contentDOM).toBeUndefined()
+    expect(
+      placeholder.ignoreMutation!({ type: 'selection', target: placeholder.dom } as never),
+    ).toBe(false)
+  })
+
+  it('does not register nested blocks with the observer', () => {
+    // 嵌套段落若也进 observer，观测目标数会随文档嵌套深度成倍增长
+    const seen: string[] = []
+    const observer = {
+      observe: () => seen.push('observe'),
+      unobserve: () => seen.push('unobserve'),
+      disconnect: () => {},
+    }
+    const list = schema.node('bulletList', null, [
+      schema.node('listItem', null, [schema.node('paragraph', null, [schema.text('item')])]),
+    ])
+    const doc = schema.node('doc', null, [list])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 3),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const view = { state } as unknown as EditorView
+    const nested = state.doc.child(0).child(0).child(0)
+    const nv = createBlockNodeView(nested, view, () => 2, new HeightCache(), () => observer)
+    expect(seen).toEqual([])
+    // 嵌套块不注册观测，也没有需要清理的东西，故不提供 destroy
+    expect(nv.destroy).toBeUndefined()
+  })
+
+  it('recomputes a hidden placeholder height when its content changes', () => {
+    const view = makeView([])
+    const block = view.state.doc.child(0)
+    const heights = new HeightCache()
+    heights.set(block, 123)
+    const nv = createBlockNodeView(block, view, () => 0, heights, () => null)
+    expect(nv.dom.style.height).toBe('123px')
+    // 200 字符 → ceil(200/80)=3 行 → 72px；新节点无缓存，走 estimateHeight
+    const taller = schema.node('paragraph', null, [schema.text('x'.repeat(200))])
+    expect(nv.update!(taller, [], undefined as never)).toBe(true)
+    expect(nv.dom.style.height).toBe('72px')
   })
 })
 
@@ -1481,6 +1544,10 @@ export interface ViewportObserver {
   disconnect(): void
 }
 
+type BlockNodeViewFactory = (
+  node: Node, view: EditorView, getPos: () => number | undefined,
+) => NodeView
+
 export function createBlockNodeView(
   node: Node,
   view: EditorView,
@@ -1509,6 +1576,7 @@ export function createBlockNodeView(
   }
 
   const visible = isBlockVisible(view.state, pos)
+  const observer = getObserver()
 
   const dom = document.createElement('div')
   dom.className = 'onebox-block'
@@ -1517,26 +1585,34 @@ export function createBlockNodeView(
   let contentDOM: HTMLElement | undefined
   let resizeObserver: ResizeObserver | undefined
 
+  const placeholderHeight = (block: Node) => {
+    const cached = heights.get(block)
+    return cached && cached > 0 ? cached : estimateHeight(block)
+  }
+
   if (visible) {
     // 用节点自身的 toDOM 渲染，保留 h1/pre>code/ul/ol/hr 语义。
     // 恒用 div 会丢掉标题与列表语义，而 nodeView 拥有 DOM，后续 CSS 无法补救。
+    // NodeSpec.toDOM 在 d.ts 上是可选的（TS2722），但七个 TOP_LEVEL_BLOCK_TYPES 全都定义了它，
+    // 且 renderSpec 对它们恒返回元素 dom、contentDOM 为元素或 undefined（已实测）。
     const rendered = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
     rendered.dom.classList.add('onebox-block-content')
     dom.appendChild(rendered.dom)
     // horizontalRule 是 leaf，renderSpec 不返回 contentDOM，这是正确行为
     contentDOM = rendered.contentDOM ?? undefined
     resizeObserver = new ResizeObserver(() => {
+      // 外壳必须是 BFC（Task 9 的 display: flow-root）：否则子元素的 margin 折叠到
+      // 外壳之外，offsetHeight 小于实际占据高度，每个占位块都系统性偏矮。
       const h = dom.offsetHeight
       // 挂载在 display:none 祖先下时 offsetHeight 为 0，缓存 0 会让占位塌成 0px
       if (h > 0) heights.set(current, h)
     })
     resizeObserver.observe(dom)
   } else {
-    const cached = heights.get(current)
-    dom.style.height = `${cached && cached > 0 ? cached : estimateHeight(current)}px`
+    dom.style.height = `${placeholderHeight(current)}px`
   }
 
-  getObserver()?.observe(dom)
+  observer?.observe(dom)
 
   return {
     dom,
@@ -1549,14 +1625,18 @@ export function createBlockNodeView(
       // toDOM，markup 变了必须返回 false 让它重建，否则级别 2→3 仍留在 <h2>。
       if (!nextNode.sameMarkup(current)) return false
       current = nextNode
+      // 隐藏块的内容也会被 transaction 改到（撤销、跨块替换），占位高度须跟着重算
+      if (!visible) dom.style.height = `${placeholderHeight(current)}px`
       return true
     },
     destroy() {
       resizeObserver?.disconnect()
-      getObserver()?.unobserve(dom)
+      observer?.unobserve(dom)
     },
     ignoreMutation(mutation) {
-      return !contentDOM || !contentDOM.contains(mutation.target)
+      // PM 自己的默认实现从不忽略 selection mutation（view dist:1125）。吞掉它
+      // 会让 PM 不再从 DOM 回读选区。ViewMutationRecord 的联合类型里含 'selection'。
+      return mutation.type !== 'selection' && (!contentDOM || !contentDOM.contains(mutation.target))
     },
   }
 }
@@ -1564,11 +1644,8 @@ export function createBlockNodeView(
 export function blockNodeViews(
   heights: HeightCache,
   getObserver: () => ViewportObserver | null,
-): Record<string, (node: Node, view: EditorView, getPos: () => number | undefined) => NodeView> {
-  const out: Record<
-    string,
-    (node: Node, view: EditorView, getPos: () => number | undefined) => NodeView
-  > = {}
+): Record<string, BlockNodeViewFactory> {
+  const out: Record<string, BlockNodeViewFactory> = {}
   for (const name of TOP_LEVEL_BLOCK_TYPES) {
     out[name] = (node, view, getPos) => createBlockNodeView(node, view, getPos, heights, getObserver)
   }
@@ -1576,10 +1653,12 @@ export function blockNodeViews(
 }
 ```
 
+**本任务的测量不变量（Task 9 / Task 10 必须守住）：** `heights` 里缓存的是块外壳的 `offsetHeight`，占位块把它写进 `style.height`。两者相等的前提是**外壳为 BFC**——`.onebox-block { display: flow-root }`。`position: relative` 不建立 BFC，`p` / `h2` / `ul` / `pre` 的 UA margin 会折叠到外壳之外，于是可见块实际占据 `offsetHeight + margin`，占位块只占 `offsetHeight`，每块约 16px 系统性偏矮，3000 块累计数万像素滚动漂移。**不要改成测量 margin 来「修」它**：margin 折叠出去后外壳自身的 computed margin 仍是 0，加进去也补不回子元素的 margin，那是安慰剂。唯一正确的修法是让外壳成为 BFC（或清零内容 margin 并把间距放到外壳 padding 上）。
+
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/blockNodeView.test.ts`
-Expected: PASS（17 passed）
+Expected: PASS（20 passed）
 
 若 happy-dom 未实现 `ResizeObserver` 导致 ReferenceError，在 `vite.config.ts` 的 `test` 段加 `setupFiles: ['tests/setup.ts']`，并在 `tests/setup.ts` 写入最小 stub：
 
@@ -2216,7 +2295,10 @@ body {
 }
 
 .onebox-block {
-  position: relative;
+  /* 必须是 BFC：否则 p/h2/ul/pre 的 UA margin 折叠到外壳之外，
+     可见块 offsetHeight 小于实际占据高度，占位块每块系统性偏矮约 16px。
+     position: relative 不建立 BFC，不能用它替代。 */
+  display: flow-root;
 }
 
 .onebox-block[data-visible='false'] {
@@ -2227,6 +2309,8 @@ body {
   min-height: 1.5em;
 }
 ```
+
+`display: flow-root` 的副作用：相邻块的外壳之间不再发生 margin 折叠，块间距是上下两块 content margin 之和（段落之间约 2em）。第一阶段接受这个偏松的节奏，不要为此再加 margin 清零或 padding 补偿——那会改变 `offsetHeight` 与 `style.height` 的相等关系。
 
 - [ ] **Step 6: 接线 App**
 
@@ -2517,7 +2601,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 85 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 17 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 82 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 88 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 20 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 85 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2557,6 +2641,41 @@ Expected: `total` = 3000；`visible` 为几十量级；`placeholders` ≈ 3000 �
 
 滚动到底部后重复上面脚本，Expected：`visible` 集合改变、原顶部块转为占位、`contentDOMs` 仍为几十量级。
 
+**占位高度必须等于可见时的实际占据高度**（Task 6 审查提出的漂移风险，单测无法验证，必须在这里量）。先回到顶部，取一个可见块量它的占据高度，再滚到底让它转占位，比较两者：
+
+```js
+async () => {
+  const scroller = document.querySelector('.editor-scroll')
+  scroller.scrollTop = 0
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+  const blocks = [...document.querySelectorAll('.onebox-block')]
+  const target = blocks.find((b) => b.dataset.visible === 'true')
+  const index = blocks.indexOf(target)
+  const occupied = target.getBoundingClientRect().height
+  const outer = getComputedStyle(target)
+  scroller.scrollTop = scroller.scrollHeight
+  for (let i = 0; i < 30 && target.dataset.visible !== 'false'; i++) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  const placeholder = target.getBoundingClientRect().height
+  return {
+    index,
+    occupied,
+    placeholder,
+    drift: placeholder - occupied,
+    display: outer.display,
+    margins: [outer.marginTop, outer.marginBottom],
+    becamePlaceholder: target.dataset.visible === 'false',
+  }
+}
+```
+
+Expected: `becamePlaceholder` = true；`display` = `flow-root`；`margins` = `['0px','0px']`；**`drift` 绝对值 ≤ 1**（亚像素舍入）。
+
+若 `drift` 为负十几 px 且 `display` 不是 `flow-root`，就是 Task 9 的外壳没建立 BFC、子元素 margin 折叠出去了——回到 Task 9 Step 5 修 CSS，不要靠调 `estimateHeight` 掩盖。`ResizeObserver` 是异步的，若首次量到 `drift` 很大，先多等几帧再判失败。
+
+同时确认**滚动真的触发了销毁重建**（而不是只改了 `data-visible`）：上面脚本里 `target` 转占位后 `target.querySelector('.onebox-block-content')` 必须为 `null`，滚回顶部后该块重新出现 `.onebox-block-content`。
+
 - [ ] **Step 8: Chrome 交互验证**
 
 逐项在真浏览器操作并记录结果：
@@ -2583,7 +2702,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：85 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：88 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
