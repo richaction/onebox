@@ -415,9 +415,23 @@ describe('markdown round trip', () => {
     expect(roundTrip('### 三级\n')).toContain('### 三级')
   })
 
-  it('never emits underline markup', () => {
-    const out = roundTrip('普通文本\n')
-    expect(out).not.toContain('<u>')
+  it('emits no HTML for any supported mark', () => {
+    const out = roundTrip('**b** *i* ~~s~~ `c` [l](https://e.com)\n')
+    expect(out).not.toMatch(/<[a-zA-Z/]/)
+  })
+
+  it('sizes the fence to survive nested backtick runs', () => {
+    const md = '````md\n```\nx\n```\n````\n'
+    const once = parseMarkdown(md, schema)
+    const out = serializeMarkdown(once)
+    expect(out.startsWith('````')).toBe(true)
+    expect(parseMarkdown(out, schema).eq(once)).toBe(true)
+  })
+
+  it('keeps tilde-fenced content containing backtick fences', () => {
+    const md = '~~~\n```\nx\n```\n~~~\n'
+    const once = parseMarkdown(md, schema)
+    expect(parseMarkdown(serializeMarkdown(once), schema).eq(once)).toBe(true)
   })
 })
 
@@ -490,8 +504,35 @@ describe('parse tolerance', () => {
     }
   })
 
-  it('preserves html comments verbatim', () => {
-    expect(roundTrip('before\n\n<!-- hidden -->\n\nafter\n')).toContain('<!-- hidden -->')
+  it('preserves single-line html comments', () => {
+    const md = 'before\n\n<!-- hidden -->\n\nafter\n'
+    const once = parseMarkdown(md, schema)
+    const out = serializeMarkdown(once)
+    expect(out).toContain('<!-- hidden -->')
+    expect(parseMarkdown(out, schema).eq(once)).toBe(true)
+  })
+})
+
+describe('detection regression cases', () => {
+  it('detects ordered-list task items', () => {
+    expect(detectUnsupported('1. [x] done\n2. [ ] todo\n')).toContain('taskList')
+  })
+
+  it('detects blockquoted task items', () => {
+    expect(detectUnsupported('> - [x] done\n')).toContain('taskList')
+  })
+
+  it('detects multi-line html comments', () => {
+    expect(detectUnsupported('before\n\n<!--\nhidden\n-->\n\nafter\n')).toContain('html')
+  })
+
+  it('does not flag a single-line html comment', () => {
+    expect(detectUnsupported('a <!-- x --> b\n')).toEqual([])
+  })
+
+  it('pairs fences by char and length so a 4-backtick fence does not invert state', () => {
+    const md = '````\n```\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+    expect(detectUnsupported(md)).toContain('table')
   })
 })
 ```
@@ -580,10 +621,19 @@ const serializer = new MarkdownSerializer(
     listItem: base.list_item,
     // Tiptap 用 language / start，prosemirror-markdown 默认用 params / order
     codeBlock(state, node) {
-      state.write('```' + ((node.attrs.language as string | null) || '') + '\n')
-      state.text(node.textContent, false)
+      const text = node.textContent
+      // 围栏必须长于内容中任何行首围栏串，否则内层围栏提前闭合、正文被截断改写。
+      // 代码块是受支持语法，没有只读闸门兜底，所以这里必须自身正确。
+      let longest = 0
+      for (const line of text.split('\n')) {
+        const m = /^(`{3,}|~{3,})/.exec(line)
+        if (m) longest = Math.max(longest, m[1].length)
+      }
+      const fence = '`'.repeat(Math.max(3, longest + 1))
+      state.write(fence + ((node.attrs.language as string | null) || '') + '\n')
+      state.text(text, false)
       state.ensureNewLine()
-      state.write('```')
+      state.write(fence)
       state.closeBlock(node)
     },
     orderedList(state, node) {
@@ -631,20 +681,40 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
     }
   }
 
-  let inFence = false
+  let fenceChar = ''
+  let fenceLen = 0
+  let inHtmlComment = false
   let prev = ''
   for (const line of text.split('\n')) {
-    if (/^\s{0,3}(```|~~~)/.test(line)) {
-      inFence = !inFence
+    // 围栏按字符与长度配对闭合：4 反引号围栏内的 ``` 行不应翻转状态
+    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (f) {
+      if (!fenceChar) {
+        fenceChar = f[1][0]
+        fenceLen = f[1].length
+      } else if (f[1][0] === fenceChar && f[1].length >= fenceLen) {
+        fenceChar = ''
+        fenceLen = 0
+      }
       prev = line
       continue
     }
-    if (!inFence) {
+    if (!fenceChar) {
       if (isTableDelimiter(line, prev)) found.add('table')
-      // 任意缩进 + 允许空标签：漏检会让文件以可编辑打开，保存时正文被转义改写
-      if (/^\s*[-*+]\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
+      // 任意缩进、有序标记、引用前缀、空标签：漏检会让文件以可编辑打开，
+      // 保存时任务列表标记被转义改写成字面文本
+      if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
       if (/\[\^[^\]]+\]/.test(line)) found.add('footnote')
       if (/<\/?[a-zA-Z][^>]*>/.test(line)) found.add('html')
+      // 多行 HTML 注释：起始行未同行闭合时进入注释态。单行注释逐字往返无损，
+      // 不纳入检测；多行注释的结束符会被转义成 \-->，在第三方编辑器里永不闭合、
+      // 吞掉后文。
+      const open = line.indexOf('<!--')
+      if (open >= 0 && !line.slice(open + 4).includes('-->')) inHtmlComment = true
+      if (inHtmlComment) {
+        found.add('html')
+        if (line.includes('-->')) inHtmlComment = false
+      }
     }
     prev = line
   }
@@ -655,7 +725,7 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/markdown.test.ts`
-Expected: PASS（21 passed）
+Expected: PASS（28 passed）
 
 若 `is idempotent at doc level` 失败，先打印 `serializeMarkdown(once)` 与原文对比定位差异节点，不要直接放宽断言。
 
@@ -2148,7 +2218,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 58 项（harness 1 + schema 5 + markdown 21 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 55 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 65 项（harness 1 + schema 5 + markdown 28 + heights 7 + visibility 7 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 62 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2212,7 +2282,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：58 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：65 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
