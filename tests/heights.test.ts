@@ -50,6 +50,26 @@ describe('estimateHeight', () => {
     const code = schema.node('codeBlock', null, [schema.text('a\n'.repeat(9) + 'a')])
     expect(estimateHeight(code)).toBe(240)
   })
+
+  it('counts nested textblocks so a multi-item list is not one line', () => {
+    const list = schema.node(
+      'bulletList',
+      null,
+      Array.from({ length: 5 }, () =>
+        schema.node('listItem', null, [schema.node('paragraph', null, [schema.text('item')])]),
+      ),
+    )
+    expect(estimateHeight(list)).toBe(120)
+  })
+
+  it('counts paragraphs inside a blockquote', () => {
+    const quote = schema.node(
+      'blockquote',
+      null,
+      Array.from({ length: 3 }, () => schema.node('paragraph', null, [schema.text('q')])),
+    )
+    expect(estimateHeight(quote)).toBe(72)
+  })
 })
 
 describe('node identity across transactions', () => {

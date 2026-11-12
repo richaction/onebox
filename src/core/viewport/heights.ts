@@ -6,10 +6,17 @@ const MIN_HEIGHT = 28
 
 export function estimateHeight(block: Node): number {
   const text = block.textContent
-  // 显式换行与自动折行取较大者：只看字符数会把 10 行短代码块估成 1 行
+  // 显式换行、自动折行、嵌套文本块数三者取最大：
+  // 只看字符数会把 10 行短代码块估成 1 行；而 textContent 不在子块间插分隔符，
+  // 5 项列表也只有 25 字符，同样被估成 1 行（实测 28px vs 约 120px）。
   const explicitLines = text.split('\n').length
   const wrappedLines = Math.ceil(text.length / CHARS_PER_LINE)
-  return Math.max(MIN_HEIGHT, Math.max(explicitLines, wrappedLines) * LINE_HEIGHT)
+  let textblocks = 0
+  block.descendants((node) => {
+    if (node.isTextblock) textblocks++
+  })
+  const lines = Math.max(explicitLines, wrappedLines, textblocks)
+  return Math.max(MIN_HEIGHT, lines * LINE_HEIGHT)
 }
 
 // 以块节点对象为键：PM 节点不可变，未修改的块跨 transaction 仍是同一引用（命中），
