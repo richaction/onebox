@@ -1306,6 +1306,7 @@ describe('createBlockNodeView', () => {
   })
 
   it('gives a leaf horizontalRule no contentDOM', () => {
+    // 位置：paragraph('a') nodeSize=3 → hr 在 pos 3，doc content size=4
     const doc = schema.node('doc', null, [
       schema.node('paragraph', null, [schema.text('a')]),
       schema.node('horizontalRule'),
@@ -1315,11 +1316,68 @@ describe('createBlockNodeView', () => {
       selection: TextSelection.create(doc, 1),
       plugins: [createVisibilityPlugin()],
     })
-    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([5]) }))
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([3]) }))
     const view = { state } as unknown as EditorView
-    const nv = createBlockNodeView(state.doc.child(1), view, () => 5, new HeightCache(), () => null)
+    const nv = createBlockNodeView(state.doc.child(1), view, () => 3, new HeightCache(), () => null)
     expect(nv.dom.querySelector('hr')).not.toBeNull()
     expect(nv.contentDOM).toBeUndefined()
+  })
+
+  it('renders a paragraph nested in a list item normally, not as a placeholder', () => {
+    // nodeViews 按类型名注册，对所有深度生效。嵌套段落 pos=2、depth>0，
+    // 若走占位分支会把整个列表项的内容销毁（li.textContent 变成空）。
+    const list = schema.node('bulletList', null, [
+      schema.node('listItem', null, [schema.node('paragraph', null, [schema.text('item')])]),
+    ])
+    const doc = schema.node('doc', null, [list])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 3),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const view = { state } as unknown as EditorView
+    const nested = state.doc.child(0).child(0).child(0)
+    const nv = createBlockNodeView(nested, view, () => 2, new HeightCache(), () => null)
+    expect(nv.contentDOM).toBeDefined()
+    expect(nv.dom.tagName).toBe('P')
+    expect(nv.dom.className).not.toContain('onebox-block')
+  })
+
+  it('renders a paragraph nested in a blockquote normally', () => {
+    const quote = schema.node('blockquote', null, [
+      schema.node('paragraph', null, [schema.text('q')]),
+    ])
+    const doc = schema.node('doc', null, [quote])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 2),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const view = { state } as unknown as EditorView
+    const nested = state.doc.child(0).child(0)
+    const nv = createBlockNodeView(nested, view, () => 1, new HeightCache(), () => null)
+    expect(nv.contentDOM).toBeDefined()
+    expect(nv.dom.tagName).toBe('P')
+  })
+
+  it('recreates when heading level changes', () => {
+    const view = singleBlockView(schema.node('heading', { level: 2 }, [schema.text('h')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    const next = schema.node('heading', { level: 3 }, [schema.text('h')])
+    expect(nv.update!(next, [], undefined as never)).toBe(false)
+  })
+
+  it('recreates when code block language changes', () => {
+    const view = singleBlockView(schema.node('codeBlock', { language: 'ts' }, [schema.text('x')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    const next = schema.node('codeBlock', { language: 'js' }, [schema.text('x')])
+    expect(nv.update!(next, [], undefined as never)).toBe(false)
   })
 
   it('returns false from update when visibility flips', () => {
@@ -1409,7 +1467,25 @@ export function createBlockNodeView(
 ): NodeView {
   let current = node
   const pos = getPos()
-  const visible = pos !== undefined && isBlockVisible(view.state, pos)
+
+  // PM 的 nodeViews 按【类型名】注册，对所有深度生效：listItem / blockquote 里的
+  // 段落同样会进这个工厂。它们的 pos 不是顶层位置，isBlockVisible 必然 false，
+  // 若走占位分支就会把列表项与引用的内容整段销毁。非顶层一律正常渲染、不参与虚拟化。
+  const topLevel = pos !== undefined && view.state.doc.resolve(pos).depth === 0
+  if (!topLevel) {
+    const nested = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
+    return {
+      dom: nested.dom,
+      contentDOM: nested.contentDOM ?? undefined,
+      update(next) {
+        if (!next.sameMarkup(current)) return false
+        current = next
+        return true
+      },
+    }
+  }
+
+  const visible = isBlockVisible(view.state, pos)
 
   const dom = document.createElement('div')
   dom.className = 'onebox-block'
@@ -1421,7 +1497,7 @@ export function createBlockNodeView(
   if (visible) {
     // 用节点自身的 toDOM 渲染，保留 h1/pre>code/ul/ol/hr 语义。
     // 恒用 div 会丢掉标题与列表语义，而 nodeView 拥有 DOM，后续 CSS 无法补救。
-    const rendered = DOMSerializer.renderSpec(document, node.type.spec.toDOM(node))
+    const rendered = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
     rendered.dom.classList.add('onebox-block-content')
     dom.appendChild(rendered.dom)
     // horizontalRule 是 leaf，renderSpec 不返回 contentDOM，这是正确行为
@@ -1446,6 +1522,9 @@ export function createBlockNodeView(
       const p = getPos()
       const nextVisible = p !== undefined && isBlockVisible(view.state, p)
       if (nextVisible !== visible) return false
+      // toDOM 的产物带 attrs（h2 的级别、code 的 language-*）。PM 不会重新应用
+      // toDOM，markup 变了必须返回 false 让它重建，否则级别 2→3 仍留在 <h2>。
+      if (!nextNode.sameMarkup(current)) return false
       current = nextNode
       return true
     },
@@ -1477,7 +1556,7 @@ export function blockNodeViews(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/blockNodeView.test.ts`
-Expected: PASS（13 passed）
+Expected: PASS（17 passed）
 
 若 happy-dom 未实现 `ResizeObserver` 导致 ReferenceError，在 `vite.config.ts` 的 `test` 段加 `setupFiles: ['tests/setup.ts']`，并在 `tests/setup.ts` 写入最小 stub：
 
@@ -2415,7 +2494,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 80 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 11 + blockNodeView 13 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 77 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 84 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 11 + blockNodeView 17 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 81 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2481,7 +2560,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：80 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：84 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 

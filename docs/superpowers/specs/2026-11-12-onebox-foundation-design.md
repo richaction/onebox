@@ -239,6 +239,12 @@ export function createBlockNodeView(
 
 对每个可作为 `doc` 直接子节点的类型注册同一工厂。**节点名以 Tiptap 实际注册名为准（camelCase）**：`paragraph`、`heading`、`blockquote`、`codeBlock`、`bulletList`、`orderedList`、`horizontalRule`。**不对 `listItem` 注册**——它不是顶层块。
 
+**但注册是按类型名、对所有深度生效的**：`listItem` / `blockquote` 内部的 `paragraph` 同样会进入这个工厂。工厂必须先用 `view.state.doc.resolve(pos).depth === 0` 判定是否顶层；非顶层一律按节点自身 `toDOM` 正常渲染，不做占位、不注册观测。否则嵌套块的 pos 不在顶层可见集里，会被判为不可见而整段销毁内容。
+
+**可见块的 DOM 用节点自身的 `toDOM` 渲染**（经 `DOMSerializer.renderSpec`），保留 `h2` / `pre > code.language-*` / `ul` / `ol` / `hr` 语义，外层再包 `div.onebox-block` 承载高度与后续拖拽手柄。恒用 div 会丢失语义，而 nodeView 拥有 DOM，后续 CSS 无法补救。`horizontalRule` 是 leaf，`renderSpec` 不返回 `contentDOM`，属正确行为。
+
+**`update` 必须在 markup 变化时返回 false**：`toDOM` 产物带 attrs（标题级别、代码语言），PM 不会重新应用 `toDOM`，不重建就会出现级别 2→3 仍留在 `<h2>`。
+
 构造时读可见性：
 
 - **可见** → `{ dom: 块外壳, contentDOM: 内容容器 }`，PM 原生渲染子节点并接管输入
