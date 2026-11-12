@@ -1203,6 +1203,7 @@ Expected: 退出码 0
 
 ```ts
 import { describe, expect, it } from 'vitest'
+import type { Node } from '@tiptap/pm/model'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import { schema } from '../src/core/schema'
@@ -1222,6 +1223,18 @@ function makeView(visible: number[]) {
     plugins: [createVisibilityPlugin()],
   })
   state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set(visible) }))
+  return { state } as unknown as EditorView
+}
+
+// 单块文档，选区落在块内 pos 1，可见集含 pos 0
+function singleBlockView(block: Node) {
+  const doc = schema.node('doc', null, [block])
+  let state = EditorState.create({
+    doc,
+    selection: TextSelection.create(doc, 1),
+    plugins: [createVisibilityPlugin()],
+  })
+  state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
   return { state } as unknown as EditorView
 }
 
@@ -1252,6 +1265,61 @@ describe('createBlockNodeView', () => {
       view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
     )
     expect(nv.dom.style.height).toBe('28px')
+  })
+
+  it('renders the selection-bearing block even when absent from the visible set', () => {
+    // 这条专门咬住「必须用 isBlockVisible 而非直读 state.visible」：
+    // 选区在 block2、可见集为空时，block2 仍须有 contentDOM
+    const view = makeView([])
+    const nv = createBlockNodeView(
+      view.state.doc.child(1), view, () => 5, new HeightCache(), () => null,
+    )
+    expect(nv.dom.dataset.visible).toBe('true')
+    expect(nv.contentDOM).toBeDefined()
+  })
+
+  it('falls back to the estimate when the cached height is zero', () => {
+    const view = makeView([])
+    const block = view.state.doc.child(0)
+    const heights = new HeightCache()
+    heights.set(block, 0)
+    const nv = createBlockNodeView(block, view, () => 0, heights, () => null)
+    expect(nv.dom.style.height).toBe('28px')
+  })
+
+  it('preserves heading semantics', () => {
+    const view = singleBlockView(schema.node('heading', { level: 2 }, [schema.text('h')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    expect(nv.dom.querySelector('h2')).not.toBeNull()
+    expect(nv.contentDOM?.tagName).toBe('H2')
+  })
+
+  it('preserves code block semantics and language class', () => {
+    const view = singleBlockView(schema.node('codeBlock', { language: 'ts' }, [schema.text('x')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    expect(nv.dom.querySelector('pre > code.language-ts')).not.toBeNull()
+    expect(nv.contentDOM?.tagName).toBe('CODE')
+  })
+
+  it('gives a leaf horizontalRule no contentDOM', () => {
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('a')]),
+      schema.node('horizontalRule'),
+    ])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 1),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([5]) }))
+    const view = { state } as unknown as EditorView
+    const nv = createBlockNodeView(state.doc.child(1), view, () => 5, new HeightCache(), () => null)
+    expect(nv.dom.querySelector('hr')).not.toBeNull()
+    expect(nv.contentDOM).toBeUndefined()
   })
 
   it('returns false from update when visibility flips', () => {
@@ -1320,6 +1388,7 @@ Expected: FAIL — 无法解析 `../src/core/viewport/blockNodeView`
 
 ```ts
 import type { Node } from '@tiptap/pm/model'
+import { DOMSerializer } from '@tiptap/pm/model'
 import type { EditorView, NodeView } from '@tiptap/pm/view'
 import { TOP_LEVEL_BLOCK_TYPES } from '../schema'
 import { estimateHeight, type HeightCache } from './heights'
@@ -1350,15 +1419,22 @@ export function createBlockNodeView(
   let resizeObserver: ResizeObserver | undefined
 
   if (visible) {
-    contentDOM = document.createElement('div')
-    contentDOM.className = 'onebox-block-content'
-    dom.appendChild(contentDOM)
+    // 用节点自身的 toDOM 渲染，保留 h1/pre>code/ul/ol/hr 语义。
+    // 恒用 div 会丢掉标题与列表语义，而 nodeView 拥有 DOM，后续 CSS 无法补救。
+    const rendered = DOMSerializer.renderSpec(document, node.type.spec.toDOM(node))
+    rendered.dom.classList.add('onebox-block-content')
+    dom.appendChild(rendered.dom)
+    // horizontalRule 是 leaf，renderSpec 不返回 contentDOM，这是正确行为
+    contentDOM = rendered.contentDOM ?? undefined
     resizeObserver = new ResizeObserver(() => {
-      heights.set(current, dom.offsetHeight)
+      const h = dom.offsetHeight
+      // 挂载在 display:none 祖先下时 offsetHeight 为 0，缓存 0 会让占位塌成 0px
+      if (h > 0) heights.set(current, h)
     })
     resizeObserver.observe(dom)
   } else {
-    dom.style.height = `${heights.get(current) ?? estimateHeight(current)}px`
+    const cached = heights.get(current)
+    dom.style.height = `${cached && cached > 0 ? cached : estimateHeight(current)}px`
   }
 
   getObserver()?.observe(dom)
@@ -1401,7 +1477,7 @@ export function blockNodeViews(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/blockNodeView.test.ts`
-Expected: PASS（8 passed）
+Expected: PASS（13 passed）
 
 若 happy-dom 未实现 `ResizeObserver` 导致 ReferenceError，在 `vite.config.ts` 的 `test` 段加 `setupFiles: ['tests/setup.ts']`，并在 `tests/setup.ts` 写入最小 stub：
 
@@ -2339,7 +2415,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 75 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 11 + blockNodeView 8 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 72 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 80 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 11 + blockNodeView 13 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 77 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2375,6 +2451,8 @@ Run: `pnpm dev`
 
 Expected: `total` = 3000；`visible` 为几十量级；`placeholders` ≈ 3000 − visible；`contentDOMs` == `visible`；`domNodes` 远小于全量渲染（全量约 3000 × 每块十余节点）
 
+注：`.onebox-block-content` 类挂在节点自身 toDOM 渲染出的语义元素上（`p` / `h2` / `pre` / `ul` / `ol` / `hr`），每个可见块恰好一个，所以计数仍等于可见块数。`hr` 是 leaf，其 nodeView 的 `contentDOM` 为 undefined，但类仍在 `<hr>` 上。
+
 滚动到底部后重复上面脚本，Expected：`visible` 集合改变、原顶部块转为占位、`contentDOMs` 仍为几十量级。
 
 - [ ] **Step 8: Chrome 交互验证**
@@ -2403,7 +2481,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：75 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：80 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
