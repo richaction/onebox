@@ -77,7 +77,9 @@ const serializer = new MarkdownSerializer(
       // 代码块是受支持语法，没有只读闸门兜底，所以这里必须自身正确。
       let longest = 0
       for (const line of text.split('\n')) {
-        const m = /^(`{3,}|~{3,})/.exec(line)
+        // CommonMark 允许闭合围栏缩进 ≤3 空格，扫描必须同样容忍，
+        // 否则缩进的 ``` 不被计入、外层围栏取 3、内容被提前闭合截断
+        const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
         if (m) longest = Math.max(longest, m[1].length)
       }
       const fence = '`'.repeat(Math.max(3, longest + 1))

@@ -67,6 +67,16 @@ describe('markdown round trip', () => {
     const once = parseMarkdown(md, schema)
     expect(parseMarkdown(serializeMarkdown(once), schema).eq(once)).toBe(true)
   })
+
+  it('sizes the fence for an indented closing fence inside the content', () => {
+    const md = '````\n   ```\nx\n````\n'
+    const once = parseMarkdown(md, schema)
+    expect(parseMarkdown(serializeMarkdown(once), schema).eq(once)).toBe(true)
+  })
+
+  it('still emits exactly three backticks for an ordinary code block', () => {
+    expect(roundTrip('```ts\nconst x = 1\n```\n').startsWith('```ts\n')).toBe(true)
+  })
 })
 
 describe('detectUnsupported', () => {
@@ -165,7 +175,8 @@ describe('detection regression cases', () => {
   })
 
   it('pairs fences by char and length so a 4-backtick fence does not invert state', () => {
-    const md = '````\n```\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+    // 内层围栏必须是奇数个：偶数个在朴素翻转实现下也会净归零，测不到缺陷
+    const md = '````\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
     expect(detectUnsupported(md)).toContain('table')
   })
 })
