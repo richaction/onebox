@@ -80,6 +80,23 @@ describe('visibility plugin', () => {
     expect([...visibilityKey.getState(next)!.visible]).toEqual([0])
   })
 
+  it('keeps a block visible when only its markup changes', () => {
+    // setNodeMarkup 产生 ReplaceAroundStep，mapResult 会把块起点判为 deleted，
+    // 导致改标题级别时该在屏块塌成占位
+    const doc = schema.node('doc', null, [
+      schema.node('heading', { level: 2 }, [schema.text('aaa')]),
+      schema.node('paragraph', null, [schema.text('bbb')]),
+    ])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 8),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0, 5]) }))
+    const next = state.apply(state.tr.setNodeMarkup(0, undefined, { level: 3 }))
+    expect([...visibilityKey.getState(next)!.visible].sort((a, b) => a - b)).toEqual([0, 5])
+  })
+
   it('forces every block in a range selection visible', () => {
     const doc = schema.node('doc', null, [
       schema.node('paragraph', null, [schema.text('aaa')]),

@@ -60,12 +60,18 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
         if (!tr.docChanged) return value
         // 文档变更会移动其后所有顶层块的起始位置。不映射就会让下方每个块
         // 的可见性判定失效、被打成占位——每次敲键都触发一轮销毁重建。
+        //
+        // 不能用 mapResult 的 deleted 判断块是否消失：setNodeMarkup 产生
+        // ReplaceAroundStep，assoc=1 时本块起点被判 deleted、assoc=-1 时下一块
+        // 起点被判 deleted，两种都会误踢在屏块。deleted 表达的是位置映射语义，
+        // 不是块的存在性。改为 map 取新位置，再按新文档真实的顶层块起点过滤。
         const mapped = new Set<number>()
-        for (const pos of value.visible) {
-          const result = tr.mapping.mapResult(pos)
-          if (!result.deleted) mapped.add(result.pos)
-        }
-        return { visible: mapped }
+        for (const pos of value.visible) mapped.add(tr.mapping.map(pos))
+        const kept = new Set<number>()
+        tr.doc.forEach((_node, pos) => {
+          if (mapped.has(pos)) kept.add(pos)
+        })
+        return { visible: kept }
       },
     },
     props: {
