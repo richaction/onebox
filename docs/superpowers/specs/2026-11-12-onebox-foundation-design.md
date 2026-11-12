@@ -179,7 +179,9 @@ export function detectUnsupported(text: string): UnsupportedKind[]
 
 **检测实现取向：图片用 markdown-it 自身的 token 流判定，不用正则。** 正则无法穷尽 inline / reference / collapsed / shortcut 四种图片形式与嵌套括号 alt；漏检会让文件以可编辑打开，保存时正文被改写。tokenizer 能识别全部形式，且 fenced code 内的图片天然不产生 image token。表格、任务列表、脚注仍用正则（commonmark 预设不含这些规则），其中任务列表必须匹配任意缩进与空标签。
 
-**解析必须容错：** schema 无 image 节点，parser 对 `image` token 用 `ignore: true` 而非抛异常。否则带图片的文件连解析都过不去，「只读打开」根本无法实现。代价是只读视图里图片不显示——磁盘内容由只读闸门保护，不受影响。
+**解析必须容错：** schema 无 image 节点，parser 对 `image` token 用 `{ ignore: true, noCloseToken: true }` 而非抛异常。`noCloseToken` 不可省：markdown-it 的 image 是单 token，缺了它 `ignore` 只会注册 `image_open`/`image_close`，`image` 本身仍无 handler 而抛异常（已核实 prosemirror-markdown 1.13.9 源码）。否则带图片的文件连解析都过不去，「只读打开」根本无法实现。代价是只读视图里图片不显示——磁盘内容由只读闸门保护，不受影响。
+
+**已知局限：** 忽略 image token 会连同 alt 文本一起丢弃，纯图片文件解析后为空文档，只读视图会显示空白。磁盘安全不受影响。第一阶段接受此局限，不额外做原始文本回退视图。
 
 **Schema 约束（方案约束 1）：** 只注册 GFM 原生类型。StarterKit v3 默认包含 `underline`，**必须显式禁用**——`<u>` 不是 GFM 标准语法，会违反兼容性红线。
 

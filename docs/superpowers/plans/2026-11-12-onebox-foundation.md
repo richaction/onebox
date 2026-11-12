@@ -555,7 +555,9 @@ function buildParser(schema: Schema): MarkdownParser {
     text: { node: 'text' },
     // 无 image 节点。忽略而非抛异常：不支持的文件走只读闸门，磁盘内容不受影响，
     // 但解析必须成功，否则文件根本打不开。
-    image: { ignore: true },
+    // markdown-it 的 image 是单 token（无 _open/_close），必须显式 noCloseToken，
+    // 否则 ignore 只注册 image_open/image_close，image 本身仍无 handler 而抛异常。
+    image: { ignore: true, noCloseToken: true },
     em: { mark: 'italic' },
     strong: { mark: 'bold' },
     s: { mark: 'strike' },
