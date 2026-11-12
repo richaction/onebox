@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Node } from '@tiptap/pm/model'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import { schema } from '../src/core/schema'
@@ -18,6 +19,18 @@ function makeView(visible: number[]) {
     plugins: [createVisibilityPlugin()],
   })
   state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set(visible) }))
+  return { state } as unknown as EditorView
+}
+
+// 单块文档，选区落在块内 pos 1，可见集含 pos 0
+function singleBlockView(block: Node) {
+  const doc = schema.node('doc', null, [block])
+  let state = EditorState.create({
+    doc,
+    selection: TextSelection.create(doc, 1),
+    plugins: [createVisibilityPlugin()],
+  })
+  state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
   return { state } as unknown as EditorView
 }
 
@@ -48,6 +61,61 @@ describe('createBlockNodeView', () => {
       view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
     )
     expect(nv.dom.style.height).toBe('28px')
+  })
+
+  it('renders the selection-bearing block even when absent from the visible set', () => {
+    // 这条专门咬住「必须用 isBlockVisible 而非直读 state.visible」：
+    // 选区在 block2、可见集为空时，block2 仍须有 contentDOM
+    const view = makeView([])
+    const nv = createBlockNodeView(
+      view.state.doc.child(1), view, () => 5, new HeightCache(), () => null,
+    )
+    expect(nv.dom.dataset.visible).toBe('true')
+    expect(nv.contentDOM).toBeDefined()
+  })
+
+  it('falls back to the estimate when the cached height is zero', () => {
+    const view = makeView([])
+    const block = view.state.doc.child(0)
+    const heights = new HeightCache()
+    heights.set(block, 0)
+    const nv = createBlockNodeView(block, view, () => 0, heights, () => null)
+    expect(nv.dom.style.height).toBe('28px')
+  })
+
+  it('preserves heading semantics', () => {
+    const view = singleBlockView(schema.node('heading', { level: 2 }, [schema.text('h')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    expect(nv.dom.querySelector('h2')).not.toBeNull()
+    expect(nv.contentDOM?.tagName).toBe('H2')
+  })
+
+  it('preserves code block semantics and language class', () => {
+    const view = singleBlockView(schema.node('codeBlock', { language: 'ts' }, [schema.text('x')]))
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => null,
+    )
+    expect(nv.dom.querySelector('pre > code.language-ts')).not.toBeNull()
+    expect(nv.contentDOM?.tagName).toBe('CODE')
+  })
+
+  it('gives a leaf horizontalRule no contentDOM', () => {
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('a')]),
+      schema.node('horizontalRule'),
+    ])
+    let state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 1),
+      plugins: [createVisibilityPlugin()],
+    })
+    state = state.apply(state.tr.setMeta(visibilityKey, { visible: new Set([5]) }))
+    const view = { state } as unknown as EditorView
+    const nv = createBlockNodeView(state.doc.child(1), view, () => 5, new HeightCache(), () => null)
+    expect(nv.dom.querySelector('hr')).not.toBeNull()
+    expect(nv.contentDOM).toBeUndefined()
   })
 
   it('returns false from update when visibility flips', () => {
