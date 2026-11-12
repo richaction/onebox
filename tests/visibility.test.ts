@@ -58,6 +58,49 @@ describe('visibility plugin', () => {
     const found = decos.find()
     expect(found.length).toBe(2)
     expect(found.map((d) => d.spec.visible)).toEqual([false, true])
+    // attrs（第 3 参数）才是驱动 PM 销毁重建的那一半，必须单独断言：
+    // 只测 spec 的话，删掉 attrs 参数仍然全绿，而整个架构会失效。
+    // 公开 d.ts 只暴露 from/to/spec，attrs 在运行时挂在 type 上。
+    expect(
+      found.map(
+        (d) => (d as unknown as { type: { attrs: Record<string, string> } }).type.attrs['data-visible'],
+      ),
+    ).toEqual(['false', 'true'])
+  })
+
+  it('maps visible positions through document changes', () => {
+    const state = setVisible(makeState(6), [5])
+    const next = state.apply(state.tr.insertText('x', 1))
+    expect([...visibilityKey.getState(next)!.visible]).toEqual([6])
+  })
+
+  it('drops visible positions whose block was deleted', () => {
+    const state = setVisible(makeState(6), [0, 5])
+    const next = state.apply(state.tr.delete(0, 5))
+    expect([...visibilityKey.getState(next)!.visible]).toEqual([0])
+  })
+
+  it('forces every block in a range selection visible', () => {
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('aaa')]),
+      schema.node('paragraph', null, [schema.text('bbb')]),
+      schema.node('paragraph', null, [schema.text('ccc')]),
+    ])
+    const state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 1, 12),
+      plugins: [createVisibilityPlugin()],
+    })
+    expect([...forcedVisiblePositions(state)].sort((a, b) => a - b)).toEqual([0, 5, 10])
+  })
+
+  it('rebuilds decorations when the visible set changes', () => {
+    const state = setVisible(makeState(6), [0])
+    const plugin = visibilityKey.get(state)!
+    const a = plugin.props.decorations!.call(plugin, state)
+    const next = setVisible(state, [5])
+    const b = plugin.props.decorations!.call(plugin, next)
+    expect(a).not.toBe(b)
   })
 
   it('memoizes decorations when nothing changed', () => {
