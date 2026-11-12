@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { EditorState } from '@tiptap/pm/state'
 import { HeightCache, estimateHeight } from '../src/core/viewport/heights'
 import { schema } from '../src/core/schema'
 
@@ -43,5 +44,22 @@ describe('estimateHeight', () => {
   it('scales with line count', () => {
     expect(estimateHeight(para('x'.repeat(160)))).toBe(48)
     expect(estimateHeight(para('x'.repeat(161)))).toBe(72)
+  })
+
+  it('counts explicit newlines, not just characters', () => {
+    const code = schema.node('codeBlock', null, [schema.text('a\n'.repeat(9) + 'a')])
+    expect(estimateHeight(code)).toBe(240)
+  })
+})
+
+describe('node identity across transactions', () => {
+  it('keeps an unmodified block reference so the cache still hits', () => {
+    const doc = schema.node('doc', null, [para('aaa'), para('bbb')])
+    const cache = new HeightCache()
+    const second = doc.child(1)
+    cache.set(second, 90)
+    const next = EditorState.create({ doc }).tr.insertText('x', 1).doc
+    expect(next.child(1)).toBe(second)
+    expect(cache.get(next.child(1))).toBe(90)
   })
 })
