@@ -21,7 +21,6 @@ export function createViewportObserver(
   rootMargin = '200px',
 ): ViewportObserver {
   const states = new Map<Element, boolean>()
-  let prev: ReadonlySet<number> = new Set()
   let raf = 0
 
   const flush = () => {
@@ -36,9 +35,15 @@ export function createViewportObserver(
       if (!intersecting || !el.isConnected) continue
       next.add(blockPosOf(view, el))
     }
-    const changed = nextVisibleSet(prev, next)
+    // 与 plugin 的【权威】可见集比较，不自存一份 prev。plugin 会在每个 docChanged
+    // transaction 里自行 map+filter，私有副本必然与它漂移：一旦 DOM 算出的 next
+    // 恰好等于过期副本，就永远不再派发纠正事务，屏上块永久停在占位态。
+    // 读权威集同时省掉「位置平移后 plugin 已映射正确、却因 next != prev 再派发
+    // 一次全量 updateState」的冗余开销。setMeta 事务的 apply 原样返回 meta.visible，
+    // 故派发后 plugin 状态恒等于 next，不会自激循环。
+    const current = visibilityKey.getState(view.state)?.visible ?? new Set<number>()
+    const changed = nextVisibleSet(current, next)
     if (!changed) return
-    prev = changed
     view.dispatch(view.state.tr.setMeta(visibilityKey, { visible: changed }))
   }
 
