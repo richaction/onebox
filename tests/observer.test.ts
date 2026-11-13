@@ -132,6 +132,17 @@ describe('createViewportObserver', () => {
     expect(view.state).toBe(settled)
   })
 
+  it('coalesces multiple IO callbacks into one pending frame', () => {
+    // 没有 `if (!raf)` 去重，每个 IO 回调都会再排一帧，一帧内多次 flush 多次 dispatch
+    const { wrappers } = mount([para('aaa'), para('bbb')])
+    const w = wrappers()
+    emit([{ target: w[0], isIntersecting: true }])
+    emit([{ target: w[1], isIntersecting: true }])
+    expect(frames.size).toBe(1)
+    runFrames()
+    expect(frames.size).toBe(0)
+  })
+
   it('resyncs from plugin state after a delete and equal-size reinsert in one frame', () => {
     // plugin 在每个 docChanged transaction 里自行 map+filter。删掉 [5,9) 再在 5
     // 插回等长块后，文档起点回到 [0,5,9]，但 plugin 的集合只剩 {0,9}（map(5) 被

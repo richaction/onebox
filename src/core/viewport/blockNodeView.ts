@@ -43,7 +43,6 @@ export function createBlockNodeView(
   }
 
   const visible = isBlockVisible(view.state, pos)
-  const observer = getObserver()
 
   const dom = document.createElement('div')
   dom.className = 'onebox-block'
@@ -79,7 +78,7 @@ export function createBlockNodeView(
     dom.style.height = `${placeholderHeight(current)}px`
   }
 
-  observer?.observe(dom)
+  getObserver()?.observe(dom)
 
   return {
     dom,
@@ -98,7 +97,10 @@ export function createBlockNodeView(
     },
     destroy() {
       resizeObserver?.disconnect()
-      observer?.unobserve(dom)
+      // 必须重新取，不能用构造时捕获的实例：Task 9 先建 EditorView 再建 observer，
+      // 首批 nodeView 构造时 getObserver() 是 null，由 createEditor 补挂。用捕获的
+      // null 注销就永远注销不掉，states 与 IO 会随翻转累积脱离文档的元素。
+      getObserver()?.unobserve(dom)
     },
     ignoreMutation(mutation) {
       // PM 自己的默认实现从不忽略 selection mutation（view dist:1125）。吞掉它

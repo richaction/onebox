@@ -5,7 +5,7 @@ import type { EditorView } from '@tiptap/pm/view'
 import { schema } from '../src/core/schema'
 import { HeightCache } from '../src/core/viewport/heights'
 import { createVisibilityPlugin, visibilityKey } from '../src/core/viewport/visibility'
-import { blockNodeViews, createBlockNodeView } from '../src/core/viewport/blockNodeView'
+import { blockNodeViews, createBlockNodeView, type ViewportObserver } from '../src/core/viewport/blockNodeView'
 
 // block1 pos=0, block2 pos=5；选区放在 block2，使 block1 可被隐藏
 function makeView(visible: number[]) {
@@ -209,6 +209,30 @@ describe('createBlockNodeView', () => {
     expect(seen).toEqual(['observe'])
     nv.destroy!()
     expect(seen).toEqual(['observe', 'unobserve'])
+  })
+
+  it('unobserves through the current observer when none existed at construction', () => {
+    // Task 9 的 createEditor 先建 EditorView 再建 observer：首批 nodeView 构造时
+    // getObserver() 返回 null，由 createEditor 对 view.dom.children 补挂。若 destroy
+    // 用构造时捕获的 null，补挂进去的外壳永远注销不掉，states 与 IO 会随每次翻转
+    // 累积脱离文档的元素（2 万块滚一遍即 2 万条，每帧 flush 都遍历，IO 强引用不回收）。
+    const seen: string[] = []
+    const observer = {
+      observe: () => seen.push('observe'),
+      unobserve: () => seen.push('unobserve'),
+      disconnect: () => {},
+    }
+    let current: ViewportObserver | null = null
+    const view = makeView([0])
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => current,
+    )
+    expect(seen).toEqual([])
+    current = observer
+    current.observe(nv.dom)
+    seen.length = 0
+    nv.destroy!()
+    expect(seen).toEqual(['unobserve'])
   })
 
   it('ignores mutations outside contentDOM', () => {
