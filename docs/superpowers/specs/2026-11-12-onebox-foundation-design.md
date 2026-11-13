@@ -252,7 +252,7 @@ export function createBlockNodeView(
 
 `update(node, outerDeco, innerDeco)`：**可见性翻转 → 返回 `false`**；**`!node.sameMarkup(current)` → 返回 `false`**（attrs 变了必须重建，见上）；其余返回 `true`，节点内容由 PM 自行更新子节点。返回 `true` 且块处于隐藏态时，必须按新节点重算占位高度——隐藏块的内容也会被撤销、跨块替换等 transaction 改到。
 
-`destroy()`：断开该块的 ResizeObserver，并向 observer 注销。observer 实例在构造时取一次并捕获，不在 destroy 时重新调用 `getObserver()`。
+`destroy()`：断开该块的 ResizeObserver，并向 observer 注销。**注销必须重新调用 `getObserver()`，不得使用构造时捕获的实例。** Task 9 的 `createEditor` 先建 EditorView 再建 observer，首批 nodeView 构造时 `getObserver()` 返回 `null`，由 `createEditor` 对 `view.dom.children` 补挂。若 destroy 用捕获到的 `null`，补挂进去的外壳就永远注销不掉：`states` 与 IntersectionObserver 会随每次可见性翻转累积脱离文档的元素（2 万块文档滚一遍即累积 2 万条，每帧 flush 都要遍历，且 IO 对 target 是强引用，整棵子树无法回收），只有 `isConnected` 过滤在兜着不崩。`getObserver` 在 Task 9 是返回单一变量的稳定闭包，两次调用必得同一实例，不存在注册/注销落在不同 observer 上的风险。
 
 `ignoreMutation`：忽略 contentDOM 之外（块外壳 UI 部分）的 mutation，避免 PM 把 UI 变更解析成文档内容。**但 `type === 'selection'` 的 mutation 一律不忽略**——PM 自身的默认实现（`prosemirror-view` dist:1125）对 selection 恒返回 false，吞掉它 PM 就不再从 DOM 回读选区。
 

@@ -1438,6 +1438,30 @@ describe('createBlockNodeView', () => {
     expect(seen).toEqual(['observe', 'unobserve'])
   })
 
+  it('unobserves through the current observer when none existed at construction', () => {
+    // Task 9 的 createEditor 先建 EditorView 再建 observer：首批 nodeView 构造时
+    // getObserver() 返回 null，由 createEditor 对 view.dom.children 补挂。若 destroy
+    // 用构造时捕获的 null，补挂进去的外壳永远注销不掉，states 与 IO 会随每次翻转
+    // 累积脱离文档的元素（2 万块滚一遍即 2 万条，每帧 flush 都遍历，IO 强引用不回收）。
+    const seen: string[] = []
+    const observer = {
+      observe: () => seen.push('observe'),
+      unobserve: () => seen.push('unobserve'),
+      disconnect: () => {},
+    }
+    let current: typeof observer | null = null
+    const view = makeView([0])
+    const nv = createBlockNodeView(
+      view.state.doc.child(0), view, () => 0, new HeightCache(), () => current,
+    )
+    expect(seen).toEqual([])
+    current = observer
+    current.observe(nv.dom)
+    seen.length = 0
+    nv.destroy!()
+    expect(seen).toEqual(['unobserve'])
+  })
+
   it('ignores mutations outside contentDOM', () => {
     const view = makeView([0])
     const nv = createBlockNodeView(
@@ -1576,7 +1600,6 @@ export function createBlockNodeView(
   }
 
   const visible = isBlockVisible(view.state, pos)
-  const observer = getObserver()
 
   const dom = document.createElement('div')
   dom.className = 'onebox-block'
@@ -1612,7 +1635,7 @@ export function createBlockNodeView(
     dom.style.height = `${placeholderHeight(current)}px`
   }
 
-  observer?.observe(dom)
+  getObserver()?.observe(dom)
 
   return {
     dom,
@@ -1631,7 +1654,10 @@ export function createBlockNodeView(
     },
     destroy() {
       resizeObserver?.disconnect()
-      observer?.unobserve(dom)
+      // 必须重新取，不能用构造时捕获的实例：Task 9 先建 EditorView 再建 observer，
+      // 首批 nodeView 构造时 getObserver() 是 null，由 createEditor 补挂。用捕获的
+      // null 注销就永远注销不掉，states 与 IO 会随翻转累积脱离文档的元素。
+      getObserver()?.unobserve(dom)
     },
     ignoreMutation(mutation) {
       // PM 自己的默认实现从不忽略 selection mutation（view dist:1125）。吞掉它
@@ -1658,7 +1684,7 @@ export function blockNodeViews(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/blockNodeView.test.ts`
-Expected: PASS（20 passed）
+Expected: PASS（21 passed）
 
 若 happy-dom 未实现 `ResizeObserver` 导致 ReferenceError，在 `vite.config.ts` 的 `test` 段加 `setupFiles: ['tests/setup.ts']`，并在 `tests/setup.ts` 写入最小 stub：
 
@@ -1837,6 +1863,17 @@ describe('createViewportObserver', () => {
     expect(view.state).toBe(settled)
   })
 
+  it('coalesces multiple IO callbacks into one pending frame', () => {
+    // 没有 `if (!raf)` 去重，每个 IO 回调都会再排一帧，一帧内多次 flush 多次 dispatch
+    const { wrappers } = mount([para('aaa'), para('bbb')])
+    const w = wrappers()
+    emit([{ target: w[0], isIntersecting: true }])
+    emit([{ target: w[1], isIntersecting: true }])
+    expect(frames.size).toBe(1)
+    runFrames()
+    expect(frames.size).toBe(0)
+  })
+
   it('resyncs from plugin state after a delete and equal-size reinsert in one frame', () => {
     // plugin 在每个 docChanged transaction 里自行 map+filter。删掉 [5,9) 再在 5
     // 插回等长块后，文档起点回到 [0,5,9]，但 plugin 的集合只剩 {0,9}（map(5) 被
@@ -1982,7 +2019,7 @@ export function createViewportObserver(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/observer.test.ts`
-Expected: PASS（11 passed）
+Expected: PASS（12 passed）
 
 若 happy-dom 撑不住真实 EditorView（构造或 dispatch 抛错），**停下来报 NEEDS_CONTEXT 并附具体错误**，不要悄悄退化成全是替身的 fake view——那样测的就是替身而不是行为。
 
@@ -2777,7 +2814,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 94 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 20 + observer 11 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 91 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 96 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 21 + observer 12 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 93 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2907,7 +2944,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：94 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：96 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
