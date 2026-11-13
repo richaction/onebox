@@ -283,6 +283,12 @@ export function createBlockNodeView(
 
 理由：装饰变化会触发 PM 遍历全部顶层块。每帧 dispatch 在 2 万块量级下开销显著；按「集合变化」去重 + rAF 合并可把 dispatch 次数降到实际进出视口的频次。
 
+**去重必须与 plugin 的权威可见集比较，observer 不得自存一份副本。** 这是 §5.5「可见集合是唯一真相来源，不另设外部注册表」的直接推论。plugin 在每个 `docChanged` transaction 里自行 map + 按真实块起点过滤，私有副本必然与它漂移：删除一个块再插回等长块（同一帧内、中间没有 flush）后，文档起点复原而 plugin 集合已丢掉中间那个位置；此时 DOM 算出的集合恰好等于过期副本，去重判定「无变化」，纠正事务永远不再派发，**屏上的块永久停在占位态**。读 `visibilityKey.getState(view.state).visible` 同时省掉「位置平移后 plugin 已映射正确、却因副本不等而再派发一次全量 `updateState`」的冗余开销。`setMeta` 事务的 `apply` 原样返回 `meta.visible`，故派发后 plugin 状态恒等于新集合，不会自激循环。
+
+`flush` 在 `view.composing` 为真时重排到下一帧，不派发——IME 组合中途销毁块会丢字。`disconnect()` 取消待执行帧。
+
+`observe(el)` 以「未相交」起步，新建的可见块在 IO 首次上报前会被短暂漏掉。该窗口**有界**：占位外壳自己会收到 IO 条目，下一帧补回，再下一帧集合相等即停，不会自激振荡。第一阶段不为此加 pending 集合或宽限期机制。
+
 ### 5.8 ui/EditorShell — Solid 外壳
 
 滚动容器 + 编辑器挂载点 + 状态栏（文件名、只读标记、保存状态）。`onMount` 创建编辑器，`onCleanup` 销毁。

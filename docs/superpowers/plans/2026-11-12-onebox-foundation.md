@@ -1696,13 +1696,22 @@ Expected: 退出码 0
   - `blockPosOf(view: EditorView, el: Element): number`
   - `createViewportObserver(view: EditorView, root: HTMLElement, rootMargin?: string): ViewportObserver`
 
+**去重的比较基准是 plugin 的权威可见集**（`visibilityKey.getState(view.state).visible`），observer **不得自存 `prev` 副本**。理由与失败路径见 spec §5.7：plugin 每个 `docChanged` transaction 自行 map+filter，私有副本会漂移，一旦 DOM 算出的集合恰好等于过期副本就永远不再派发纠正事务，屏上块永久停在占位态。
+
 - [ ] **Step 1: 写失败测试**
 
 `tests/observer.test.ts`：
 
 ```ts
-import { describe, expect, it } from 'vitest'
-import { nextVisibleSet } from '../src/core/viewport/observer'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Node } from '@tiptap/pm/model'
+import { EditorState } from '@tiptap/pm/state'
+import { EditorView } from '@tiptap/pm/view'
+import { schema } from '../src/core/schema'
+import { HeightCache } from '../src/core/viewport/heights'
+import { blockNodeViews, type ViewportObserver } from '../src/core/viewport/blockNodeView'
+import { createVisibilityPlugin, visibilityKey } from '../src/core/viewport/visibility'
+import { blockPosOf, createViewportObserver, nextVisibleSet } from '../src/core/viewport/observer'
 
 describe('nextVisibleSet', () => {
   it('returns null for identical sets', () => {
@@ -1726,6 +1735,156 @@ describe('nextVisibleSet', () => {
   it('returns the new set when size matches but members differ', () => {
     const next = new Set([0, 10])
     expect(nextVisibleSet(new Set([0, 5]), next)).toBe(next)
+  })
+})
+
+// 编排层用【真实 EditorView + 真实 visibility plugin + 真实 nodeViews】，只替身
+// IntersectionObserver 与 rAF（happy-dom 无布局，这两者无法真实运行）。posAtDOM、
+// 装饰、nodeView 销毁重建全走真实实现，测的是行为而不是替身。
+
+type Entry = { target: Element; isIntersecting: boolean }
+let emit: (entries: Entry[]) => void = () => {}
+let nextFrameId = 0
+const frames = new Map<number, FrameRequestCallback>()
+
+class StubIntersectionObserver {
+  constructor(cb: (entries: Entry[]) => void) {
+    emit = cb
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+function runFrames() {
+  const pending = [...frames.values()]
+  frames.clear()
+  for (const cb of pending) cb(0)
+}
+
+const para = (text: string) => schema.node('paragraph', null, [schema.text(text)])
+
+const mounted: { view: EditorView; root: HTMLElement; observer: ViewportObserver }[] = []
+
+function mount(blocks: Node[]) {
+  const root = document.createElement('div')
+  const element = document.createElement('div')
+  root.appendChild(element)
+  document.body.appendChild(root)
+
+  const heights = new HeightCache()
+  let observer: ViewportObserver | null = null
+  const view = new EditorView(element, {
+    state: EditorState.create({
+      doc: schema.node('doc', null, blocks),
+      plugins: [createVisibilityPlugin()],
+    }),
+    nodeViews: blockNodeViews(heights, () => observer),
+  })
+  observer = createViewportObserver(view, root)
+  // 首批 nodeView 构造时 observer 尚未存在，与 Task 9 的 createEditor 一样补挂
+  for (const child of Array.from(view.dom.children)) observer.observe(child)
+
+  const entry = { view, root, observer }
+  mounted.push(entry)
+  return {
+    ...entry,
+    wrappers: () => Array.from(view.dom.children) as HTMLElement[],
+    visible: () => [...visibilityKey.getState(view.state)!.visible].sort((a, b) => a - b),
+  }
+}
+
+beforeEach(() => {
+  emit = () => {}
+  nextFrameId = 0
+  frames.clear()
+  vi.stubGlobal('IntersectionObserver', StubIntersectionObserver)
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+    const id = ++nextFrameId
+    frames.set(id, cb)
+    return id
+  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    frames.delete(id)
+  })
+})
+
+afterEach(() => {
+  for (const m of mounted.splice(0)) {
+    m.observer.disconnect()
+    m.view.destroy()
+    m.root.remove()
+  }
+  vi.unstubAllGlobals()
+})
+
+describe('createViewportObserver', () => {
+  it('dispatches intersecting blocks as visibilityKey meta', () => {
+    const { wrappers, visible } = mount([para('aaa'), para('bbb'), para('ccc')])
+    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    runFrames()
+    expect(visible()).toEqual([0, 5, 10])
+  })
+
+  it('does not dispatch again when the intersecting set is unchanged', () => {
+    const { view, wrappers } = mount([para('aaa'), para('bbb')])
+    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    runFrames()
+    const settled = view.state
+    // 翻转会重建 nodeView，旧外壳已脱离文档，必须重新取
+    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    runFrames()
+    expect(view.state).toBe(settled)
+  })
+
+  it('resyncs from plugin state after a delete and equal-size reinsert in one frame', () => {
+    // plugin 在每个 docChanged transaction 里自行 map+filter。删掉 [5,9) 再在 5
+    // 插回等长块后，文档起点回到 [0,5,9]，但 plugin 的集合只剩 {0,9}（map(5) 被
+    // 插入推到 9）。若 observer 拿私有 prev={0,5,9} 去比较，DOM 算出的 next 恰好
+    // 等于它 → 永远不派发纠正事务 → 屏上的块永久停在占位态。
+    const { view, wrappers, visible } = mount([para('aaa'), para('bb'), para('ccc')])
+    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    runFrames()
+    expect(visible()).toEqual([0, 5, 9])
+
+    view.dispatch(view.state.tr.delete(5, 9))
+    view.dispatch(view.state.tr.insert(5, para('bb')))
+    expect(visible()).toEqual([0, 9])
+
+    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    runFrames()
+    expect(visible()).toEqual([0, 5, 9])
+  })
+
+  it('defers flush while composing and dispatches after composition ends', () => {
+    const { view, wrappers, visible } = mount([para('aaa'), para('bbb')])
+    view.composing = true
+    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    runFrames()
+    expect(visible()).toEqual([])
+    expect(frames.size).toBe(1)
+    view.composing = false
+    runFrames()
+    expect(visible()).toEqual([0, 5])
+  })
+
+  it('skips detached elements instead of throwing', () => {
+    const { wrappers, visible } = mount([para('aaa'), para('bbb')])
+    const stranger = document.createElement('div')
+    emit([
+      { target: wrappers()[0], isIntersecting: true },
+      { target: stranger, isIntersecting: true },
+    ])
+    runFrames()
+    expect(visible()).toEqual([0])
+  })
+})
+
+describe('blockPosOf', () => {
+  it('maps a depth-1 position to its top-level block start', () => {
+    const { view } = mount([para('aaa'), para('bbb')])
+    const stub = { state: view.state, posAtDOM: () => 6 } as unknown as EditorView
+    expect(blockPosOf(stub, document.createElement('div'))).toBe(5)
   })
 })
 ```
@@ -1763,7 +1922,6 @@ export function createViewportObserver(
   rootMargin = '200px',
 ): ViewportObserver {
   const states = new Map<Element, boolean>()
-  let prev: ReadonlySet<number> = new Set()
   let raf = 0
 
   const flush = () => {
@@ -1778,9 +1936,15 @@ export function createViewportObserver(
       if (!intersecting || !el.isConnected) continue
       next.add(blockPosOf(view, el))
     }
-    const changed = nextVisibleSet(prev, next)
+    // 与 plugin 的【权威】可见集比较，不自存一份 prev。plugin 会在每个 docChanged
+    // transaction 里自行 map+filter，私有副本必然与它漂移：一旦 DOM 算出的 next
+    // 恰好等于过期副本，就永远不再派发纠正事务，屏上块永久停在占位态。
+    // 读权威集同时省掉「位置平移后 plugin 已映射正确、却因 next != prev 再派发
+    // 一次全量 updateState」的冗余开销。setMeta 事务的 apply 原样返回 meta.visible，
+    // 故派发后 plugin 状态恒等于 next，不会自激循环。
+    const current = visibilityKey.getState(view.state)?.visible ?? new Set<number>()
+    const changed = nextVisibleSet(current, next)
     if (!changed) return
-    prev = changed
     view.dispatch(view.state.tr.setMeta(visibilityKey, { visible: changed }))
   }
 
@@ -1814,7 +1978,9 @@ export function createViewportObserver(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/observer.test.ts`
-Expected: PASS（5 passed）
+Expected: PASS（11 passed）
+
+若 happy-dom 撑不住真实 EditorView（构造或 dispatch 抛错），**停下来报 NEEDS_CONTEXT 并附具体错误**，不要悄悄退化成全是替身的 fake view——那样测的就是替身而不是行为。
 
 - [ ] **Step 5: 类型检查**
 
@@ -1823,7 +1989,11 @@ Expected: 退出码 0
 
 - [ ] **Step 6: 提交并报告**
 
-报告时说明：IntersectionObserver 与 `blockPosOf` 的真实行为无法在 happy-dom 验证，留待 Task 10 的 Chrome 验证。若 2 万块量级下 IO 成为瓶颈，备选方案是「按 `getBoundingClientRect().top` 对 `view.dom.children` 二分查找可见区间」，本阶段不实现。
+报告时说明：IntersectionObserver 的真实相交判定与 `blockPosOf` 在真实布局下的结果仍无法在 happy-dom 验证，留待 Task 10 的 Chrome 验证。若 2 万块量级下 IO 成为瓶颈，备选方案是「按 `getBoundingClientRect().top` 对 `view.dom.children` 二分查找可见区间」，本阶段不实现。
+
+另需记录两项已知风险（本阶段不修，Task 10 真机观察）：
+1. `observe(el)` 以 `false` 起步，新建的可见块在 IO 首次上报前会被短暂漏掉；审查已确认该窗口**有界**（占位外壳自己会收到 IO 条目，下一帧补回，再下一帧 `next == current` 即停），不会自激振荡。
+2. `view.composing` 期间每帧重排 flush，`disconnect()` 会取消。
 
 ---
 
@@ -2601,7 +2771,7 @@ Run: `pnpm typecheck`
 Expected: 退出码 0
 
 Run: `pnpm test`
-Expected: 全部 PASS，共 88 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 20 + observer 5 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 85 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
+Expected: 全部 PASS，共 94 项（harness 1 + schema 5 + markdown 30 + heights 11 + visibility 12 + blockNodeView 20 + observer 11 + editor 3 + metrics 1）。若 Task 9 Step 4 走了浏览器 fallback 删除了 `tests/editor.test.ts`，则为 91 项，且那 3 条断言必须已在 Step 7 的 Chrome 验证中执行并通过。
 
 Run: `cd src-tauri && cargo test`
 Expected: PASS（2 passed）
@@ -2731,7 +2901,7 @@ Run: `pnpm tauri dev`
 
 - [ ] **Step 11: 提交并报告**
 
-报告内容：88 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
+报告内容：94 项前端单测 + 2 项 Rust 单测结果、Chrome 与桌面端逐项验证结果、三档性能读数、A 是否需升级 B 的结论。
 
 按 Global Constraints 的「提交并报告」含义提交本任务文件。**不 push、不合入 main** —— 合入由用户真机验收后决定。
 
