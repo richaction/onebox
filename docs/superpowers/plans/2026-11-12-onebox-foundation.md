@@ -2641,40 +2641,69 @@ Expected: `total` = 3000；`visible` 为几十量级；`placeholders` ≈ 3000 �
 
 滚动到底部后重复上面脚本，Expected：`visible` 集合改变、原顶部块转为占位、`contentDOMs` 仍为几十量级。
 
-**占位高度必须等于可见时的实际占据高度**（Task 6 审查提出的漂移风险，单测无法验证，必须在这里量）。先回到顶部，取一个可见块量它的占据高度，再滚到底让它转占位，比较两者：
+**占位高度必须等于可见时的实际占据高度**（Task 6 审查提出的漂移风险，单测无法验证，必须在这里量）。先回到顶部，取一个可见块量它的占据高度，再滚到底让它转占位，比较两者，最后滚回顶部确认内容恢复。
+
+**关键一：可见性翻转会销毁并重建 nodeView，旧元素引用会脱离文档。** 每次滚动后必须按 `index` 重新查询元素，不能沿用滚动前抓到的引用——否则读到的是脱离文档的旧 div，`dataset.visible` 永远停在 `'true'`、`getBoundingClientRect().height` 恒为 0，断言必然假失败。
+
+**关键二：不能选含选区的那个块。** `forcedVisiblePositions` 让选区所在块恒可见，它永远不会转占位。`loadMarkdown` 用 `replaceWith` 替换全文后选区通常落在第 0 块，所以「取第一个可见块」恰好选中唯一不可能翻转的块。下面用 `document.getSelection()` 排除它，再取最后一个符合条件的可见块。
 
 ```js
 async () => {
   const scroller = document.querySelector('.editor-scroll')
-  scroller.scrollTop = 0
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-  const blocks = [...document.querySelectorAll('.onebox-block')]
-  const target = blocks.find((b) => b.dataset.visible === 'true')
-  const index = blocks.indexOf(target)
-  const occupied = target.getBoundingClientRect().height
-  const outer = getComputedStyle(target)
-  scroller.scrollTop = scroller.scrollHeight
-  for (let i = 0; i < 30 && target.dataset.visible !== 'false'; i++) {
-    await new Promise((r) => setTimeout(r, 50))
+  const at = (i) => document.querySelectorAll('.onebox-block')[i]
+  const settle = async (i, want) => {
+    for (let n = 0; n < 40 && at(i)?.dataset.visible !== want; n++) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return at(i)
   }
-  const placeholder = target.getBoundingClientRect().height
+
+  scroller.scrollTop = 0
+  await new Promise((r) => setTimeout(r, 150))
+  const blocks = [...document.querySelectorAll('.onebox-block')]
+  const sel = document.getSelection()
+  const holdsSelection = (el) => !!sel?.anchorNode && el.contains(sel.anchorNode)
+  const index = blocks.reduce(
+    (acc, b, i) => (b.dataset.visible === 'true' && !holdsSelection(b) ? i : acc),
+    -1,
+  )
+  if (index < 0) return { error: 'no visible non-selection block', total: blocks.length }
+  const before = at(index)
+  const occupied = before.getBoundingClientRect().height
+  const outer = getComputedStyle(before)
+
+  scroller.scrollTop = scroller.scrollHeight
+  const placeholder = await settle(index, 'false')
+  const placeholderHeight = placeholder.getBoundingClientRect().height
+  const contentGone = placeholder.querySelector('.onebox-block-content') === null
+  const recreated = placeholder !== before
+
+  scroller.scrollTop = 0
+  const restored = await settle(index, 'true')
+
   return {
     index,
+    total: document.querySelectorAll('.onebox-block').length,
     occupied,
-    placeholder,
-    drift: placeholder - occupied,
+    placeholderHeight,
+    drift: placeholderHeight - occupied,
     display: outer.display,
     margins: [outer.marginTop, outer.marginBottom],
-    becamePlaceholder: target.dataset.visible === 'false',
+    becamePlaceholder: placeholder.dataset.visible === 'false',
+    contentGone,
+    recreated,
+    contentRestored: restored.querySelector('.onebox-block-content') !== null,
   }
 }
 ```
 
-Expected: `becamePlaceholder` = true；`display` = `flow-root`；`margins` = `['0px','0px']`；**`drift` 绝对值 ≤ 1**（亚像素舍入）。
+Expected:
+- `total` = 3000、`index` ≥ 0（滚动不改变文档，块序号稳定）
+- `becamePlaceholder` = true、`contentGone` = true、`recreated` = true、`contentRestored` = true —— 这四条一起证明**滚动真的触发了销毁重建**，而不是只改了 `data-visible`
+- `display` = `flow-root`；`margins` = `['0px','0px']`
+- **`drift` 绝对值 ≤ 1**（亚像素舍入）
 
-若 `drift` 为负十几 px 且 `display` 不是 `flow-root`，就是 Task 9 的外壳没建立 BFC、子元素 margin 折叠出去了——回到 Task 9 Step 5 修 CSS，不要靠调 `estimateHeight` 掩盖。`ResizeObserver` 是异步的，若首次量到 `drift` 很大，先多等几帧再判失败。
-
-同时确认**滚动真的触发了销毁重建**（而不是只改了 `data-visible`）：上面脚本里 `target` 转占位后 `target.querySelector('.onebox-block-content')` 必须为 `null`，滚回顶部后该块重新出现 `.onebox-block-content`。
+若 `drift` 为负十几 px 且 `display` 不是 `flow-root`，就是 Task 9 的外壳没建立 BFC、子元素 margin 折叠出去了——回到 Task 9 Step 5 修 CSS，不要靠调 `estimateHeight` 掩盖。`ResizeObserver` 是异步的，若首次量到 `drift` 很大，先多等几帧再判失败。若 `recreated` 为 false 而 `becamePlaceholder` 为 true，说明 PM 没有重建 nodeView（`update` 误返回了 true），回到 Task 6 查可见性翻转分支。若 `becamePlaceholder` 为 false 且 `index` 为 0，先确认选区排除逻辑生效（选区块恒可见，不是 bug）。
 
 - [ ] **Step 8: Chrome 交互验证**
 
