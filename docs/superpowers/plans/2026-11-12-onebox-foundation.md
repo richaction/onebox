@@ -1232,7 +1232,7 @@ import type { EditorView } from '@tiptap/pm/view'
 import { schema } from '../src/core/schema'
 import { HeightCache } from '../src/core/viewport/heights'
 import { createVisibilityPlugin, visibilityKey } from '../src/core/viewport/visibility'
-import { blockNodeViews, createBlockNodeView } from '../src/core/viewport/blockNodeView'
+import { blockNodeViews, createBlockNodeView, type ViewportObserver } from '../src/core/viewport/blockNodeView'
 
 // block1 pos=0, block2 pos=5；选区放在 block2，使 block1 可被隐藏
 function makeView(visible: number[]) {
@@ -1449,7 +1449,7 @@ describe('createBlockNodeView', () => {
       unobserve: () => seen.push('unobserve'),
       disconnect: () => {},
     }
-    let current: typeof observer | null = null
+    let current: ViewportObserver | null = null
     const view = makeView([0])
     const nv = createBlockNodeView(
       view.state.doc.child(0), view, () => 0, new HeightCache(), () => current,
