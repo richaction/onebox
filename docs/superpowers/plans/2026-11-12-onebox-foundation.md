@@ -1858,12 +1858,16 @@ describe('createViewportObserver', () => {
 
   it('defers flush while composing and dispatches after composition ends', () => {
     const { view, wrappers, visible } = mount([para('aaa'), para('bbb')])
-    view.composing = true
+    // composing 在 prosemirror-view 1.42.9 是只读 getter（d.ts:434 → this.input.composing），
+    // 由真实浏览器的 composition 事件驱动，happy-dom 产生不了。这里替身的是【输入】，
+    // 被测的闸门逻辑仍是真实实现。view 每个测试新建、afterEach 销毁，无需还原。
+    let composing = true
+    Object.defineProperty(view, 'composing', { get: () => composing, configurable: true })
     emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
     runFrames()
     expect(visible()).toEqual([])
     expect(frames.size).toBe(1)
-    view.composing = false
+    composing = false
     runFrames()
     expect(visible()).toEqual([0, 5])
   })
@@ -1981,6 +1985,8 @@ Run: `pnpm vitest run tests/observer.test.ts`
 Expected: PASS（11 passed）
 
 若 happy-dom 撑不住真实 EditorView（构造或 dispatch 抛错），**停下来报 NEEDS_CONTEXT 并附具体错误**，不要悄悄退化成全是替身的 fake view——那样测的就是替身而不是行为。
+
+`view.composing` **不可赋值**：`prosemirror-view@1.42.9` 只暴露 getter（`dist/index.d.ts:434`，实现 `dist/index.js:5574` 为 `return this.input.composing`），直接写会抛 `TypeError: Cannot set property composing ... which has only a getter`。可写后备字段 `view.input.composing` 不在公开 d.ts 上。测试用 `Object.defineProperty(view, 'composing', { get, configurable: true })` 替身这个**输入**（与替身 IntersectionObserver 同类），被测的闸门逻辑仍走真实实现。不要改写 `view.input.composing`（耦合非公开内部），也不要派发真实 `compositionstart`（那测的是 PM 的 composition 管线，且在 happy-dom 下脆弱）。
 
 - [ ] **Step 5: 类型检查**
 
