@@ -6,7 +6,7 @@ use std::{
 use tauri::AppHandle;
 use tauri_plugin_fs::FsExt;
 
-fn selected_path(app: &AppHandle, path: String) -> Result<PathBuf, String> {
+pub(crate) fn selected_path(app: &AppHandle, path: String) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     if path.is_absolute() && app.fs_scope().is_allowed(&path) {
         Ok(path)
@@ -31,7 +31,7 @@ pub async fn write_text(app: AppHandle, path: String, content: String) -> Result
         .map_err(|err| format!("write failed: {err}"))
 }
 
-async fn read_file(path: PathBuf) -> io::Result<String> {
+pub(crate) async fn read_file(path: PathBuf) -> io::Result<String> {
     if !tokio::fs::metadata(&path).await?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -41,7 +41,7 @@ async fn read_file(path: PathBuf) -> io::Result<String> {
     tokio::fs::read_to_string(path).await
 }
 
-fn write_file(path: &Path, content: &str) -> io::Result<()> {
+pub(crate) fn write_file(path: &Path, content: &str) -> io::Result<()> {
     let (target, permissions) = match fs::symlink_metadata(path) {
         Ok(_) => {
             let target = path.canonicalize()?;

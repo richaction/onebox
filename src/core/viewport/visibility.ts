@@ -20,7 +20,9 @@ export function forcedVisiblePositions(state: EditorState): ReadonlySet<number> 
   // AllSelection（Cmd+A）的 from=0 / to=content.size 更是只命中首块。
   state.doc.nodesBetween(from, to, (node, pos, parent) => {
     if (parent === state.doc) {
-      forced.add(pos)
+      // Group interiors can stay placeholders. The model range still contains
+      // their content and the endpoints below stay mounted for DOM selection.
+      if (node.type.name !== 'viewportGroup') forced.add(pos)
       return false
     }
   })

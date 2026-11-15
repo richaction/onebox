@@ -42,4 +42,30 @@ describe('createEditor', () => {
     expect(element.querySelectorAll('.onebox-block')).toHaveLength(3)
     expect(element.querySelector('.onebox-block-content')?.tagName).toBe('H1')
   })
+
+  it('appends viewport groups and exports the underlying Markdown blocks', () => {
+    const { handle, onUpdate, element } = mount()
+    handle.loadBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'first' }] }], true)
+    handle.appendBlocks([{ type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: 'next' }] }])
+
+    expect(element.querySelectorAll('.onebox-block')).toHaveLength(2)
+    expect(handle.editor.state.doc.firstChild?.type.name).toBe('viewportGroup')
+    expect(handle.toMarkdown()).toBe('first\n\n### next')
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(handle.editor.commands.undo()).toBe(false)
+  })
+
+  it('joins paragraphs across a viewport group with a single Backspace', () => {
+    const { handle } = mount()
+    handle.loadBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'first' }] }], true)
+    handle.appendBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'next' }] }])
+    handle.editor.commands.setTextSelection(handle.editor.state.doc.firstChild!.nodeSize + 2)
+    handle.editor.view.dom.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Backspace', bubbles: true, cancelable: true,
+    }))
+
+    expect(handle.toMarkdown()).toBe('firstnext')
+    expect(handle.editor.commands.undo()).toBe(true)
+    expect(handle.toMarkdown()).toBe('first\n\nnext')
+  })
 })

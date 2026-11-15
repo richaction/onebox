@@ -311,7 +311,7 @@ describe('blockNodeViews', () => {
   it('registers every top-level type but not listItem', () => {
     const views = blockNodeViews(new HeightCache(), () => null)
     expect(Object.keys(views).sort()).toEqual(
-      ['blockquote', 'bulletList', 'codeBlock', 'heading', 'horizontalRule', 'orderedList', 'paragraph'],
+      ['blockquote', 'bulletList', 'codeBlock', 'footnoteDefinition', 'heading', 'horizontalRule', 'orderedList', 'paragraph', 'table', 'viewportGroup'],
     )
     expect(views.listItem).toBeUndefined()
   })

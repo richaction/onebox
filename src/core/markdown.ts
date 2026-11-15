@@ -1,18 +1,54 @@
 import MarkdownIt from 'markdown-it'
+import footnote from 'markdown-it-footnote'
 import {
   MarkdownParser,
   MarkdownSerializer,
+  MarkdownSerializerState,
   defaultMarkdownSerializer,
 } from 'prosemirror-markdown'
 import type { Node, Schema } from '@tiptap/pm/model'
 
-export type UnsupportedKind = 'table' | 'taskList' | 'footnote' | 'html' | 'image'
+export type UnsupportedKind = 'footnote' | 'html'
 
-const tokenizer = MarkdownIt('commonmark', { html: false, linkify: false, typographer: false })
-tokenizer.enable('strikethrough')
-const detector = MarkdownIt('commonmark', { html: true }).enable(['table', 'strikethrough'])
+function createTokenizer(html: boolean) {
+  const md = MarkdownIt('commonmark', { html, linkify: false, typographer: false })
+    .enable(['table', 'strikethrough'])
+    .use(footnote)
+  // Preserve definition positions and definitions that happen to have no references.
+  md.core.ruler.disable('footnote_tail')
+  md.inline.ruler.disable('footnote_inline')
+  return md
+}
+
+const tokenizer = createTokenizer(false)
+const detector = createTokenizer(true)
 
 const singleLineComment = /^<!--(?:(?!-->)[^\r\n])*-->$/
+const footnoteLabel = /^[^\s\[\]\\]+$/u
+
+function imageAlt(tokens: NonNullable<ReturnType<typeof tokenizer.parse>[number]['children']>): string {
+  return tokens.map((token) => {
+    if (token.children) return imageAlt(token.children)
+    if (token.type === 'softbreak' || token.type === 'hardbreak') return ' '
+    return token.type === 'text' || token.type === 'text_special' || token.type === 'code_inline'
+      ? token.content
+      : ''
+  }).join('')
+}
+
+tokenizer.core.ruler.before('inline', 'onebox_task_items', ({ tokens }) => {
+  for (let i = 0; i < tokens.length - 2; i++) {
+    const item = tokens[i]
+    const inline = tokens[i + 2]
+    if (item.type !== 'list_item_open' || tokens[i + 1].type !== 'paragraph_open' || inline.type !== 'inline') {
+      continue
+    }
+    const task = /^\[([ xX])\](?:[ \t]+|$)/.exec(inline.content)
+    if (!task) continue
+    item.meta = { checked: task[1] !== ' ' }
+    inline.content = inline.content.slice(task[0].length)
+  }
+})
 
 // commonmark 预设把段内单换行输出为 softbreak token。转成字面 '\n' 文本，
 // 使往返保持原样，而不是被规范化成 GFM 硬换行（反斜杠或双空格）。
@@ -28,15 +64,27 @@ tokenizer.core.ruler.push('onebox_softbreak_to_text', (state) => {
   }
 })
 
+tokenizer.core.ruler.push('onebox_table_paragraphs', (state) => {
+  state.tokens = state.tokens.flatMap((token) => {
+    if (token.type === 'th_open' || token.type === 'td_open') {
+      return [token, new state.Token('paragraph_open', 'p', 1)]
+    }
+    if (token.type === 'th_close' || token.type === 'td_close') {
+      return [new state.Token('paragraph_close', 'p', -1), token]
+    }
+    return [token]
+  })
+})
+
 function buildParser(schema: Schema): MarkdownParser {
   return new MarkdownParser(schema, tokenizer, {
     blockquote: { block: 'blockquote' },
     paragraph: { block: 'paragraph' },
-    list_item: { block: 'listItem' },
+    list_item: { block: 'listItem', getAttrs: (tok) => ({ checked: tok.meta?.checked ?? null }) },
     bullet_list: { block: 'bulletList' },
     ordered_list: {
       block: 'orderedList',
-      getAttrs: (tok) => ({ start: Number(tok.attrGet('start')) || 1 }),
+      getAttrs: (tok) => ({ start: Number(tok.attrGet('start') ?? 1) }),
     },
     heading: { block: 'heading', getAttrs: (tok) => ({ level: Number(tok.tag.slice(1)) }) },
     code_block: { block: 'codeBlock', noCloseToken: true },
@@ -48,23 +96,41 @@ function buildParser(schema: Schema): MarkdownParser {
     hr: { node: 'horizontalRule' },
     hardbreak: { node: 'hardBreak' },
     text: { node: 'text' },
-    // 无 image 节点。忽略而非抛异常：不支持的文件走只读闸门，磁盘内容不受影响，
-    // 但解析必须成功，否则文件根本打不开。
-    // markdown-it 的 image 是单 token（无 _open/_close），必须显式 noCloseToken，
-    // 否则 ignore 只注册 image_open/image_close，image 本身仍无 handler 而抛异常。
-    image: { ignore: true, noCloseToken: true },
+    image: {
+      node: 'image',
+      getAttrs: (tok) => ({
+        src: tok.attrGet('src'),
+        title: tok.attrGet('title'),
+        alt: imageAlt(tok.children ?? []),
+      }),
+    },
+    table: { block: 'table' },
+    thead: { ignore: true },
+    tbody: { ignore: true },
+    tr: { block: 'tableRow' },
+    th: { block: 'tableHeader', getAttrs: (tok) => alignment(tok.attrGet('style')) },
+    td: { block: 'tableCell', getAttrs: (tok) => alignment(tok.attrGet('style')) },
+    footnote_reference: { block: 'footnoteDefinition', getAttrs: (tok) => ({ label: tok.meta.label }) },
+    footnote_ref: { node: 'footnoteReference', getAttrs: (tok) => ({ label: tok.meta.label }) },
     em: { mark: 'italic' },
     strong: { mark: 'bold' },
     s: { mark: 'strike' },
     code_inline: { mark: 'code', noCloseToken: true },
-    link: { mark: 'link', getAttrs: (tok) => ({ href: tok.attrGet('href') }) },
+    link: { mark: 'link', getAttrs: (tok) => ({ href: tok.attrGet('href'), title: tok.attrGet('title') }) },
   })
+}
+
+function alignment(style: string | null) {
+  return { align: style?.match(/^text-align:(left|center|right)$/)?.[1] ?? null }
 }
 
 const base = defaultMarkdownSerializer.nodes
 
 const serializer = new MarkdownSerializer(
   {
+    viewportGroup(state, node) {
+      state.renderContent(node)
+    },
     paragraph: base.paragraph,
     blockquote: base.blockquote,
     heading: base.heading,
@@ -76,7 +142,48 @@ const serializer = new MarkdownSerializer(
       state.text(text, !singleLineComment.test(text))
     },
     bulletList: base.bullet_list,
-    listItem: base.list_item,
+    listItem(state, node) {
+      if (node.attrs.checked !== null) state.write(node.attrs.checked ? '[x] ' : '[ ] ')
+      state.renderContent(node)
+    },
+    image: base.image,
+    table(state, node) {
+      const header = node.firstChild!
+      node.forEach((row, _offset, index) => {
+        const cells: string[] = []
+        if (row.childCount !== header.childCount || !row.childCount) {
+          throw new Error('Markdown tables need the same number of cells in each row')
+        }
+        row.forEach((cell) => {
+          const expectedType = index === 0 ? 'tableHeader' : 'tableCell'
+          const { colspan, rowspan } = cell.attrs
+          if (cell.type.name !== expectedType || colspan !== 1 || rowspan !== 1) {
+            throw new Error('Markdown tables need one header row and unmerged cells')
+          }
+          const text = tableCellSerializer.serialize(cell)
+          if (text.includes('\n')) throw new Error('Markdown table cells need a single line')
+          cells.push(text.replace(/\|/g, '\\|'))
+        })
+        state.write('| ' + cells.join(' | ') + ' |\n')
+        if (index === 0) {
+          const separators: string[] = []
+          header.forEach((cell) => {
+            const align = cell.attrs.align
+            separators.push(align === 'center' ? ':---:' : align === 'left' ? ':---' : align === 'right' ? '---:' : '---')
+          })
+          state.write('| ' + separators.join(' | ') + ' |\n')
+        }
+      })
+      state.closeBlock(node)
+    },
+    footnoteReference(state, node) {
+      if (!footnoteLabel.test(node.attrs.label)) throw new Error('Invalid footnote label')
+      state.write(`[^${node.attrs.label}]`)
+    },
+    footnoteDefinition(state, node) {
+      if (!footnoteLabel.test(node.attrs.label)) throw new Error('Invalid footnote label')
+      state.wrapBlock('    ', `[^${node.attrs.label}]: `, node, () => state.renderContent(node))
+    },
     // Tiptap 用 language / start，prosemirror-markdown 默认用 params / order
     codeBlock(state, node) {
       const text = node.textContent
@@ -120,47 +227,57 @@ const serializer = new MarkdownSerializer(
   { escapeExtraCharacters: /[<&|]/g, hardBreakNodeName: 'hardBreak' },
 )
 
+const tableCellSerializer = new MarkdownSerializer(
+  serializer.nodes, serializer.marks, { escapeExtraCharacters: /[<&]/g, hardBreakNodeName: 'hardBreak' },
+)
+
 export function parseMarkdown(text: string, schema: Schema): Node {
   return buildParser(schema).parse(text) ?? schema.node('doc', null, [schema.node('paragraph')])
 }
 
 export function serializeMarkdown(doc: Node): string {
-  return serializer.serialize(doc)
+  if (doc.content.size < 8_192) return serializer.serialize(doc)
+
+  // prosemirror-markdown 1.13.9 checks the last output character on each
+  // write. Cap the active string to avoid flattening a growing rope per block.
+  // Keep the last two characters for the serializer's delimiter and escape checks.
+  const State = MarkdownSerializerState as unknown as new (
+    nodes: typeof serializer.nodes,
+    marks: typeof serializer.marks,
+    options: typeof serializer.options,
+  ) => MarkdownSerializerState & { out: string }
+  const state = new State(serializer.nodes, serializer.marks, { ...serializer.options })
+  const output: string[] = []
+  doc.forEach((node, _offset, index) => {
+    state.render(node, doc, index)
+    if (state.out.length >= 8_192) {
+      output.push(state.out.slice(0, -2))
+      state.out = state.out.slice(-2)
+    }
+  })
+  output.push(state.out)
+  return output.join('')
 }
 
 export function serializeMarkdownForFile(doc: Node): string {
   const text = serializeMarkdown(doc)
-  const found = new Set<UnsupportedKind>()
-  collectUnsupportedTokens(detector.parse(text, {}), found)
-  if (found.size) throw new Error('Serialized Markdown contains unsupported syntax')
+  if (detectUnsupported(text).length) throw new Error('Serialized Markdown contains unsupported syntax')
   return text
-}
-
-function collectUnsupportedTokens(tokens: ReturnType<typeof detector.parse>, found: Set<UnsupportedKind>) {
-  for (const block of tokens) {
-    if (block.type === 'table_open') found.add('table')
-    if (block.type === 'html_block' && !singleLineComment.test(block.content.trim())) found.add('html')
-    for (const tok of block.children ?? []) {
-      if (tok.type === 'image') found.add('image')
-      if (tok.type === 'html_inline' && !singleLineComment.test(tok.content)) found.add('html')
-    }
-  }
 }
 
 export function detectUnsupported(text: string): UnsupportedKind[] {
   const found = new Set<UnsupportedKind>()
-  const tokens = detector.parse(text, {})
-  collectUnsupportedTokens(tokens, found)
-
-  // Task items and footnote definitions need source text. Use token line ranges to
-  // exclude fenced code, including fences inside quotes or lists.
-  const fences = tokens.flatMap((token) => token.type === 'fence' && token.map ? [token.map] : [])
-  let fence = 0
-  for (const [index, line] of text.split(/\r\n?|\n/).entries()) {
-    while (fence < fences.length && index >= fences[fence][1]) fence++
-    if (fence < fences.length && index >= fences[fence][0]) continue
-    if (/^\s*(?:>\s*|(?:[-*+]|\d+[.)])\s+)+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
-    if (/(?<!\\)(?:\\\\)*\[\^[^\]]+\]/.test(line)) found.add('footnote')
+  const definitions = new Set<string>()
+  for (const block of detector.parse(text, {})) {
+    if (block.type === 'html_block' && !singleLineComment.test(block.content.trim())) found.add('html')
+    if (block.type === 'footnote_reference_open') {
+      const label: string = block.meta.label
+      if (definitions.has(label) || !footnoteLabel.test(label)) found.add('footnote')
+      definitions.add(label)
+    }
+    for (const tok of block.children ?? []) {
+      if (tok.type === 'html_inline' && !singleLineComment.test(tok.content)) found.add('html')
+    }
   }
   return [...found]
 }

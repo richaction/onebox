@@ -33,32 +33,17 @@ describe('nextVisibleSet', () => {
   })
 })
 
-// 编排层用【真实 EditorView + 真实 visibility plugin + 真实 nodeViews】，只替身
-// IntersectionObserver 与 rAF（happy-dom 无布局，这两者无法真实运行）。posAtDOM、
-// 装饰、nodeView 销毁重建全走真实实现，测的是行为而不是替身。
-
-type Entry = { target: Element; isIntersecting: boolean }
-let emit: (entries: Entry[]) => void = () => {}
+// happy-dom has no layout. Stub rectangles while retaining the real editor and node views.
 let nextFrameId = 0
 const frames = new Map<number, FrameRequestCallback>()
-
-class StubIntersectionObserver {
-  constructor(cb: (entries: Entry[]) => void) {
-    emit = cb
-  }
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
 
 function runFrames() {
   const pending = [...frames.values()]
   frames.clear()
-  for (const cb of pending) cb(0)
+  for (const callback of pending) callback(0)
 }
 
 const para = (text: string) => schema.node('paragraph', null, [schema.text(text)])
-
 const mounted: { view: EditorView; root: HTMLElement; observer: ViewportObserver }[] = []
 
 function mount(blocks: Node[]) {
@@ -67,8 +52,8 @@ function mount(blocks: Node[]) {
   root.appendChild(element)
   document.body.appendChild(root)
 
-  const heights = new HeightCache()
   let observer: ViewportObserver | null = null
+  const heights = new HeightCache()
   const view = new EditorView(element, {
     state: EditorState.create({
       doc: schema.node('doc', null, blocks),
@@ -76,80 +61,83 @@ function mount(blocks: Node[]) {
     }),
     nodeViews: blockNodeViews(heights, () => observer),
   })
-  observer = createViewportObserver(view, root)
-  // 首批 nodeView 构造时 observer 尚未存在，与 Task 9 的 createEditor 一样补挂
-  for (const child of Array.from(view.dom.children)) observer.observe(child)
+  let top = 0
+  let bottom = 99
+  root.getBoundingClientRect = () => new DOMRect(0, top, 500, bottom - top)
+  const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockImplementation(function (this: HTMLElement) {
+      const index = Array.from(view.dom.children).indexOf(this)
+      return new DOMRect(0, index * 100, 500, 100)
+    })
+  observer = createViewportObserver(view, root, 0)
+  for (const child of view.dom.children) observer.observe(child)
 
   const entry = { view, root, observer }
   mounted.push(entry)
   return {
     ...entry,
-    wrappers: () => Array.from(view.dom.children) as HTMLElement[],
     visible: () => [...visibilityKey.getState(view.state)!.visible].sort((a, b) => a - b),
+    scroll(from: number, to: number) {
+      top = from
+      bottom = to
+      root.dispatchEvent(new Event('scroll'))
+    },
+    measure,
   }
 }
 
 beforeEach(() => {
-  emit = () => {}
   nextFrameId = 0
   frames.clear()
-  vi.stubGlobal('IntersectionObserver', StubIntersectionObserver)
-  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
-    const id = ++nextFrameId
-    frames.set(id, cb)
-    return id
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    frames.set(++nextFrameId, callback)
+    return nextFrameId
   })
-  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
-    frames.delete(id)
-  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
 })
 
 afterEach(() => {
-  for (const m of mounted.splice(0)) {
-    m.observer.disconnect()
-    m.view.destroy()
-    m.root.remove()
+  for (const { view, root, observer } of mounted.splice(0)) {
+    observer.disconnect()
+    view.destroy()
+    root.remove()
   }
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('createViewportObserver', () => {
-  it('dispatches intersecting blocks as visibilityKey meta', () => {
-    const { wrappers, visible } = mount([para('aaa'), para('bbb'), para('ccc')])
-    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+  it('dispatches the visible blocks as visibilityKey metadata', () => {
+    const { scroll, visible } = mount([para('aaa'), para('bbb'), para('ccc')])
+    scroll(0, 299)
     runFrames()
     expect(visible()).toEqual([0, 5, 10])
   })
 
-  it('does not dispatch again when the intersecting set is unchanged', () => {
-    const { view, wrappers } = mount([para('aaa'), para('bbb')])
-    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+  it('deduplicates unchanged positions even when node views were replaced', () => {
+    const { view, scroll } = mount([para('aaa'), para('bbb')])
+    scroll(0, 199)
     runFrames()
     const settled = view.state
-    // 翻转会重建 nodeView，旧外壳已脱离文档，必须重新取
-    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    scroll(0, 199)
     runFrames()
     expect(view.state).toBe(settled)
   })
 
-  it('coalesces multiple IO callbacks into one pending frame', () => {
-    // 没有 `if (!raf)` 去重，每个 IO 回调都会再排一帧，一帧内多次 flush 多次 dispatch
-    const { wrappers } = mount([para('aaa'), para('bbb')])
-    const w = wrappers()
-    emit([{ target: w[0], isIntersecting: true }])
-    emit([{ target: w[1], isIntersecting: true }])
+  it('coalesces scroll events and measures the latest viewport', () => {
+    const { scroll, visible } = mount([para('aaa'), para('bbb')])
+    scroll(1, 95)
+    scroll(101, 195)
     expect(frames.size).toBe(1)
+    runFrames()
+    expect(visible()).toEqual([5])
     runFrames()
     expect(frames.size).toBe(0)
   })
 
-  it('resyncs from plugin state after a delete and equal-size reinsert in one frame', () => {
-    // plugin 在每个 docChanged transaction 里自行 map+filter。删掉 [5,9) 再在 5
-    // 插回等长块后，文档起点回到 [0,5,9]，但 plugin 的集合只剩 {0,9}（map(5) 被
-    // 插入推到 9）。若 observer 拿私有 prev={0,5,9} 去比较，DOM 算出的 next 恰好
-    // 等于它 → 永远不派发纠正事务 → 屏上的块永久停在占位态。
-    const { view, wrappers, visible } = mount([para('aaa'), para('bb'), para('ccc')])
-    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+  it('resyncs with plugin state after an equal-size delete and insert', () => {
+    const { view, scroll, visible } = mount([para('aaa'), para('bb'), para('ccc')])
+    scroll(0, 299)
     runFrames()
     expect(visible()).toEqual([0, 5, 9])
 
@@ -157,36 +145,39 @@ describe('createViewportObserver', () => {
     view.dispatch(view.state.tr.insert(5, para('bb')))
     expect(visible()).toEqual([0, 9])
 
-    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    scroll(0, 299)
     runFrames()
     expect(visible()).toEqual([0, 5, 9])
   })
 
-  it('defers flush while composing and dispatches after composition ends', () => {
-    const { view, wrappers, visible } = mount([para('aaa'), para('bbb')])
-    // composing 在 prosemirror-view 1.42.9 是只读 getter（d.ts:434 → this.input.composing），
-    // 由真实浏览器的 composition 事件驱动，happy-dom 产生不了。这里替身的是【输入】，
-    // 被测的闸门逻辑仍是真实实现。view 每个测试新建、afterEach 销毁，无需还原。
+  it('defers viewport changes until IME composition ends', () => {
+    const { view, scroll, visible } = mount([para('aaa'), para('bbb')])
     let composing = true
     Object.defineProperty(view, 'composing', { get: () => composing, configurable: true })
-    emit(wrappers().map((el) => ({ target: el, isIntersecting: true })))
+    scroll(0, 199)
     runFrames()
     expect(visible()).toEqual([])
     expect(frames.size).toBe(1)
+
     composing = false
     runFrames()
     expect(visible()).toEqual([0, 5])
   })
 
-  it('skips detached elements instead of throwing', () => {
-    const { wrappers, visible } = mount([para('aaa'), para('bbb')])
-    const stranger = document.createElement('div')
-    emit([
-      { target: wrappers()[0], isIntersecting: true },
-      { target: stranger, isIntersecting: true },
-    ])
+  it('binary-searches a large stack with few geometry reads', () => {
+    const { scroll, visible, measure } = mount(Array.from({ length: 1000 }, () => para('abc')))
+    scroll(50_001, 50_200)
     runFrames()
-    expect(visible()).toEqual([0])
+    expect(visible()).toEqual([2500, 2505, 2510])
+    expect(measure.mock.calls.length).toBeLessThan(30)
+  })
+
+  it('ignores an unmounted editor', () => {
+    const { root, scroll, visible } = mount([para('aaa'), para('bbb')])
+    root.remove()
+    scroll(0, 199)
+    runFrames()
+    expect(visible()).toEqual([])
   })
 })
 

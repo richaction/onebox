@@ -79,88 +79,103 @@ describe('markdown round trip', () => {
   })
 })
 
-describe('detectUnsupported', () => {
-  it('returns empty for supported markdown', () => {
-    expect(detectUnsupported('# 标题\n\n段落 **粗体**\n\n- 列表\n')).toEqual([])
+describe('phase two Markdown', () => {
+  function assertRoundTrip(text: string) {
+    expect(detectUnsupported(text)).toEqual([])
+    const doc = parseMarkdown(text, schema)
+    const output = serializeMarkdownForFile(doc)
+    expect(parseMarkdown(output, schema).eq(doc), output).toBe(true)
+    return { doc, output }
+  }
+
+  it('keeps aligned GFM tables and pipes inside text and code', () => {
+    const { doc, output } = assertRoundTrip('| A | B |\n| :--- | ---: |\n| x\\|y | `a\\|b` |')
+    expect(doc.firstChild?.type.name).toBe('table')
+    expect(doc.firstChild?.firstChild?.firstChild?.attrs.align).toBe('left')
+    expect(output).toContain('| :--- | ---: |')
+    expect(output).toContain('| x\\|y | `a\\|b` |')
   })
 
-  it('detects tables', () => {
-    expect(detectUnsupported('| a | b |\n| --- | --- |\n| 1 | 2 |\n')).toContain('table')
+  it('supports a table nested in a quote', () => {
+    const { doc } = assertRoundTrip('> | A | B |\n> | - | - |\n> | 1 | 2 |')
+    expect(doc.firstChild?.firstChild?.type.name).toBe('table')
   })
 
-  it('detects task lists', () => {
-    expect(detectUnsupported('- [x] 完成\n- [ ] 未完成\n')).toContain('taskList')
+  it.each([
+    '- [x] 完成\n- [ ] 未完成',
+    '1. [x] done\n2. [ ] todo',
+    '> - [x] done',
+    '- parent\n  - [X] nested',
+    '- [x]',
+  ])('keeps task markers for %j', (input) => {
+    const { doc, output } = assertRoundTrip(input)
+    const checked: boolean[] = []
+    doc.descendants((node) => {
+      if (node.type.name === 'listItem' && typeof node.attrs.checked === 'boolean') {
+        checked.push(node.attrs.checked)
+      }
+    })
+    expect(checked[0]).toBe(true)
+    expect(output).toContain('[x]')
   })
 
-  it('detects footnotes', () => {
-    expect(detectUnsupported('正文[^1]\n\n[^1]: 注释\n')).toContain('footnote')
+  it('keeps literal brackets in an ordinary list item', () => {
+    const { doc } = assertRoundTrip('- \\[x] literal')
+    expect(doc.firstChild?.firstChild?.attrs.checked).toBe(null)
   })
 
-  it('detects inline html', () => {
+  it('keeps footnote labels, multiline definitions and unused definitions', () => {
+    const { doc, output } = assertRoundTrip(
+      '[^before]: Listed before use.\n\nText[^before].\n\n[^unused]: **Unused** note.\n\n    Second paragraph.',
+    )
+    expect(doc.firstChild?.attrs.label).toBe('before')
+    expect(doc.child(1).lastChild?.type.name).toBe('text')
+    expect(doc.child(1).child(1).attrs.label).toBe('before')
+    expect(doc.lastChild?.childCount).toBe(2)
+    expect(output).toContain('[^unused]: **Unused** note.')
+  })
+
+  it.each([
+    '![alt](./a.png)',
+    '![alt][r]\n\n[r]: ./a.png',
+    '![alt][]\n\n[alt]: ./a.png',
+    '![alt]\n\n[alt]: ./a.png',
+    '![a[b]](./a.png)',
+  ])('preserves image semantics for %j', (input) => {
+    const { doc, output } = assertRoundTrip(input)
+    expect(doc.firstChild?.firstChild?.type.name).toBe('image')
+    expect(doc.firstChild?.firstChild?.attrs.src).toBe('./a.png')
+    expect(output).toContain('](./a.png)')
+  })
+
+  it('preserves alt text, titles and relative attachments', () => {
+    const { doc, output } = assertRoundTrip('![A *caption*](assets/a.png "Photo") [PDF](assets/a.pdf "Document")')
+    expect(doc.firstChild?.firstChild?.attrs).toMatchObject({ alt: 'A caption', title: 'Photo' })
+    expect(output).toContain('[PDF](assets/a.pdf "Document")')
+  })
+
+  it('keeps nested fences and the table that follows', () => {
+    const { doc } = assertRoundTrip('````\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n')
+    expect(doc.lastChild?.type.name).toBe('table')
+  })
+
+  it('keeps delimiters and marks across large serialization buffers', () => {
+    const paragraph = '中文 content **strong** and [relative](assets/file.pdf).'
+    const input = Array.from({ length: 320 }, (_, i) => `${i} ${paragraph}`)
+      .concat(['> quote\n> next', '\`\`\`\ncode\n\`\`\`', 'Tail.']).join('\n\n')
+    expect(assertRoundTrip(input).output).toBe(input)
+  })
+})
+
+describe('read-only protection', () => {
+  it('flags raw HTML, including multiline inline tags and comments', () => {
     expect(detectUnsupported('正文 <div>x</div>\n')).toContain('html')
-  })
-
-  it('detects images', () => {
-    expect(detectUnsupported('![alt](./a.png)\n')).toContain('image')
-  })
-
-  it('ignores syntax inside fenced code blocks', () => {
-    const md = '```md\n| a | b |\n| --- | --- |\n![x](y)\n<div>\n- [ ] t\n```\n'
-    expect(detectUnsupported(md)).toEqual([])
-  })
-
-  it('does not mistake a horizontal rule for a table', () => {
-    expect(detectUnsupported('上文\n\n---\n\n下文\n')).toEqual([])
-  })
-
-  it('detects reference-style images', () => {
-    expect(detectUnsupported('![alt][r]\n\n[r]: ./a.png\n')).toContain('image')
-  })
-
-  it('detects collapsed and shortcut images', () => {
-    expect(detectUnsupported('![alt][]\n\n[alt]: ./a.png\n')).toContain('image')
-    expect(detectUnsupported('![alt]\n\n[alt]: ./a.png\n')).toContain('image')
-  })
-
-  it('detects images with nested brackets in alt', () => {
-    expect(detectUnsupported('![a[b]](c)\n')).toContain('image')
-  })
-
-  it('detects task lists at any indentation', () => {
-    expect(detectUnsupported('parent\n    - [x] nested done\n')).toContain('taskList')
-  })
-
-  it('detects empty-label task items', () => {
-    expect(detectUnsupported('- [x]\n')).toContain('taskList')
-  })
-})
-
-describe('parse tolerance', () => {
-  it('never throws on any image form', () => {
-    for (const md of [
-      '![alt](./a.png)\n',
-      '![alt][r]\n\n[r]: ./a.png\n',
-      '![alt][]\n\n[alt]: ./a.png\n',
-      '![alt]\n\n[alt]: ./a.png\n',
-      '![a[b]](c)\n',
-    ]) {
-      expect(() => parseMarkdown(md, schema), md).not.toThrow()
-    }
-  })
-
-  it('preserves single-line html comments', () => {
-    const md = 'before\n\n<!-- hidden -->\n\nafter\n'
-    const once = parseMarkdown(md, schema)
-    const out = serializeMarkdown(once)
-    expect(out).toContain('<!-- hidden -->')
-    expect(parseMarkdown(out, schema).eq(once)).toBe(true)
-  })
-})
-
-describe('detection regression cases', () => {
-  it('protects quoted GFM tables and inline tags spanning multiple lines', () => {
-    expect(detectUnsupported('> | A | B |\n> | - | - |\n> | 1 | 2 |')).toContain('table')
     expect(detectUnsupported('text <span\n class="x">value</span>')).toContain('html')
+    expect(detectUnsupported('before\n\n<!--\nhidden\n-->\n\nafter\n')).toContain('html')
+  })
+
+  it('flags ambiguous duplicate footnote definitions', () => {
+    expect(detectUnsupported('Text[^n].\n\n[^n]: first\n\n[^n]: second')).toContain('footnote')
   })
 
   it('keeps literal HTML and entities as text when saving edits', () => {
@@ -171,25 +186,16 @@ describe('detection regression cases', () => {
     expect(parseMarkdown(output, schema).eq(doc)).toBe(true)
   })
 
-  it('detects ordered-list task items', () => {
-    expect(detectUnsupported('1. [x] done\n2. [ ] todo\n')).toContain('taskList')
+  it('ignores syntax inside fenced code blocks', () => {
+    const md = '```md\n| a | b |\n| --- | --- |\n![x](y)\n<div>\n- [ ] t\n```\n'
+    expect(detectUnsupported(md)).toEqual([])
   })
 
-  it('detects blockquoted task items', () => {
-    expect(detectUnsupported('> - [x] done\n')).toContain('taskList')
-  })
-
-  it('detects multi-line html comments', () => {
-    expect(detectUnsupported('before\n\n<!--\nhidden\n-->\n\nafter\n')).toContain('html')
-  })
-
-  it('does not flag a single-line html comment', () => {
-    expect(detectUnsupported('a <!-- x --> b\n')).toEqual([])
-  })
-
-  it('pairs fences by char and length so a 4-backtick fence does not invert state', () => {
-    // 内层围栏必须是奇数个：偶数个在朴素翻转实现下也会净归零，测不到缺陷
-    const md = '````\n```\n````\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n'
-    expect(detectUnsupported(md)).toContain('table')
+  it('preserves single-line html comments', () => {
+    const md = 'before\n\n<!-- hidden -->\n\nafter\n'
+    const once = parseMarkdown(md, schema)
+    const out = serializeMarkdown(once)
+    expect(out).toContain('<!-- hidden -->')
+    expect(parseMarkdown(out, schema).eq(once)).toBe(true)
   })
 })

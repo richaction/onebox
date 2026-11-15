@@ -18,10 +18,11 @@ describe('GFM schema', () => {
     }
   })
 
-  it('does not register types deferred to later phases', () => {
-    for (const name of ['table', 'taskList', 'taskItem', 'image']) {
-      expect(schema.nodes[name], name).toBeUndefined()
+  it('registers tables, inline images and footnotes', () => {
+    for (const name of ['table', 'tableCell', 'image', 'footnoteReference', 'footnoteDefinition']) {
+      expect(schema.nodes[name], name).toBeDefined()
     }
+    expect(schema.nodes.listItem.spec.attrs?.checked).toBeDefined()
   })
 
   it('uses Tiptap attribute names', () => {
