@@ -10,6 +10,8 @@
 
 **Spec:** [docs/superpowers/specs/2026-11-12-onebox-foundation-design.md](../specs/2026-11-12-onebox-foundation-design.md)
 
+**实施记录（2026-11-15）** 已接续 Task 8–10，SolidJS 依赖和锁文件固定在 `1.9.19`。本机已有 Rust，跳过安装。测试读数、桌面验证以及按实测调整的实现见[第一阶段验收记录](2026-11-15-onebox-foundation-verification.md)。
+
 ## Global Constraints
 
 每个任务的要求都隐含包含本节。

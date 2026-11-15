@@ -51,13 +51,12 @@ describe('visibility plugin', () => {
     expect(isBlockVisible(state, 0)).toBe(false)
   })
 
-  it('marks decorations with data-visible', () => {
+  it('decorates visible blocks only, leaving hidden blocks at their default', () => {
     const state = setVisible(makeState(6), [])
     const plugin = visibilityKey.get(state)!
     const decos = plugin.props.decorations!.call(plugin, state) as DecorationSet
     const found = decos.find()
-    expect(found.length).toBe(2)
-    expect(found.map((d) => d.spec.visible)).toEqual([false, true])
+    expect(found.map((d) => [d.from, d.to, d.spec.visible])).toEqual([[5, 10, true]])
     // attrs（第 3 参数）才是驱动 PM 销毁重建的那一半，必须单独断言：
     // 只测 spec 的话，删掉 attrs 参数仍然全绿，而整个架构会失效。
     // 公开 d.ts 只暴露 from/to/spec，attrs 在运行时挂在 type 上。
@@ -65,7 +64,7 @@ describe('visibility plugin', () => {
       found.map(
         (d) => (d as unknown as { type: { attrs: Record<string, string> } }).type.attrs['data-visible'],
       ),
-    ).toEqual(['false', 'true'])
+    ).toEqual(['true'])
   })
 
   it('maps visible positions through document changes', () => {

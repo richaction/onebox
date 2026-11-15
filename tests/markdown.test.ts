@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectUnsupported, parseMarkdown, serializeMarkdown } from '../src/core/markdown'
+import { detectUnsupported, parseMarkdown, serializeMarkdown, serializeMarkdownForFile } from '../src/core/markdown'
 import { schema } from '../src/core/schema'
 
 const roundTrip = (md: string) => serializeMarkdown(parseMarkdown(md, schema))
@@ -158,6 +158,19 @@ describe('parse tolerance', () => {
 })
 
 describe('detection regression cases', () => {
+  it('protects quoted GFM tables and inline tags spanning multiple lines', () => {
+    expect(detectUnsupported('> | A | B |\n> | - | - |\n> | 1 | 2 |')).toContain('table')
+    expect(detectUnsupported('text <span\n class="x">value</span>')).toContain('html')
+  })
+
+  it('keeps literal HTML and entities as text when saving edits', () => {
+    const paragraph = schema.node('paragraph', null, [schema.text('<span> &copy;')])
+    const doc = schema.node('doc', null, [paragraph])
+    const output = serializeMarkdownForFile(doc)
+    expect(detectUnsupported(output)).toEqual([])
+    expect(parseMarkdown(output, schema).eq(doc)).toBe(true)
+  })
+
   it('detects ordered-list task items', () => {
     expect(detectUnsupported('1. [x] done\n2. [ ] todo\n')).toContain('taskList')
   })

@@ -1,4 +1,5 @@
 import type { EditorView } from '@tiptap/pm/view'
+import type { ViewportMetrics } from '../metrics'
 import type { ViewportObserver } from './blockNodeView'
 import { sameSet, visibilityKey } from './visibility'
 
@@ -19,6 +20,7 @@ export function createViewportObserver(
   view: EditorView,
   root: HTMLElement,
   rootMargin = '200px',
+  metrics?: ViewportMetrics,
 ): ViewportObserver {
   const states = new Map<Element, boolean>()
   let raf = 0
@@ -44,12 +46,22 @@ export function createViewportObserver(
     const current = visibilityKey.getState(view.state)?.visible ?? new Set<number>()
     const changed = nextVisibleSet(current, next)
     if (!changed) return
-    view.dispatch(view.state.tr.setMeta(visibilityKey, { visible: changed }))
+    const transaction = view.state.tr.setMeta(visibilityKey, { visible: changed })
+    const start = metrics ? performance.now() : 0
+    view.dispatch(transaction)
+    if (metrics) {
+      const elapsed = performance.now() - start
+      metrics.transactions++
+      metrics.lastTransactionMs = elapsed
+      metrics.maxTransactionMs = Math.max(metrics.maxTransactionMs, elapsed)
+    }
   }
 
   const io = new IntersectionObserver(
     (entries) => {
-      for (const entry of entries) states.set(entry.target, entry.isIntersecting)
+      for (const entry of entries) {
+        if (states.has(entry.target)) states.set(entry.target, entry.isIntersecting)
+      }
       if (!raf) raf = requestAnimationFrame(flush)
     },
     { root, rootMargin },
@@ -57,11 +69,13 @@ export function createViewportObserver(
 
   return {
     observe(el) {
+      if (metrics && !states.has(el)) metrics.created++
       states.set(el, false)
       io.observe(el)
     },
     unobserve(el) {
-      states.delete(el)
+      const removed = states.delete(el)
+      if (metrics && removed) metrics.destroyed++
       io.unobserve(el)
     },
     disconnect() {
