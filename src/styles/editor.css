@@ -1,17 +1,126 @@
+/* ==========================================================================
+   onebox · Notion 排版规范
+   人工微调入口：下方 :root 变量控制字号、行高、间距与配色。
+   数值取自 Notion 官方导出样式（正文 #37352F / 16px / 1.5，
+   标题 1.875 / 1.5 / 1.25rem，内联代码 #EB5757，代码块 #F7F6F3）。
+   ========================================================================== */
+
 :root {
   color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* 字体：西文优先系统 UI 字体，中文显式声明苹方 / 微软雅黑 / Noto */
+  --ob-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display',
+    'Segoe UI', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Apple Color Emoji', Arial, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --ob-font-mono: 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono',
+    'Noto Sans Mono CJK SC', 'Microsoft YaHei', Courier, monospace;
+
+  /* 正文 */
+  --ob-font-size: 16px;
+  --ob-line-height: 1.5;
+  --ob-block-padding: 3px;   /* 每个块的上下内边距 */
+  --ob-block-margin: 1px;    /* 每个块的上下外边距（段间距 = 2×padding + 2×margin） */
+  --ob-content-width: 708px; /* Notion 默认正文栏宽 */
+  --ob-page-padding-block: 32px;
+  --ob-page-padding-inline: 40px;
+
+  /* 标题 */
+  --ob-heading-line-height: 1.3;
+  --ob-h1-size: 1.875em;
+  --ob-h2-size: 1.5em;
+  --ob-h3-size: 1.25em;
+  --ob-h1-space: 2rem;
+  --ob-h2-space: 1.4rem;
+  --ob-h3-space: 1rem;
+
+  /* 列表 / 引用 / 代码 / 表格 */
+  --ob-list-indent: 1.7em;
+  --ob-quote-border: 3px;
+  --ob-quote-indent: 1em;
+  --ob-code-padding: 0.9rem 1rem 1rem;
+  --ob-code-radius: 8px;
+  --ob-inline-code-radius: 3px;
+  --ob-table-font-size: 0.875rem;
+  --ob-divider-space: 13px;
+  --ob-image-radius: 4px;
+
+  /* 配色 · 浅色 / 深色（light-dark 跟随 color-scheme 切换） */
+  --ob-text: light-dark(rgb(55 53 47), rgb(255 255 255 / 0.81));
+  --ob-text-secondary: light-dark(rgb(55 53 47 / 0.6), rgb(255 255 255 / 0.46));
+  --ob-text-faint: light-dark(rgb(55 53 47 / 0.4), rgb(255 255 255 / 0.28));
+  --ob-bg: light-dark(#fff, #191919);
+  --ob-bg-sidebar: light-dark(#f7f6f3, #202020);
+  --ob-bg-code: light-dark(#f7f6f3, #252525);
+  --ob-quote-bg: light-dark(#f8f8f5, #232322);
+  --ob-quote-rail: light-dark(#787d70, #a5aa9a);
+  --ob-code-comment: light-dark(#68716b, #a6aea8);
+  --ob-code-keyword: light-dark(#773ba3, #d8a9f5);
+  --ob-code-string: light-dark(#29704a, #a9d49b);
+  --ob-code-number: light-dark(#975023, #f1b489);
+  --ob-code-name: light-dark(#255c95, #9fc4f0);
+  --ob-code-meta: light-dark(#82601e, #e5c77e);
+  --ob-code-addition: light-dark(#2c723d, #9dda9c);
+  --ob-code-deletion: light-dark(#a33d48, #f5a6aa);
+  --ob-bg-overlay: light-dark(#fff, #252525);
+  --ob-bg-hover: light-dark(rgb(55 53 47 / 0.06), rgb(255 255 255 / 0.055));
+  --ob-bg-active: light-dark(rgb(55 53 47 / 0.1), rgb(255 255 255 / 0.1));
+  --ob-border: light-dark(rgb(55 53 47 / 0.16), rgb(255 255 255 / 0.13));
+  --ob-divider: light-dark(rgb(55 53 47 / 0.16), rgb(255 255 255 / 0.13));
+  --ob-table-border: light-dark(rgb(55 53 47 / 0.09), rgb(255 255 255 / 0.1));
+  --ob-table-head: light-dark(#f7f6f3, #252525);
+  --ob-table-stripe: light-dark(#faf9f6, #202020);
+  --ob-table-selected: light-dark(#eaf2fb, #263a50);
+  --ob-inline-code-bg: light-dark(rgb(135 131 120 / 0.15), rgb(135 131 120 / 0.25));
+  --ob-inline-code-text: light-dark(#eb5757, #ff7369);
+  --ob-link-underline: light-dark(rgb(55 53 47 / 0.4), rgb(255 255 255 / 0.46));
+  --ob-selection: light-dark(rgb(35 131 226 / 0.28), rgb(35 131 226 / 0.4));
+  --ob-accent: #2383e2;
+  --ob-checkbox: light-dark(rgb(55 53 47 / 0.5), rgb(255 255 255 / 0.5));
+  --ob-scrollbar: light-dark(rgb(55 53 47 / 0.2), rgb(255 255 255 / 0.2));
+  --ob-shadow-menu: light-dark(
+    rgb(15 15 15 / 0.05) 0 0 0 1px,
+    rgb(0 0 0 / 0.3) 0 0 0 1px
+  ), light-dark(
+    rgb(15 15 15 / 0.1) 0 3px 6px,
+    rgb(0 0 0 / 0.4) 0 3px 6px
+  ), light-dark(
+    rgb(15 15 15 / 0.2) 0 9px 24px,
+    rgb(0 0 0 / 0.5) 0 9px 24px
+  );
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--ob-bg);
+  color: var(--ob-text);
+  font-family: var(--ob-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  margin: 0;
+  font-size: var(--ob-font-size);
+  line-height: var(--ob-line-height);
 }
 
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
+  background: var(--ob-bg);
 }
+
+/* ---------------------------------------------------------------- app 外壳 */
 
 .editor-layout {
   display: flex;
@@ -23,7 +132,7 @@ body {
   display: flex;
   gap: 4px;
   padding: 7px 12px;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 13%, transparent);
+  border-bottom: 1px solid var(--ob-border);
 }
 
 .file-actions button,
@@ -35,16 +144,25 @@ body {
   background: transparent;
   font: inherit;
   font-size: 13px;
+  cursor: pointer;
 }
 
 .file-actions button:disabled {
   opacity: 0.4;
+  cursor: default;
 }
 
 .file-actions button:enabled:hover,
 .workspace button:hover,
 .workspace button[aria-current='page'] {
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  background: var(--ob-bg-hover);
+}
+
+.file-actions button:focus-visible,
+.workspace button:focus-visible,
+.block-menu button:focus-visible {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: 1px;
 }
 
 .workspace {
@@ -54,7 +172,8 @@ body {
   flex-direction: column;
   gap: 8px;
   padding: 9px;
-  border-right: 1px solid color-mix(in srgb, currentColor 13%, transparent);
+  border-right: 1px solid var(--ob-border);
+  background: var(--ob-bg-sidebar);
 }
 
 .workspace-title {
@@ -68,6 +187,8 @@ body {
 
 .workspace nav {
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ob-scrollbar) transparent;
 }
 
 .workspace nav button {
@@ -82,8 +203,30 @@ body {
 .workspace-empty {
   padding-inline: 6px;
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--ob-text-secondary);
 }
+
+.statusbar {
+  display: flex;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--ob-text-secondary);
+  border-top: 1px solid var(--ob-border);
+}
+
+.statusbar span:first-child {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar span:empty {
+  display: none;
+}
+
+/* ------------------------------------------------------------- 编辑器画布 */
 
 .editor-shell {
   display: flex;
@@ -95,18 +238,46 @@ body {
 .editor-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
-  padding: 24px 32px;
+  padding: var(--ob-page-padding-block) var(--ob-page-padding-inline) 48px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ob-scrollbar) transparent;
+}
+
+.editor-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.editor-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editor-scroll::-webkit-scrollbar-thumb {
+  background: var(--ob-scrollbar);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
 }
 
 .editor-mount {
-  max-width: 760px;
+  max-width: var(--ob-content-width);
   margin: 0 auto;
 }
 
 .editor-mount .ProseMirror {
   outline: none;
-  line-height: 1.5;
+  font-family: var(--ob-font-sans);
+  font-size: var(--ob-font-size);
+  line-height: var(--ob-line-height);
+  color: var(--ob-text);
+  caret-color: var(--ob-text);
+  overflow-wrap: break-word;
+}
+
+.editor-mount .ProseMirror ::selection {
+  background: var(--ob-selection);
 }
 
 .onebox-block {
@@ -123,6 +294,516 @@ body {
   min-height: 1.5em;
 }
 
+/* ------------------------------------------------------------- 块级排版 */
+
+.ProseMirror p {
+  margin: var(--ob-block-margin) 0;
+  padding: var(--ob-block-padding) 0;
+}
+
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3 {
+  margin: var(--ob-block-margin) 0;
+  padding: var(--ob-block-padding) 0;
+  font-weight: 600;
+  line-height: var(--ob-heading-line-height);
+  letter-spacing: -0.01em;
+}
+
+.ProseMirror h1 {
+  margin-top: var(--ob-h1-space);
+  font-size: var(--ob-h1-size);
+  font-weight: 700;
+}
+
+.ProseMirror h2 {
+  margin-top: var(--ob-h2-space);
+  font-size: var(--ob-h2-size);
+}
+
+.ProseMirror h3 {
+  margin-top: var(--ob-h3-space);
+  font-size: var(--ob-h3-size);
+}
+
+.ProseMirror > .onebox-block:first-child > .onebox-block-content {
+  margin-top: 0;
+}
+
+.ProseMirror .viewport-group > .onebox-block:first-child > .onebox-block-content {
+  margin-top: 0;
+}
+
+.ProseMirror strong {
+  font-weight: 600;
+}
+
+.ProseMirror a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--ob-link-underline);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.ProseMirror a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* 列表：Notion 的间距来自块内边距，项与项之间约 6px */
+.ProseMirror ul,
+.ProseMirror ol {
+  margin: var(--ob-block-margin) 0;
+  padding: var(--ob-block-padding) 0;
+}
+
+.ProseMirror ul {
+  padding-inline-start: var(--ob-list-indent);
+}
+
+.ProseMirror ol {
+  padding-inline-start: 1.6em;
+}
+
+.ProseMirror li {
+  margin: 0;
+  padding: 3px 0;
+}
+
+.ProseMirror ul > li {
+  padding-left: 0.1em;
+}
+
+.ProseMirror ol > li {
+  padding-left: 0.2em;
+}
+
+.ProseMirror li > ul,
+.ProseMirror li > ol {
+  margin: 0;
+  padding-block: 0;
+}
+
+.ProseMirror li p {
+  margin: 0;
+  padding: 0;
+}
+
+.ProseMirror li::marker {
+  color: var(--ob-text);
+}
+
+/* 任务列表：勾选后删除线 + 变淡，与 Notion to-do 一致 */
+.ProseMirror li[data-checked] {
+  position: relative;
+  list-style: none;
+}
+
+.ProseMirror li[data-checked='true'] > div {
+  text-decoration: line-through;
+  opacity: 0.375;
+}
+
+.task-toggle {
+  position: absolute;
+  inset-inline-start: -1.5em;
+  inset-block-start: calc(3px + (var(--ob-line-height) * 1em - 1em) / 2);
+  width: 1em;
+  height: 1em;
+  padding: 0;
+  border: 1.5px solid var(--ob-checkbox);
+  border-radius: 2px;
+  color: transparent;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.task-toggle:hover {
+  border-color: var(--ob-text);
+}
+
+.task-toggle[aria-checked='true'] {
+  border-color: var(--ob-accent);
+  background: var(--ob-accent);
+}
+
+.task-toggle[aria-checked='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpolygon fill='white' points='5.5 11.9993304 14 3.49933039 12.5 2 5.5 8.99933039 1.5 4.9968652 0 6.49933039'/%3E%3C/svg%3E")
+    center / 0.8em no-repeat;
+}
+
+/* 引用保留 Notion 式边线，让正文、嵌套引用与代码有清楚的层次。 */
+.ProseMirror blockquote {
+  margin: 0.55em 0;
+  padding: 0.65em 0.85em 0.65em var(--ob-quote-indent);
+  border-inline-start: var(--ob-quote-border) solid var(--ob-quote-rail);
+  border-start-end-radius: 6px;
+  border-end-end-radius: 6px;
+  background: var(--ob-quote-bg);
+}
+
+.ProseMirror blockquote > * {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.ProseMirror blockquote > * + * {
+  margin-top: 0.5em;
+}
+
+.ProseMirror blockquote blockquote {
+  padding-block: 0.3em;
+  background: transparent;
+  border-inline-start-width: 2px;
+  border-inline-start-color: color-mix(in srgb, var(--ob-quote-rail) 52%, transparent);
+}
+
+/* 行内代码：Notion 的红色 #EB5757 + 暖灰底 */
+.ProseMirror code {
+  padding: 0.2em 0.4em;
+  border-radius: var(--ob-inline-code-radius);
+  background: var(--ob-inline-code-bg);
+  color: var(--ob-inline-code-text);
+  font-family: var(--ob-font-mono);
+  font-size: 85%;
+  line-height: normal;
+  tab-size: 2;
+}
+
+/* 代码块使用统一表面，语言标签、语法和少量色彩帮助辨认。 */
+.ProseMirror pre {
+  margin: var(--ob-block-margin) 0;
+  padding: var(--ob-code-padding);
+  border-radius: var(--ob-code-radius);
+  background: var(--ob-bg-code);
+  font-family: var(--ob-font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 2;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ob-scrollbar) transparent;
+}
+
+.code-frame {
+  --code-accent: light-dark(#646c78, #b1bac8);
+
+  max-inline-size: 100%;
+  margin: 0.6em 0;
+  border: 1px solid var(--ob-border);
+  border-radius: var(--ob-code-radius);
+  background: var(--ob-bg-code);
+}
+
+.code-frame[data-language='javascript'],
+.code-frame[data-language='json'] {
+  --code-accent: light-dark(#89600b, #e7c465);
+}
+
+.code-frame[data-language='typescript'],
+.code-frame[data-language='go'] {
+  --code-accent: light-dark(#275e9b, #8bb9ef);
+}
+
+.code-frame[data-language='python'],
+.code-frame[data-language='bash'],
+.code-frame[data-language='diff'] {
+  --code-accent: light-dark(#266f5a, #8bcdb6);
+}
+
+.code-frame[data-language='rust'],
+.code-frame[data-language='xml'],
+.code-frame[data-language='java'] {
+  --code-accent: light-dark(#9b4a32, #f0ad99);
+}
+
+.code-frame[data-language='css'],
+.code-frame[data-language='yaml'],
+.code-frame[data-language='sql'],
+.code-frame[data-language='cpp'] {
+  --code-accent: light-dark(#735299, #c5a9e8);
+}
+
+.code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.75rem;
+  border-block-end: 1px solid var(--ob-table-border);
+  user-select: none;
+}
+
+.code-language {
+  min-inline-size: 0;
+  overflow: hidden;
+  padding: 0.16rem 0.48rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--code-accent) 11%, transparent);
+  color: var(--code-accent);
+  font: 600 0.75rem/1.5 var(--ob-font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-actions {
+  display: flex;
+  flex: none;
+  gap: 0.2rem;
+}
+
+.code-actions button {
+  min-block-size: 28px;
+  padding: 0.16rem 0.46rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ob-text);
+  font: 500 0.75rem/1.4 var(--ob-font-sans);
+  cursor: pointer;
+}
+
+.code-actions button:hover,
+.code-actions button[aria-pressed='true'] {
+  border-color: var(--ob-table-border);
+  background: var(--ob-bg-hover);
+}
+
+.code-actions button:focus-visible,
+.table-scroll:focus-visible {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: 2px;
+}
+
+.ProseMirror .code-frame pre {
+  max-inline-size: 100%;
+  margin: 0;
+  border-radius: 0 0 var(--ob-code-radius) var(--ob-code-radius);
+  background: transparent;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overscroll-behavior-x: contain;
+}
+
+.ProseMirror .code-frame pre code {
+  display: block;
+  white-space: inherit;
+  overflow-wrap: inherit;
+}
+
+.ProseMirror .code-frame[data-wrap] pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+code::highlight(onebox-code-comment) { color: var(--ob-code-comment); }
+code::highlight(onebox-code-keyword) { color: var(--ob-code-keyword); }
+code::highlight(onebox-code-string) { color: var(--ob-code-string); }
+code::highlight(onebox-code-number) { color: var(--ob-code-number); }
+code::highlight(onebox-code-name) { color: var(--ob-code-name); }
+code::highlight(onebox-code-meta) { color: var(--ob-code-meta); }
+code::highlight(onebox-code-addition) { color: var(--ob-code-addition); }
+code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
+
+.ProseMirror pre code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-size: 100%;
+  line-height: inherit;
+}
+
+/* 窄屏保留表格关系，宽表在自己的容器里滚动。 */
+.table-frame {
+  position: relative;
+  max-inline-size: 100%;
+  margin: 0.65em 0;
+}
+
+.table-frame[data-more-columns]::after {
+  position: absolute;
+  inset-block: 1px;
+  inset-inline-end: 1px;
+  inline-size: 0.9rem;
+  border-start-end-radius: 7px;
+  border-end-end-radius: 7px;
+  background: linear-gradient(to left, var(--ob-bg), transparent);
+  content: '';
+  pointer-events: none;
+}
+
+.table-frame[data-more-columns]:dir(rtl)::after {
+  background: linear-gradient(to right, var(--ob-bg), transparent);
+}
+
+.table-scroll {
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--ob-border);
+  border-radius: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ob-scrollbar) transparent;
+}
+
+.ProseMirror table {
+  inline-size: 100%;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--ob-table-font-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.ProseMirror td,
+.ProseMirror th {
+  box-sizing: border-box;
+  min-inline-size: clamp(5.75rem, 20vw, 7rem);
+  max-inline-size: 18rem;
+  padding: 0.55em 0.8em;
+  border-inline-end: 1px solid var(--ob-table-border);
+  border-block-end: 1px solid var(--ob-table-border);
+  background: var(--ob-bg);
+  font-weight: normal;
+  line-height: 1.5;
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.ProseMirror tr > :is(td, th):last-child {
+  border-inline-end: 0;
+}
+
+.ProseMirror tr > :is(td, th):first-child {
+  max-inline-size: clamp(7rem, 30vw, 13rem);
+}
+
+.ProseMirror tr:last-child > :is(td, th) {
+  border-block-end: 0;
+}
+
+.ProseMirror tr:nth-child(odd) > td {
+  background: var(--ob-table-stripe);
+}
+
+.ProseMirror th {
+  background: var(--ob-table-head);
+  font-weight: 600;
+}
+
+.table-scroll[data-pin-first] tr > :is(td, th):first-child {
+  position: sticky;
+  z-index: 1;
+  inset-inline-start: 0;
+  box-shadow: 1px 0 var(--ob-table-border);
+}
+
+.ProseMirror td > p,
+.ProseMirror th > p {
+  margin: 0;
+  padding: 0;
+  min-height: 1.5em;
+}
+
+.ProseMirror tr > :is(td, th).selectedCell {
+  background: var(--ob-table-selected);
+}
+
+@media (max-width: 600px) {
+  .editor-layout {
+    flex-direction: column;
+  }
+
+  .workspace {
+    width: 100%;
+    max-height: min(30dvh, 10rem);
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--ob-border);
+  }
+
+  .editor-scroll {
+    padding-block-start: 20px;
+    padding-inline: clamp(14px, 4vw, 22px);
+  }
+
+  .code-toolbar {
+    padding-inline: 0.55rem;
+  }
+
+  .code-actions button {
+    min-block-size: 36px;
+  }
+
+  .ProseMirror .code-frame pre {
+    padding-inline: 0.75rem;
+  }
+
+  .ProseMirror td,
+  .ProseMirror th {
+    padding: 0.55em 0.65em;
+  }
+}
+
+/* 分隔线：Notion 的细线居中于 28px 高的块 */
+.ProseMirror hr {
+  height: 0;
+  min-height: 0;
+  margin: var(--ob-divider-space) 0;
+  border: none;
+  border-top: 1px solid var(--ob-divider);
+}
+
+/* 图片 / 附件 */
+.onebox-block-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--ob-image-radius);
+  vertical-align: bottom;
+}
+
+img.ProseMirror-selectednode {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: 2px;
+}
+
+/* 脚注：Notion 无原生脚注，此处沿用正文色系做弱化处理 */
+.footnote-reference {
+  padding-inline: 0.1em;
+  color: var(--ob-accent);
+  font-size: 0.75em;
+}
+
+.footnote-definition {
+  display: flex;
+  gap: 0.75em;
+  align-items: baseline;
+  font-size: 0.875em;
+  color: var(--ob-text-secondary);
+}
+
+.footnote-definition > span {
+  font-family: var(--ob-font-mono);
+  font-size: 0.9em;
+}
+
+.footnote-definition > div > p {
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------- 块菜单 */
+
 .block-menu {
   position: fixed;
   z-index: 5;
@@ -132,11 +813,12 @@ body {
   max-height: min(248px, calc(100vh - 16px));
   overflow-y: auto;
   padding: 5px;
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
   border-radius: 8px;
-  background: Canvas;
-  box-shadow: 0 6px 22px #0003;
+  background: var(--ob-bg-overlay);
+  box-shadow: var(--ob-shadow-menu);
   font-size: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ob-scrollbar) transparent;
 }
 
 .block-menu button,
@@ -151,86 +833,15 @@ body {
   text-align: start;
 }
 
+.block-menu button {
+  cursor: pointer;
+}
+
 .block-menu button.highlighted,
 .block-menu button:focus-visible {
-  background: color-mix(in srgb, currentColor 9%, transparent);
+  background: var(--ob-bg-hover);
 }
 
-.onebox-block-content img {
-  max-width: 100%;
-  height: auto;
-}
-
-.ProseMirror table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.ProseMirror td,
-.ProseMirror th {
-  min-width: 3ch;
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-  padding: 0 8px;
-}
-
-.ProseMirror td > p,
-.ProseMirror th > p {
-  margin: 6px 0;
-}
-
-.ProseMirror th,
-.ProseMirror .selectedCell {
-  background: color-mix(in srgb, currentColor 7%, transparent);
-}
-
-.ProseMirror li[data-checked] {
-  position: relative;
-  list-style: none;
-}
-
-.task-toggle {
-  position: absolute;
-  inset-inline-start: -1.4em;
-  inset-block-start: 0.2em;
-  width: 1em;
-  height: 1em;
-  padding: 0;
-  border: 1px solid currentColor;
-  border-radius: 3px;
-  color: inherit;
-  background: transparent;
-  vertical-align: middle;
-}
-
-.task-toggle[aria-checked='true']::after {
-  content: '✓';
-  display: block;
-  line-height: 1;
-}
-
-.footnote-definition {
-  display: flex;
-  gap: 0.75em;
-  align-items: baseline;
-  font-size: 0.9em;
-}
-
-.statusbar {
-  display: flex;
-  gap: 12px;
-  padding: 6px 12px;
-  font-size: 12px;
-  color: color-mix(in srgb, currentColor 72%, transparent);
-  border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-}
-
-.statusbar span:first-child {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.statusbar span:empty {
-  display: none;
+.block-menu-empty {
+  color: var(--ob-text-secondary);
 }

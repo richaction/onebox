@@ -5,6 +5,8 @@ import { EditorState, Plugin } from '@tiptap/pm/state'
 import type { EditorProps } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
+import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
+import { createCodeHighlight } from './codeHighlight'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import type { ViewportMetrics } from './metrics'
 import { MarkdownImage } from './markdownNodes'
@@ -42,6 +44,8 @@ export function createEditor(opts: {
   openResource?: (href: string) => void
 }): EditorHandle {
   const heights = new HeightCache()
+  const highlight = createCodeHighlight(opts.scrollRoot)
+  const present = createBlockPresentation(highlight)
   const viewportMetrics = import.meta.env.DEV
     ? { created: 0, destroyed: 0, transactions: 0, lastTransactionMs: 0, maxTransactionMs: 0 }
     : undefined
@@ -53,7 +57,7 @@ export function createEditor(opts: {
       // Tiptap 在创建 EditorView 时会覆盖 editorProps.nodeViews。
       return [
         createVisibilityPlugin(),
-        new Plugin({ props: { nodeViews: blockNodeViews(heights, () => observer) } }),
+        new Plugin({ props: { nodeViews: blockNodeViews(heights, () => observer, present) } }),
       ]
     },
   })
@@ -119,6 +123,10 @@ export function createEditor(opts: {
       handleKeyDown: opts.handleKeyDown,
       handleDrop: opts.handleDrop,
       handlePaste: opts.handlePaste,
+      handleScrollToSelection(view) {
+        keepTableCaretVisible(view)
+        return false
+      },
       handleDOMEvents: {
         contextmenu: opts.handleContextMenu,
         click(view, event) {
@@ -198,6 +206,7 @@ export function createEditor(opts: {
       observer?.disconnect()
       observer = null
       editor.destroy()
+      highlight?.destroy()
     },
   }
 }

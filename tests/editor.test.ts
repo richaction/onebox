@@ -43,6 +43,27 @@ describe('createEditor', () => {
     expect(element.querySelector('.onebox-block-content')?.tagName).toBe('H1')
   })
 
+  it('keeps editor-only code and table controls outside exported content', () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('> ```python\n> print("hello")\n> ```')
+
+    const code = element.querySelector('.code-frame')!
+    expect(code.querySelector('.code-language')?.textContent).toBe('Python')
+    expect(code.querySelector('pre > code')?.textContent).toBe('print("hello")')
+    const beforeWrap = handle.toMarkdown()
+    code.querySelector<HTMLButtonElement>('button')!.click()
+    expect(code.hasAttribute('data-wrap')).toBe(true)
+    expect(handle.toMarkdown()).toBe(beforeWrap)
+    expect(handle.editor.getHTML()).not.toMatch(/code-frame|code-toolbar/)
+
+    handle.loadMarkdown('| Name | Count |\n| --- | ---: |\n| A | 42 |')
+    const table = element.querySelector('.table-scroll > table')
+    expect(table).not.toBeNull()
+    expect(table!.querySelector('th')?.getAttribute('scope')).toBe('col')
+    expect(table!.querySelector<HTMLElement>('td:last-child')?.style.textAlign).toBe('right')
+    expect(handle.editor.getHTML()).not.toContain('table-scroll')
+  })
+
   it('appends viewport groups and exports the underlying Markdown blocks', () => {
     const { handle, onUpdate, element } = mount()
     handle.loadBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'first' }] }], true)

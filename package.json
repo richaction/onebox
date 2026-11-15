@@ -19,6 +19,8 @@
     "@tiptap/extension-table": "3.33.1",
     "@tiptap/pm": "3.33.1",
     "@tiptap/starter-kit": "3.33.1",
+    "highlight.js": "11.11.1",
+    "lowlight": "3.3.0",
     "markdown-it": "14.3.3",
     "markdown-it-footnote": "4.0.0",
     "prosemirror-markdown": "1.13.9",
