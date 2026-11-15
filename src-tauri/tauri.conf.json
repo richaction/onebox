@@ -19,5 +19,9 @@
     }],
     "security": { "csp": null }
   },
-  "bundle": { "active": false, "targets": "all", "icon": [] }
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": ["icons/onebox.png", "icons/onebox.icns", "icons/onebox.ico"]
+  }
 }

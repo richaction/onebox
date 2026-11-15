@@ -74,13 +74,23 @@ impl Node {
 }
 
 pub(crate) fn parser(source: &str) -> Parser<'_> {
+    Parser::new_ext(source, markdown_options())
+}
+
+pub(crate) fn relocation_parser(source: &str) -> Parser<'_> {
     Parser::new_ext(
         source,
-        Options::ENABLE_TABLES
-            | Options::ENABLE_TASKLISTS
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_FOOTNOTES,
+        markdown_options()
+            | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS,
     )
+}
+
+fn markdown_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_FOOTNOTES
 }
 
 fn url(url: &str) -> String {

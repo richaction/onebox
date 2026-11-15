@@ -23,12 +23,16 @@ interface BlockContent {
   stopEvent?: NodeView['stopEvent']
 }
 
-export type PresentBlock = (node: Node, rendered: BlockContent) => BlockContent
+export type PresentBlock = (
+  node: Node, rendered: BlockContent, view: EditorView, getPos: () => number | undefined,
+) => BlockContent
 
-function renderContent(node: Node, document: Document, present?: PresentBlock): BlockContent {
+function renderContent(
+  node: Node, view: EditorView, getPos: () => number | undefined, present?: PresentBlock,
+): BlockContent {
   const spec = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
   const rendered = { dom: spec.dom, contentDOM: spec.contentDOM ?? undefined }
-  return present?.(node, rendered) ?? rendered
+  return present?.(node, rendered, view, getPos) ?? rendered
 }
 
 export function createBlockNodeView(
@@ -47,7 +51,7 @@ export function createBlockNodeView(
   // 若走占位分支就会把列表项与引用的内容整段销毁。非顶层一律正常渲染、不参与虚拟化。
   const topLevel = pos !== undefined && view.state.doc.resolve(pos).depth === 0
   if (!topLevel) {
-    const nested = renderContent(node, document, present)
+    const nested = renderContent(node, view, getPos, present)
     return {
       dom: nested.dom,
       contentDOM: nested.contentDOM,
@@ -81,7 +85,7 @@ export function createBlockNodeView(
 
   if (visible) {
     // Read the semantic DOM from the schema before adding any editor chrome.
-    rendered = renderContent(node, dom.ownerDocument, present)
+    rendered = renderContent(node, view, getPos, present)
     rendered.dom.classList.add('onebox-block-content')
     dom.appendChild(rendered.dom)
     resizeObserver = new ResizeObserver(() => {

@@ -2,18 +2,37 @@ import type { Range } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
 import type { Node } from '@tiptap/pm/model'
 import { Selection } from '@tiptap/pm/state'
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { blockCommands, slashTrigger, tableCommands, type CommandItem } from '../core/blockCommands'
+import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount, Show } from 'solid-js'
+import {
+  blockCommands, blockEditCommands, insertCommands, selectedBlock, slashTrigger, tableCommands,
+  type CommandItem, type MenuItem,
+} from '../core/blockCommands'
 import { createEditor, type EditorHandle } from '../core/editor'
+import BlockMenu from './BlockMenu'
 
 export type AttachmentKind = 'image' | 'file'
 
 interface Popup {
   x: number
   y: number
+  above: number
   trigger?: NonNullable<ReturnType<typeof slashTrigger>>
   inTable: boolean
+  canEditBlock?: boolean
 }
+
+type Action = CommandItem | (MenuItem & { attachment: AttachmentKind })
+
+const attachmentItems: readonly Action[] = [
+  {
+    label: '图片', search: 'image photo', icon: '▧',
+    preview: { kind: 'media', caption: '插入本地图片' }, attachment: 'image',
+  },
+  {
+    label: '附件', search: 'attachment file', icon: '▤',
+    preview: { kind: 'media', caption: '插入本地文件链接' }, attachment: 'file',
+  },
+]
 
 export default function EditorShell(props: {
   markdown: string
@@ -33,19 +52,26 @@ export default function EditorShell(props: {
 
   const [popup, setPopup] = createSignal<Popup>()
   const [highlighted, setHighlighted] = createSignal(0)
+  const menuId = createUniqueId()
   const items = createMemo(() => {
     const current = popup()
     if (!current) return []
-    const commands: (CommandItem | { label: string; search: string; attachment: AttachmentKind })[] =
-      current.inTable ? [...tableCommands] : [...blockCommands]
-    if (props.onInsertAttachment && !current.inTable) {
-      commands.push(
-        { label: '图片', search: 'image photo', attachment: 'image' },
-        { label: '附件', search: 'attachment file', attachment: 'file' },
-      )
-    }
+    const sections: [string, readonly Action[]][] = current.inTable
+      ? [['表格操作', tableCommands]]
+      : [
+        ['区块操作', current.canEditBlock ? blockEditCommands : []],
+        [current.trigger ? '基本区块' : '转换区块', blockCommands],
+        ['插入内容', insertCommands],
+        ['媒体与附件', props.onInsertAttachment ? attachmentItems : []],
+      ]
     const query = current.trigger?.query.toLowerCase() ?? ''
-    return commands.filter((item) => `${item.label} ${item.search}`.includes(query))
+    return sections.flatMap(([section, commands]) => {
+      const matches = commands.filter((item) =>
+        `${item.label} ${item.search} ${item.shortcut ?? ''}`.toLowerCase().includes(query))
+      const exact = matches.findIndex((item) => item.shortcut === query)
+      if (exact > 0) matches.unshift(...matches.splice(exact, 1))
+      return matches.map((item, index) => ({ item, section: index === 0 ? section : undefined }))
+    })
   })
 
   const closeMenu = () => {
@@ -54,13 +80,13 @@ export default function EditorShell(props: {
   }
 
   const showMenu = (next: Popup) => {
-    if (popup()?.trigger?.query !== next.trigger?.query || !popup()) setHighlighted(0)
+    if (!next.trigger || popup()?.trigger?.query !== next.trigger.query) setHighlighted(0)
     setPopup(next)
   }
 
   const runItem = (index: number) => {
     const current = popup()
-    const item = items()[index]
+    const item = items()[index]?.item
     const editor = handle?.editor
     if (!current || !item || !editor?.isEditable) return
     closeMenu()
@@ -100,7 +126,17 @@ export default function EditorShell(props: {
         return true
       },
       handleKeyDown(view, event) {
-        if (!popup() || !view.editable || view.composing || event.isComposing) return false
+        if (!view.editable || view.composing || event.isComposing) return false
+        if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+          const { selection } = view.state
+          const { left, bottom, top } = view.coordsAtPos(selection.head)
+          showMenu({
+            x: left, y: bottom + 4, above: top - 4, inTable: handle!.editor.isActive('table'),
+            canEditBlock: !!selectedBlock(selection),
+          })
+          return true
+        }
+        if (!popup()) return false
         const count = items().length
         switch (event.key) {
           case 'Escape':
@@ -129,7 +165,10 @@ export default function EditorShell(props: {
         }
         view.focus()
         event.preventDefault()
-        showMenu({ x: event.clientX, y: event.clientY, inTable: handle.editor.isActive('table') })
+        showMenu({
+          x: event.clientX, y: event.clientY, above: event.clientY, inTable: handle.editor.isActive('table'),
+          canEditBlock: !!selectedBlock(view.state.selection),
+        })
         return true
       },
     })
@@ -149,8 +188,8 @@ export default function EditorShell(props: {
         dismissedSlash = undefined
         setPopup(undefined)
       } else if (trigger.from !== dismissedSlash) {
-        const { left, bottom } = editor.view.coordsAtPos(trigger.to)
-        showMenu({ x: left, y: bottom + 4, trigger, inTable: editor.isActive('table') })
+        const { left, bottom, top } = editor.view.coordsAtPos(trigger.from)
+        showMenu({ x: left, y: bottom + 4, above: top - 4, trigger, inTable: editor.isActive('table') })
       }
     })
 
@@ -168,35 +207,36 @@ export default function EditorShell(props: {
   })
   onCleanup(() => handle?.destroy())
 
+  createEffect(() => {
+    const current = popup()
+    const active = items()[highlighted()]
+    const dom = handle?.editor.view.dom
+    if (!dom) return
+    if (current) dom.setAttribute('aria-controls', menuId)
+    else dom.removeAttribute('aria-controls')
+    if (active) dom.setAttribute('aria-activedescendant', `${menuId}-${highlighted()}`)
+    else dom.removeAttribute('aria-activedescendant')
+  })
+
   return (
     <div class="editor-shell">
       <div class="editor-scroll" ref={scrollRoot}>
         <div class="editor-mount" ref={element} />
       </div>
       <Show when={popup()}>
-        <div
-          class="block-menu"
-          ref={popupElement}
-          role="menu"
-          aria-label="块操作"
-          style={{
-            left: `${Math.max(8, Math.min(popup()!.x, window.innerWidth - 210))}px`,
-            top: `${Math.max(8, Math.min(popup()!.y, window.innerHeight - 260))}px`,
-          }}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          <For each={items()} fallback={<span class="block-menu-empty">无匹配命令</span>}>
-            {(item, index) => (
-              <button
-                type="button"
-                role="menuitem"
-                classList={{ highlighted: index() === highlighted() }}
-                onMouseEnter={() => setHighlighted(index())}
-                onClick={() => runItem(index())}
-              >{item.label}</button>
-            )}
-          </For>
-        </div>
+        {(current) => (
+          <BlockMenu
+            id={menuId}
+            anchor={current()}
+            query={current().trigger?.query}
+            items={items()}
+            active={highlighted()}
+            onHighlight={setHighlighted}
+            onChoose={runItem}
+            onClose={closeMenu}
+            ref={(el) => { popupElement = el }}
+          />
+        )}
       </Show>
     </div>
   )
