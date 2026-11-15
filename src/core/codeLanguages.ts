@@ -29,12 +29,13 @@ for (const id of codeLanguageIds) {
 export function codeLanguage(info: string | null | undefined) {
   const name = info?.trim().split(/\s/u, 1)[0] ?? ''
   const id = languageNames.get(name.toLowerCase())
+  const plain = /^(?:txt|text|plaintext|plain)?$/iu.test(name)
   const label = name.toLowerCase() === 'html' ? 'HTML'
     : name.toLowerCase() === 'c' ? 'C'
     : id ? languages[id].label
-    : /^(?:txt|text|plaintext|plain)?$/iu.test(name) ? '纯文本'
+    : plain ? '纯文本'
     : name
-  return { id, label }
+  return { name, id, label, plain }
 }
 
 export type CodeTone = 'comment' | 'keyword' | 'string' | 'number' | 'name' | 'meta' | 'addition' | 'deletion'

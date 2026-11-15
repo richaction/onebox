@@ -15,7 +15,7 @@ use tauri::{
 };
 use tauri_plugin_fs::FsExt;
 
-static FILE_OPERATION: Mutex<()> = Mutex::new(());
+pub(crate) static FILE_OPERATION: Mutex<()> = Mutex::new(());
 
 fn parent(file: &Path) -> Result<PathBuf, String> {
     file.parent()
@@ -24,7 +24,7 @@ fn parent(file: &Path) -> Result<PathBuf, String> {
         .map_err(|err| err.to_string())
 }
 
-fn relative_href(href: &str) -> Option<(String, &str)> {
+pub(crate) fn relative_href(href: &str) -> Option<(String, &str)> {
     let end = href.find(['#', '?']).unwrap_or(href.len());
     let path = percent_decode_str(&href[..end]).decode_utf8().ok()?;
     if path.is_empty()
@@ -37,7 +37,7 @@ fn relative_href(href: &str) -> Option<(String, &str)> {
     Some((path.into_owned(), &href[end..]))
 }
 
-fn document_name(path: &Path) -> bool {
+pub(crate) fn document_name(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
@@ -54,7 +54,11 @@ fn checked_file(path: &Path) -> Result<File, String> {
     File::open(path).map_err(|err| err.to_string())
 }
 
-fn attachment_file(app: &AppHandle, base: &Path, path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn attachment_file(
+    app: &AppHandle,
+    base: &Path,
+    path: &Path,
+) -> Result<PathBuf, String> {
     let actual = base
         .join(path)
         .canonicalize()
@@ -68,20 +72,20 @@ fn attachment_file(app: &AppHandle, base: &Path, path: &Path) -> Result<PathBuf,
     Ok(actual)
 }
 
-fn asset_directory(base: &Path) -> Result<PathBuf, String> {
+fn asset_directory(base: &Path) -> Result<(PathBuf, bool), String> {
     let path = base.join("assets");
-    match fs::create_dir(&path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+    let created = match fs::create_dir(&path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
         Err(err) => return Err(err.to_string()),
-    }
+    };
     if !fs::symlink_metadata(&path)
         .map_err(|err| err.to_string())?
         .is_dir()
     {
         return Err("assets must be a directory beside the document".into());
     }
-    Ok(path)
+    Ok((path, created))
 }
 
 fn extension(path: &Path) -> String {
@@ -99,7 +103,10 @@ fn image_extension(ext: &str) -> bool {
     )
 }
 
-fn copy_with_hash(mut reader: impl Read, mut writer: impl Write) -> Result<String, String> {
+pub(crate) fn copy_with_hash(
+    mut reader: impl Read,
+    mut writer: impl Write,
+) -> Result<String, String> {
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -153,7 +160,7 @@ pub(crate) struct Attachment {
 
 fn import(base: &Path, reader: impl Read, name: &str) -> Result<Attachment, String> {
     let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
-    let assets = asset_directory(base)?;
+    let (assets, _) = asset_directory(base)?;
     let ext = extension(Path::new(name));
     let mut staged = tempfile::NamedTempFile::new_in(&assets).map_err(|err| err.to_string())?;
     let hash = copy_with_hash(reader, &mut staged)?;
@@ -252,8 +259,8 @@ pub(crate) async fn open_relative_attachment(
 
 #[derive(Deserialize)]
 pub(crate) struct Reference {
-    href: String,
-    image: bool,
+    pub(crate) href: String,
+    pub(crate) image: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -265,12 +272,12 @@ pub(crate) struct AssetCopy {
 
 #[derive(Serialize, Default)]
 pub(crate) struct TransferPlan {
-    rewrites: BTreeMap<String, String>,
+    pub(crate) rewrites: BTreeMap<String, String>,
     assets: Vec<AssetCopy>,
-    source_hash: String,
+    pub(crate) source_hash: String,
 }
 
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for part in path.components() {
         match part {
@@ -284,7 +291,7 @@ fn normalize(path: &Path) -> PathBuf {
     result
 }
 
-fn relative_link(base: &Path, target: &Path) -> Result<String, String> {
+pub(crate) fn relative_link(base: &Path, target: &Path) -> Result<String, String> {
     let base: Vec<_> = base.components().collect();
     let target: Vec<_> = target.components().collect();
     let common = base.iter().zip(&target).take_while(|(a, b)| a == b).count();
@@ -309,7 +316,42 @@ fn relative_link(base: &Path, target: &Path) -> Result<String, String> {
     })
 }
 
-fn plan_transfer(
+fn asset_type(ext: &str) -> &str {
+    match ext {
+        "jpeg" => "jpg",
+        _ => ext,
+    }
+}
+
+fn existing_assets(dir: &Path) -> Result<BTreeMap<(String, String), String>, String> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() => return Err("目标 assets 不是普通目录".into()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(err) => return Err(err.to_string()),
+        _ => {}
+    }
+    let mut files = fs::read_dir(dir)
+        .and_then(|entries| entries.collect::<io::Result<Vec<_>>>())
+        .map_err(|err| err.to_string())?;
+    files.sort_by_key(|entry| entry.file_name());
+    let mut hashes = BTreeMap::new();
+    for file in files {
+        let Ok(name) = file.file_name().into_string() else {
+            continue;
+        };
+        if name.starts_with('.') || !file.file_type().map_err(|err| err.to_string())?.is_file() {
+            continue;
+        }
+        let path = file.path();
+        let hash = copy_with_hash(checked_file(&path)?, io::sink())?;
+        hashes
+            .entry((hash, asset_type(&extension(&path)).to_owned()))
+            .or_insert(name);
+    }
+    Ok(hashes)
+}
+
+pub(crate) fn plan_transfer(
     source: &Path,
     destination: &Path,
     refs: Vec<Reference>,
@@ -324,6 +366,8 @@ fn plan_transfer(
     let source_here = from.join(source.file_name().ok_or("missing source name")?);
     let destination_here = to.join(destination.file_name().ok_or("missing destination name")?);
     let mut copies = BTreeSet::new();
+    let asset_dir = to.join("assets");
+    let mut destination_assets = None;
     for reference in refs {
         let Some((relative, suffix)) = relative_href(&reference.href) else {
             continue;
@@ -341,12 +385,22 @@ fn plan_transfer(
             continue;
         }
         let is_asset = reference.image
-            || relative.starts_with("assets")
+            || candidate
+                .strip_prefix(&from)
+                .is_ok_and(|path| path.starts_with("assets"))
             || (!document_name(relative) && candidate.is_file());
         let rewritten = if is_asset {
             let actual = find_attachment(&from, relative)?;
             let hash = copy_with_hash(checked_file(&actual)?, io::sink())?;
-            let name = hash_name(&hash, &extension(relative));
+            let ext = extension(relative);
+            if destination_assets.is_none() {
+                destination_assets = Some(existing_assets(&asset_dir)?);
+            }
+            let index = destination_assets.as_mut().unwrap();
+            let name = index
+                .entry((hash.clone(), asset_type(&ext).to_owned()))
+                .or_insert_with(|| hash_name(&hash, &ext))
+                .clone();
             if copies.insert(name.clone()) {
                 plan.assets.push(AssetCopy {
                     source: relative
@@ -357,7 +411,7 @@ fn plan_transfer(
                     hash,
                 });
             }
-            format!("assets/{name}{suffix}")
+            format!("{}{suffix}", relative_link(&to, &asset_dir.join(name))?)
         } else {
             format!("{}{suffix}", relative_link(&to, &candidate)?)
         };
@@ -395,6 +449,24 @@ fn commit_transfer(
     find_attachment: impl Fn(&Path, &Path) -> Result<PathBuf, String>,
 ) -> Result<(), String> {
     let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+    commit_transfer_locked(
+        source,
+        destination,
+        content,
+        plan,
+        move_original,
+        find_attachment,
+    )
+}
+
+pub(crate) fn commit_transfer_locked(
+    source: &Path,
+    destination: &Path,
+    content: &str,
+    plan: TransferPlan,
+    move_original: bool,
+    find_attachment: impl Fn(&Path, &Path) -> Result<PathBuf, String>,
+) -> Result<(), String> {
     if !document_name(destination) {
         return Err("choose a Markdown destination".into());
     }
@@ -404,20 +476,39 @@ fn commit_transfer(
     let source_parent = parent(source)?;
     let destination_parent = parent(destination)?;
     let mut created = Vec::new();
+    let mut created_assets = None;
     let result = (|| {
         if !plan.assets.is_empty() {
-            let assets = asset_directory(&destination_parent)?;
+            let (assets, new) = asset_directory(&destination_parent)?;
+            if new {
+                created_assets = Some(assets.clone());
+            }
             for copy in plan.assets {
                 let path = Path::new(&copy.source);
-                // The destination can only be a content-addressed file in assets/.
+                let mut name = Path::new(&copy.name).components();
                 if copy.hash.len() != 64
                     || !copy.hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    || copy.name != hash_name(&copy.hash, &extension(path))
+                    || !matches!(
+                        (name.next(), name.next()),
+                        (Some(Component::Normal(_)), None)
+                    )
                     || path.is_absolute()
                 {
                     return Err("invalid attachment transfer".into());
                 }
                 let actual = find_attachment(&source_parent, path)?;
+                let ext = extension(path);
+                let target = assets.join(&copy.name);
+                if copy.name != hash_name(&copy.hash, &ext) {
+                    if !fs::symlink_metadata(&target).is_ok_and(|meta| meta.is_file())
+                        || asset_type(&extension(&target)) != asset_type(&ext)
+                        || copy_with_hash(checked_file(&target)?, io::sink())? != copy.hash
+                        || copy_with_hash(checked_file(&actual)?, io::sink())? != copy.hash
+                    {
+                        return Err("目标附件已变化，请重试移动".into());
+                    }
+                    continue;
+                }
                 let mut staged =
                     tempfile::NamedTempFile::new_in(&assets).map_err(|err| err.to_string())?;
                 if copy_with_hash(checked_file(&actual)?, &mut staged)? != copy.hash {
@@ -425,7 +516,6 @@ fn commit_transfer(
                         "the attachment changed while the document was being transferred".into(),
                     );
                 }
-                let target = assets.join(copy.name);
                 if persist_asset(staged, &target, &copy.hash)? {
                     created.push(target);
                 }
@@ -435,6 +525,14 @@ fn commit_transfer(
             tempfile::NamedTempFile::new_in(&destination_parent).map_err(|err| err.to_string())?;
         staged
             .write_all(content.as_bytes())
+            .map_err(|err| err.to_string())?;
+        staged
+            .as_file()
+            .set_permissions(
+                fs::metadata(source)
+                    .map_err(|err| err.to_string())?
+                    .permissions(),
+            )
             .map_err(|err| err.to_string())?;
         staged.as_file().sync_all().map_err(|err| err.to_string())?;
         staged
@@ -452,6 +550,9 @@ fn commit_transfer(
     if result.is_err() {
         for path in created.into_iter().rev() {
             let _ = fs::remove_file(path);
+        }
+        if let Some(assets) = created_assets {
+            let _ = fs::remove_dir(assets);
         }
     }
     result
@@ -488,54 +589,6 @@ pub(crate) async fn transfer_document(
     .map_err(|err| err.to_string())?
 }
 
-#[derive(Serialize)]
-pub(crate) struct WorkspaceDocument {
-    path: String,
-    name: String,
-}
-
-fn scan_workspace(path: &Path) -> io::Result<Vec<WorkspaceDocument>> {
-    let mut documents = Vec::new();
-    let mut folders = vec![path.to_owned()];
-    while let Some(folder) = folders.pop() {
-        for entry in fs::read_dir(folder)? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            let entry_path = entry.path();
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.') || name.eq_ignore_ascii_case("assets") {
-                continue;
-            }
-            if kind.is_dir() {
-                folders.push(entry_path);
-            } else if kind.is_file() && document_name(&entry_path) {
-                documents.push(WorkspaceDocument {
-                    name: entry_path
-                        .strip_prefix(path)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned(),
-                    path: entry_path.to_string_lossy().into_owned(),
-                });
-            }
-        }
-    }
-    documents.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(documents)
-}
-
-#[tauri::command]
-pub(crate) async fn workspace_documents(
-    app: AppHandle,
-    path: String,
-) -> Result<Vec<WorkspaceDocument>, String> {
-    let path = selected_path(&app, path)?;
-    tokio::task::spawn_blocking(move || scan_workspace(&path).map_err(|err| err.to_string()))
-        .await
-        .map_err(|err| err.to_string())?
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn deduplicates_assets_and_hides_the_directory_from_workspace() {
+    fn deduplicates_imported_assets() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
         let first = import(base, b"one".as_slice(), "foo.PNG").unwrap();
@@ -556,11 +609,6 @@ mod tests {
         assert_eq!(first.href, same.href);
         assert_ne!(first.href, second.href);
         assert!(first.image);
-        fs::write(base.join("Doc.md"), "# Doc").unwrap();
-        fs::write(base.join("assets/hidden.md"), "hidden").unwrap();
-        let names = scan_workspace(base).unwrap();
-        assert_eq!(names.len(), 1);
-        assert_eq!(names[0].name, "Doc.md");
     }
 
     #[test]
@@ -644,5 +692,6 @@ mod tests {
         assert!(from.join(&asset.href).exists());
         assert!(!to.join(&asset.href).exists());
         assert!(!dest.exists());
+        assert!(!to.join("assets").exists());
     }
 }

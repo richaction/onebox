@@ -3,24 +3,30 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { JSONContent, Range } from '@tiptap/core'
 import type { Node } from '@tiptap/pm/model'
-import { createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { relativeReferences, rewriteAttachmentLinks } from './core/attachmentLinks'
 import type { EditorHandle } from './core/editor'
 import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
-import { desktopAttachments, desktopDocuments, tauriFileSystem, type Attachment, type WorkspaceDocument } from './io/tauri'
+import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
+import WorkspaceSidebar from './ui/WorkspaceSidebar'
 
 const SAMPLE = '# onebox\n'
 const SAVE_DEBOUNCE_MS = 800
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
 
-type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败'
+type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '移动失败' | '移动已完成，请重新打开文档'
 type Transfer = 'saveAs' | 'copy' | 'move'
 
 function nameOf(path: string) {
-  return path.split(/[/\\]/u).at(-1) ?? path
+  return path.split(path.startsWith('/') ? '/' : '\\').at(-1) ?? path
+}
+
+function inWorkspace(path: string, root: string) {
+  const sep = root.startsWith('/') ? '/' : '\\'
+  return path.startsWith(root.endsWith(sep) ? root : root + sep)
 }
 
 function setEditable(handle: EditorHandle, editable: boolean) {
@@ -41,8 +47,10 @@ export default function App() {
   const [readonly, setReadonly] = createSignal(false)
   const [loading, setLoading] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
-  const [workspace, setWorkspace] = createSignal<string>()
-  const [documents, setDocuments] = createSignal<WorkspaceDocument[]>([])
+  const [workspace, setWorkspace] = createSignal<{ root: string; entries: WorkspaceEntry[] }>()
+  const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
+  const [workspaceReveal, setWorkspaceReveal] = createSignal<string>()
+  const [workspaceMoving, setWorkspaceMoving] = createSignal(false)
   const [failure, setFailure] = createSignal<Failure>()
 
   const clearSaveTimer = () => {
@@ -163,20 +171,56 @@ export default function App() {
     return readDocument(editor, picked)
   }, '打开失败')
 
-  const refreshWorkspace = async () => {
-    const root = workspace()
-    if (root) setDocuments(await desktopAttachments.list(root))
-  }
+  const refreshWorkspace = () => setWorkspaceRevision((version) => version + 1)
 
   const openWorkspace = () => runFileAction(async () => {
     const picked = await open({ directory: true, recursive: true, multiple: false })
     if (typeof picked !== 'string') return true
-    const files = await desktopAttachments.list(picked)
-    setWorkspace(picked)
-    setDocuments(files)
+    const entries = await desktopWorkspace.entries(picked, picked)
+    setWorkspaceReveal(undefined)
+    setWorkspace({ root: picked, entries })
     setFailure(undefined)
     return true
   }, '读取工作区失败')
+
+  const relocateWorkspaceEntry = async (editor: EditorHandle, root: string, source: string, target: string, name?: string) => {
+    setWorkspaceMoving(true)
+    try {
+      if (!await flush()) throw new Error('当前文档保存失败')
+      const result = await desktopWorkspace.move(root, source, target, path(), name)
+      setWorkspaceReveal(result.destination)
+      refreshWorkspace()
+      if (result.activeDocument) {
+        setPath(result.activeDocument)
+        try {
+          if (!await readDocument(editor, result.activeDocument)) throw new Error('Load cancelled')
+        } catch {
+          setReadonly(true)
+          setFailure('移动已完成，请重新打开文档')
+          return
+        }
+      }
+      setFailure(undefined)
+    } finally {
+      setWorkspaceMoving(false)
+    }
+  }
+
+  const moveWorkspaceEntry = async (entry: WorkspaceEntry, target: string) => {
+    const current = workspace()
+    if (!current || busy) throw new Error('请等待当前文件操作完成')
+    let cause: unknown
+    const moved = await runFileAction(async (editor) => {
+      try {
+        await relocateWorkspaceEntry(editor, current.root, entry.path, target)
+        return true
+      } catch (err) {
+        cause = err
+        return false
+      }
+    }, '移动失败')
+    if (!moved) throw cause ?? new Error('移动失败')
+  }
 
   const transferDocument = (mode: Transfer) => runFileAction(async (editor) => {
     if (readonly()) return true
@@ -188,6 +232,15 @@ export default function App() {
       filters: MARKDOWN_FILTERS,
     })
     if (typeof picked !== 'string') return true
+
+    const root = workspace()?.root
+    if (mode === 'move' && source && root && inWorkspace(source, root) && inWorkspace(picked, root)) {
+      if (source === picked) return true
+      const name = nameOf(picked)
+      const folder = picked.slice(0, -name.length)
+      await relocateWorkspaceEntry(editor, root, source, folder, name)
+      return true
+    }
 
     if (mode === 'move' && !await flush()) return false
     if (!source || source === picked) {
@@ -212,7 +265,7 @@ export default function App() {
       }
       setFailure(undefined)
     }
-    void refreshWorkspace().catch(() => setFailure('读取工作区失败'))
+    refreshWorkspace()
     return true
   }, '保存失败')
 
@@ -221,7 +274,7 @@ export default function App() {
     const selected = await save({ defaultPath: 'Untitled.md', filters: MARKDOWN_FILTERS })
     if (typeof selected !== 'string' || !await writeDocument(selected, editor.editor.state.doc)) return null
     setPath(selected)
-    void refreshWorkspace().catch(() => setFailure('读取工作区失败'))
+    refreshWorkspace()
     return selected
   }
 
@@ -349,25 +402,15 @@ export default function App() {
         </header>
       </Show>
       <div class="editor-layout">
-        <Show when={workspace()}>
-          <aside class="workspace" aria-label="工作区文档">
-            <div class="workspace-title">
-              <strong>{nameOf(workspace()!)}</strong>
-              <button type="button" aria-label="关闭工作区" onClick={() => setWorkspace(undefined)}>×</button>
-            </div>
-            <nav>
-              <For each={documents()} fallback={<span class="workspace-empty">没有 Markdown 文档</span>}>
-                {(file) => (
-                  <button
-                    type="button"
-                    title={file.name}
-                    aria-current={path() === file.path ? 'page' : undefined}
-                    onClick={() => void runFileAction((editor) => readDocument(editor, file.path), '打开失败')}
-                  >{file.name}</button>
-                )}
-              </For>
-            </nav>
-          </aside>
+        <Show when={workspace()} keyed>
+          {(current) => (
+            <WorkspaceSidebar
+              root={current.root} entries={current.entries}
+              active={path()} reveal={workspaceReveal()} revision={workspaceRevision()}
+              onOpen={(file) => { void runFileAction((editor) => readDocument(editor, file), '打开失败') }}
+              onMove={moveWorkspaceEntry} onClose={() => setWorkspace(undefined)}
+            />
+          )}
         </Show>
         <EditorShell
           markdown={SAMPLE}
@@ -388,7 +431,7 @@ export default function App() {
       </div>
       <footer class="statusbar" role="status">
         <span title={path() ?? undefined}>{path() ? nameOf(path()!) : '未打开'}</span>
-        <span>{loading() ? '正在载入' : saving() ? '正在保存' : readonly() ? '只读' : ''}</span>
+        <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : readonly() ? '只读' : ''}</span>
         <span>{failure()}</span>
       </footer>
     </main>

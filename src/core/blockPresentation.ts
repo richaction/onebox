@@ -1,8 +1,14 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import type { EditorView } from '@tiptap/pm/view'
-import { codeLanguage } from './codeLanguages'
+import { codeLanguage, codeLanguageIds } from './codeLanguages'
 import type { createCodeHighlight } from './codeHighlight'
 import type { PresentBlock } from './viewport/blockNodeView'
+
+const selectableLanguages = [...codeLanguageIds, 'html', 'c']
+  .map((id) => ({ id, label: codeLanguage(id).label }))
+  .sort((a, b) => a.label.localeCompare(b.label, 'en'))
+const languageChoices = [{ id: '', label: '纯文本' }, ...selectableLanguages]
+const selectableIds = new Set(selectableLanguages.map(({ id }) => id))
 
 export function keepTableCaretVisible(view: EditorView) {
   const { $head } = view.state.selection
@@ -26,9 +32,10 @@ export function keepTableCaretVisible(view: EditorView) {
   }
 }
 
-export function createBlockPresentation(highlight: ReturnType<typeof createCodeHighlight>): PresentBlock {
+export function createBlockPresentation(highlight: ReturnType<typeof createCodeHighlight>) {
   const wraps = new WeakMap<ProseMirrorNode, boolean>()
-  return (node, rendered) => {
+  const languageSelects = new Set<HTMLSelectElement>()
+  const present: PresentBlock = (node, rendered, view, getPos) => {
     const { dom, contentDOM } = rendered
     const document = dom.ownerDocument
 
@@ -95,16 +102,39 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
 
     const frame = document.createElement('div')
     frame.className = 'code-frame'
-    const language = codeLanguage(node.attrs.language)
+    const info: string = node.attrs.language?.trim() ?? ''
+    const language = codeLanguage(info)
     frame.dataset.language = language.id ?? 'plain'
+    contentDOM.setAttribute('spellcheck', 'false')
 
     const toolbar = document.createElement('div')
     toolbar.className = 'code-toolbar'
     toolbar.contentEditable = 'false'
-    const label = document.createElement('span')
-    label.className = 'code-language'
-    label.textContent = language.label
-    if (node.attrs.language) label.title = node.attrs.language
+    const picker = document.createElement('div')
+    picker.className = 'code-language-picker'
+    const select = document.createElement('select')
+    select.className = 'code-language'
+    select.setAttribute('aria-label', '代码语言')
+    select.disabled = !view.editable
+    if (info) select.title = info
+    for (const { id, label } of languageChoices) {
+      const option = document.createElement('option')
+      option.value = id
+      option.textContent = label
+      select.append(option)
+    }
+    const lowerName = language.name.toLowerCase()
+    const selected = selectableIds.has(lowerName) ? lowerName
+      : language.id ?? (language.plain ? '' : language.name)
+    if (selected && !selectableIds.has(selected)) {
+      const option = document.createElement('option')
+      option.value = selected
+      option.textContent = language.label
+      select.append(option)
+    }
+    select.value = selected
+    picker.append(select)
+    languageSelects.add(select)
 
     const actions = document.createElement('div')
     actions.className = 'code-actions'
@@ -117,13 +147,32 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     copy.textContent = '复制'
     copy.hidden = !document.defaultView?.navigator.clipboard?.writeText
     actions.append(wrap, copy)
-    toolbar.append(label, actions)
+    toolbar.append(picker, actions)
     frame.append(toolbar, dom)
 
     let current = node
     let wrapped = wraps.get(node) ?? false
     let copyStatus: ReturnType<typeof setTimeout> | undefined
     let disposed = false
+    select.onchange = () => {
+      if (select.value === selected) return
+      const pos = getPos()
+      if (!view.editable || pos === undefined || view.state.doc.nodeAt(pos) !== current) {
+        select.value = selected
+        return
+      }
+      // Fence info may contain attributes after the language. Keep them when switching syntax.
+      const suffix = info.slice(language.name.length)
+      const nextInfo = (select.value || (suffix ? 'text' : '')) + suffix
+      const focused = document.activeElement === select
+      const tr = view.state.tr.setNodeAttribute(pos, 'language', nextInfo || null)
+      if (wrapped) wraps.set(tr.doc.nodeAt(pos)!, wrapped)
+      view.dispatch(tr)
+      if (focused) {
+        const block = view.nodeDOM(pos) as HTMLElement | null
+        block?.querySelector<HTMLSelectElement>('.code-language')?.focus({ preventScroll: true })
+      }
+    }
     const showWrap = () => {
       frame.toggleAttribute('data-wrap', wrapped)
       wrap.setAttribute('aria-pressed', String(wrapped))
@@ -160,9 +209,16 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       stopEvent: (event) => toolbar.contains(event.target as Node | null),
       destroy() {
         disposed = true
+        languageSelects.delete(select)
         clearTimeout(copyStatus)
         syntax?.destroy()
       },
     }
+  }
+  return {
+    present,
+    setEditable(editable: boolean) {
+      for (const select of languageSelects) select.disabled = !editable
+    },
   }
 }

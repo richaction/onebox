@@ -33,9 +33,19 @@ interface TransferPlan {
   source_hash: string
 }
 
-export interface WorkspaceDocument {
+export interface WorkspaceEntry {
   path: string
   name: string
+  directory: boolean
+}
+
+export const desktopWorkspace = {
+  entries: (root: string, folder: string) =>
+    invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),
+  move: (root: string, source: string, target: string, activeDocument: string | null, name?: string) =>
+    invoke<{ destination: string; activeDocument: string | null }>('move_workspace_entry', {
+      root, source, target, activeDocument, name,
+    }),
 }
 
 const imageMimes: Readonly<Record<string, string>> = {
@@ -76,5 +86,4 @@ export const desktopAttachments = {
     invoke<void>('transfer_document', {
       source, destination, content, sourceHash: plan.source_hash, assets: plan.assets, moveOriginal,
     }),
-  list: (path: string) => invoke<WorkspaceDocument[]>('workspace_documents', { path }),
 }

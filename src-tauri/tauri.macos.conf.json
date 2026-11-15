@@ -1,0 +1,9 @@
+{
+  "app": {
+    "trayIcon": {
+      "iconPath": "icons/onebox-menubar.png",
+      "iconAsTemplate": true,
+      "tooltip": "Onebox"
+    }
+  }
+}

@@ -45,7 +45,7 @@ export function createEditor(opts: {
 }): EditorHandle {
   const heights = new HeightCache()
   const highlight = createCodeHighlight(opts.scrollRoot)
-  const present = createBlockPresentation(highlight)
+  const presentation = createBlockPresentation(highlight)
   const viewportMetrics = import.meta.env.DEV
     ? { created: 0, destroyed: 0, transactions: 0, lastTransactionMs: 0, maxTransactionMs: 0 }
     : undefined
@@ -57,7 +57,19 @@ export function createEditor(opts: {
       // Tiptap 在创建 EditorView 时会覆盖 editorProps.nodeViews。
       return [
         createVisibilityPlugin(),
-        new Plugin({ props: { nodeViews: blockNodeViews(heights, () => observer, present) } }),
+        new Plugin({
+          props: { nodeViews: blockNodeViews(heights, () => observer, presentation.present) },
+          view(view) {
+            let editable = view.editable
+            return {
+              update(view) {
+                if (view.editable === editable) return
+                editable = view.editable
+                presentation.setEditable(editable)
+              },
+            }
+          },
+        }),
       ]
     },
   })
@@ -117,7 +129,10 @@ export function createEditor(opts: {
     ],
     content: parseMarkdown(opts.markdown, schema).toJSON(),
     editorProps: {
-      attributes: { 'aria-label': 'Markdown 编辑器', 'aria-multiline': 'true', role: 'textbox' },
+      attributes: {
+        'aria-label': 'Markdown 编辑器', 'aria-multiline': 'true', role: 'textbox',
+        autocorrect: 'off', autocapitalize: 'none',
+      },
       clipboardTextSerializer: (slice, view) =>
         serializeMarkdown(view.state.schema.topNodeType.create(null, slice.content)),
       handleKeyDown: opts.handleKeyDown,

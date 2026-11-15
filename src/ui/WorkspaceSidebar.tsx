@@ -1,0 +1,335 @@
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
+import { createStore, reconcile } from 'solid-js/store'
+import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
+
+interface Directory {
+  entries?: WorkspaceEntry[]
+  loading: boolean
+  error?: string
+}
+
+function separator(path: string) {
+  return path.startsWith('/') ? '/' : '\\'
+}
+
+function childOf(path: string, parent: string, includeSelf = false) {
+  const sep = separator(parent)
+  return (includeSelf && path === parent) || path.startsWith(parent.endsWith(sep) ? parent : parent + sep)
+}
+
+function ancestors(root: string, path: string) {
+  if (!childOf(path, root) || path === root) return []
+  const sep = separator(root)
+  let folder = root.endsWith(sep) ? root.slice(0, -1) : root
+  return path.slice(folder.length + 1).split(sep).slice(0, -1).map((part) => folder += sep + part)
+}
+
+const nameOf = (path: string) => path.split(/[/\\]/u).filter(Boolean).at(-1) ?? path
+
+export default function WorkspaceSidebar(props: {
+  root: string
+  entries: WorkspaceEntry[]
+  active: string | null
+  reveal?: string
+  revision: number
+  onOpen: (path: string) => void
+  onMove: (entry: WorkspaceEntry, target: string) => Promise<void>
+  onClose: () => void
+}) {
+  const root = props.root
+  const [directories, setDirectory] = createStore<Record<string, Directory>>({
+    [root]: { entries: props.entries, loading: false },
+  })
+  const [expanded, setExpanded] = createSignal(new Set<string>())
+  const [dragged, setDragged] = createSignal<WorkspaceEntry>()
+  const [dropTarget, setDropTarget] = createSignal<string>()
+  const [moving, setMoving] = createSignal(false)
+  const [error, setError] = createSignal<string>()
+  const [moveEntry, setMoveEntry] = createSignal<WorkspaceEntry>()
+  const [targetFolder, setTargetFolder] = createSignal(root)
+  let tree!: HTMLElement
+  let disposed = false
+  onCleanup(() => { disposed = true })
+
+  const requests = new Map<string, number>()
+  const load = async (path: string, refresh = false) => {
+    const state = directories[path]
+    if (!refresh && (state?.loading || state?.entries)) return
+    const generation = (requests.get(path) ?? 0) + 1
+    requests.set(path, generation)
+    setDirectory(path, { entries: state?.entries, loading: true, error: undefined })
+    try {
+      const entries = await desktopWorkspace.entries(root, path)
+      if (disposed || requests.get(path) !== generation) return
+      setDirectory(path, 'entries', reconcile(entries, { key: 'path' }))
+      setDirectory(path, 'loading', false)
+    } catch {
+      if (disposed || requests.get(path) !== generation) return
+      setDirectory(path, 'loading', false)
+      setDirectory(path, 'error', '目录读取失败')
+    }
+  }
+
+  createEffect(on(() => props.revision, () => {
+    void load(root, true)
+    for (const path of expanded()) {
+      if (ancestors(root, path).every((parent) => expanded().has(parent))) void load(path, true)
+    }
+  }, { defer: true }))
+
+  createEffect(on(() => [props.active, props.reveal], (paths) => {
+    const folders = new Set(paths.flatMap((path) => path ? ancestors(root, path) : []))
+    if (!folders.size) return
+    setExpanded((open) => new Set([...open, ...folders]))
+    for (const folder of folders) void load(folder)
+  }))
+
+  const toggle = (path: string) => {
+    const opened = new Set(expanded())
+    if (!opened.delete(path)) {
+      opened.add(path)
+      void load(path)
+    }
+    setExpanded(opened)
+  }
+
+  const canMoveTo = (entry: WorkspaceEntry, target: string) => {
+    const sep = separator(entry.path)
+    const parent = entry.path.slice(0, entry.path.lastIndexOf(sep))
+    const destination = target.endsWith(sep) ? target.slice(0, -1) : target
+    return destination !== parent && (!entry.directory || !childOf(target, entry.path, true))
+  }
+
+  const beginMove = (entry: WorkspaceEntry) => {
+    if (moving()) return
+    setError(undefined)
+    setTargetFolder(root)
+    setMoveEntry(entry)
+  }
+
+  const move = async (entry: WorkspaceEntry, target: string) => {
+    if (moving() || !canMoveTo(entry, target)) return
+    setMoving(true)
+    setError(undefined)
+    try {
+      await props.onMove(entry, target)
+      // Loaded paths inside a moved folder refer to the old location.
+      if (entry.directory) {
+        const keep = [...expanded()].filter((path) => !childOf(path, entry.path, true))
+        setExpanded(new Set(keep))
+        for (const path of Object.keys(directories)) {
+          if (childOf(path, entry.path, true)) {
+            requests.delete(path)
+            setDirectory(path, undefined!)
+          }
+        }
+      }
+      setMoveEntry(undefined)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setMoving(false)
+    }
+  }
+
+  let press: { pointer: number; x: number; y: number; entry: WorkspaceEntry } | undefined
+  let openTimer: ReturnType<typeof setTimeout> | undefined
+  let clickTimer: ReturnType<typeof setTimeout> | undefined
+  let suppressClick = false
+
+  const clearDrag = () => {
+    press = undefined
+    clearTimeout(openTimer)
+    setDragged(undefined)
+    setDropTarget(undefined)
+  }
+
+  const pressRow = (event: PointerEvent, entry: WorkspaceEntry) => {
+    if (moving() || event.button !== 0 || event.pointerType === 'touch') return
+    if ((event.target as Element).closest('.workspace-row-action')) return
+    press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, entry }
+  }
+
+  const folderAt = (event: PointerEvent, entry: WorkspaceEntry) => {
+    const hovered = document.elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>('[data-workspace-folder]')
+    const folder = hovered && tree.contains(hovered) ? hovered.dataset.workspaceFolder : undefined
+    return folder && canMoveTo(entry, folder) ? folder : undefined
+  }
+
+  const movePointer = (event: PointerEvent) => {
+    if (!press || press.pointer !== event.pointerId) return
+    if (!(event.buttons & 1)) {
+      clearDrag()
+      return
+    }
+    if (!dragged()) {
+      if (Math.hypot(event.clientX - press.x, event.clientY - press.y) < 6) return
+      setDragged(press.entry)
+      setError(undefined)
+    }
+    const target = folderAt(event, press.entry)
+    if (target === dropTarget()) return
+    setDropTarget(target)
+    clearTimeout(openTimer)
+    if (target && target !== root && !expanded().has(target)) {
+      openTimer = setTimeout(() => { if (!expanded().has(target)) toggle(target) }, 550)
+    }
+  }
+
+  const releasePointer = (event: PointerEvent) => {
+    if (!press || press.pointer !== event.pointerId) return
+    const source = dragged()
+    const target = source && folderAt(event, source)
+    clearDrag()
+    if (!source) return
+    suppressClick = true
+    clickTimer = setTimeout(() => { suppressClick = false }, 0)
+    if (target) void move(source, target)
+  }
+
+  onMount(() => {
+    const preventDropClick = (event: MouseEvent) => {
+      if (suppressClick && event.detail > 0) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    const cancelDrag = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && press) clearDrag()
+    }
+    window.addEventListener('pointermove', movePointer)
+    window.addEventListener('pointerup', releasePointer)
+    window.addEventListener('pointercancel', clearDrag)
+    window.addEventListener('blur', clearDrag)
+    window.addEventListener('click', preventDropClick, true)
+    window.addEventListener('keydown', cancelDrag)
+    onCleanup(() => {
+      clearTimeout(openTimer)
+      clearTimeout(clickTimer)
+      window.removeEventListener('pointermove', movePointer)
+      window.removeEventListener('pointerup', releasePointer)
+      window.removeEventListener('pointercancel', clearDrag)
+      window.removeEventListener('blur', clearDrag)
+      window.removeEventListener('click', preventDropClick, true)
+      window.removeEventListener('keydown', cancelDrag)
+    })
+  })
+
+  const DirectoryStatus = (state: { path: string; empty: string }) => (
+    <Show when={directories[state.path]?.error} fallback={
+      <span class="workspace-empty">{directories[state.path]?.loading ? '读取中…' : state.empty}</span>
+    }>
+      <button type="button" class="workspace-empty" onClick={() => void load(state.path, true)}>读取失败，重试</button>
+    </Show>
+  )
+
+  const Rows = (rows: { path: string }) => (
+    <ul class="workspace-rows">
+      <For each={directories[rows.path]?.entries} fallback={<li><DirectoryStatus path={rows.path} empty="空文件夹" /></li>}>
+        {(entry) => (
+          <li>
+            <div
+              class="workspace-row"
+              classList={{ 'workspace-drop-target': dropTarget() === entry.path, 'workspace-dragged': dragged()?.path === entry.path }}
+              data-workspace-folder={entry.directory ? entry.path : undefined}
+              onPointerDown={(event) => pressRow(event, entry)}
+              onContextMenu={(event) => { event.preventDefault(); beginMove(entry) }}
+            >
+              <button
+                type="button"
+                class="workspace-row-button"
+                title={entry.name}
+                aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
+                aria-current={!entry.directory && props.active === entry.path ? 'page' : undefined}
+                onClick={() => { if (entry.directory) toggle(entry.path); else props.onOpen(entry.path) }}
+              >
+                <span classList={{ 'workspace-chevron': true, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true">
+                  {entry.directory ? '›' : ''}
+                </span>
+                <span classList={{ 'workspace-entry-icon': true, 'is-folder': entry.directory }} aria-hidden="true" />
+                <span class="workspace-entry-name">{entry.name}</span>
+              </button>
+              <button
+                type="button" class="workspace-row-action" title="移动到"
+                aria-label={`移动 ${entry.name}`} onClick={() => beginMove(entry)}
+              >…</button>
+            </div>
+            <Show when={entry.directory && expanded().has(entry.path)}>
+              <Rows path={entry.path} />
+            </Show>
+          </li>
+        )}
+      </For>
+    </ul>
+  )
+
+  const MoveDialog = (dialogProps: { entry: WorkspaceEntry }) => {
+    let dialog!: HTMLDialogElement
+    onMount(() => dialog.showModal())
+    const navigate = (path: string) => {
+      setTargetFolder(path)
+      void load(path)
+    }
+    const breadcrumbs = () => {
+      const target = targetFolder()
+      return target === root ? [root] : [root, ...ancestors(root, target), target]
+    }
+    return (
+      <dialog
+        class="workspace-move-dialog" ref={dialog} aria-label="移动到文件夹"
+        onCancel={(event) => { event.preventDefault(); if (!moving()) setMoveEntry(undefined) }}
+      >
+        <header>
+          <strong>移动到</strong>
+          <span title={dialogProps.entry.name}>{dialogProps.entry.name}</span>
+        </header>
+        <nav class="workspace-breadcrumbs" aria-label="目标路径">
+          <For each={breadcrumbs()}>{(folder) => (
+            <button type="button" disabled={moving()} aria-current={folder === targetFolder() ? 'location' : undefined}
+              onClick={() => navigate(folder)}>{nameOf(folder)}</button>
+          )}</For>
+        </nav>
+        <div class="workspace-destinations">
+          <For each={directories[targetFolder()]?.entries?.filter((entry) =>
+            entry.directory && (!dialogProps.entry.directory || !childOf(entry.path, dialogProps.entry.path, true)))}
+            fallback={<DirectoryStatus path={targetFolder()} empty="没有子文件夹" />}>
+            {(folder) => (
+              <button type="button" disabled={moving()} onClick={() => navigate(folder.path)}>
+                <span class="workspace-entry-icon is-folder" aria-hidden="true" />
+                {folder.name}
+                <span aria-hidden="true">›</span>
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={error()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
+        <footer>
+          <button type="button" disabled={moving()} onClick={() => setMoveEntry(undefined)}>取消</button>
+          <button type="button" class="workspace-confirm"
+            disabled={moving() || !directories[targetFolder()]?.entries || !canMoveTo(dialogProps.entry, targetFolder())}
+            onClick={() => void move(dialogProps.entry, targetFolder())}>{moving() ? '正在移动…' : '移到此处'}</button>
+        </footer>
+      </dialog>
+    )
+  }
+
+  return (
+    <aside class="workspace" aria-label="工作区文件" ref={tree}>
+      <div
+        class="workspace-title" classList={{ 'workspace-drop-target': dropTarget() === root }}
+        data-workspace-folder={root}
+      >
+        <strong title={root}>{nameOf(root)}</strong>
+        <button type="button" aria-label="刷新工作区" disabled={moving()} onClick={() => {
+          void load(root, true)
+          for (const path of expanded()) void load(path, true)
+        }}>↻</button>
+        <button type="button" aria-label="关闭工作区" disabled={moving()} onClick={props.onClose}>×</button>
+      </div>
+      <nav class="workspace-tree" aria-label="文件目录"><Rows path={root} /></nav>
+      <Show when={error() && !moveEntry()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
+      <Show when={moveEntry()} keyed>{(entry) => <MoveDialog entry={entry} />}</Show>
+    </aside>
+  )
+}

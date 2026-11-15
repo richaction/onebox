@@ -1,6 +1,11 @@
 mod attachments;
 mod fs;
 mod markdown;
+mod workspace;
+mod workspace_links;
+
+#[cfg(target_os = "macos")]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::{
@@ -49,7 +54,8 @@ pub fn run() {
             attachments::open_relative_attachment,
             attachments::plan_document_transfer,
             attachments::transfer_document,
-            attachments::workspace_documents
+            workspace::workspace_entries,
+            workspace::move_workspace_entry
         ]);
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -57,6 +63,22 @@ pub fn run() {
         if event.id() == QUIT {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.close();
+            }
+        }
+    });
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_tray_icon_event(|app, event| {
+        if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } = event
+        {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
             }
         }
     });
