@@ -90,6 +90,10 @@ export function createBlockNodeView(
       // toDOM 的产物带 attrs（h2 的级别、code 的 language-*）。PM 不会重新应用
       // toDOM，markup 变了必须返回 false 让它重建，否则级别 2→3 仍留在 <h2>。
       if (!nextNode.sameMarkup(current)) return false
+      if (visible && current !== nextNode) {
+        const height = heights.get(current)
+        if (height !== undefined) heights.set(nextNode, height)
+      }
       current = nextNode
       // 隐藏块的内容也会被 transaction 改到（撤销、跨块替换），占位高度须跟着重算
       if (!visible) dom.style.height = `${placeholderHeight(current)}px`

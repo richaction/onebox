@@ -5,6 +5,11 @@ const CHARS_PER_LINE = 80
 const MIN_HEIGHT = 28
 
 export function estimateHeight(block: Node): number {
+  if (block.type.name === 'viewportGroup') {
+    let height = 16
+    block.forEach((child) => { height += estimateHeight(child) + 12 })
+    return height
+  }
   const text = block.textContent
   // 显式换行、自动折行、嵌套文本块数三者取最大：
   // 只看字符数会把 10 行短代码块估成 1 行；而 textContent 不在子块间插分隔符，

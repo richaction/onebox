@@ -19,23 +19,42 @@ export function blockPosOf(view: EditorView, el: Element): number {
 export function createViewportObserver(
   view: EditorView,
   root: HTMLElement,
-  rootMargin = '200px',
+  rootMargin = 200,
   metrics?: ViewportMetrics,
 ): ViewportObserver {
-  const states = new Map<Element, boolean>()
+  const blocks = view.dom.getElementsByClassName('onebox-block')
   let raf = 0
+  let disconnected = false
+  const schedule = () => {
+    if (!disconnected && !raf) raf = requestAnimationFrame(flush)
+  }
 
   const flush = () => {
     raf = 0
     // IME 组合中销毁块会丢字：推迟到 composition 结束
     if (view.composing) {
-      raf = requestAnimationFrame(flush)
+      schedule()
       return
     }
+    if (!root.isConnected) return
+    const viewport = root.getBoundingClientRect()
+    const top = viewport.top - rootMargin
+    const bottom = viewport.bottom + rootMargin
+
+    // The editor stacks block wrappers vertically. Search their live DOM order
+    // instead of registering an intersection target for every placeholder.
+    let first = 0
+    let end = blocks.length
+    while (first < end) {
+      const middle = (first + end) >>> 1
+      if (blocks[middle].getBoundingClientRect().bottom < top) first = middle + 1
+      else end = middle
+    }
     const next = new Set<number>()
-    for (const [el, intersecting] of states) {
-      if (!intersecting || !el.isConnected) continue
-      next.add(blockPosOf(view, el))
+    for (let index = first; index < blocks.length; index++) {
+      const block = blocks[index]
+      if (block.getBoundingClientRect().top > bottom) break
+      next.add(blockPosOf(view, block))
     }
     // 与 plugin 的【权威】可见集比较，不自存一份 prev。plugin 会在每个 docChanged
     // transaction 里自行 map+filter，私有副本必然与它漂移：一旦 DOM 算出的 next
@@ -57,32 +76,26 @@ export function createViewportObserver(
     }
   }
 
-  const io = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (states.has(entry.target)) states.set(entry.target, entry.isIntersecting)
-      }
-      if (!raf) raf = requestAnimationFrame(flush)
-    },
-    { root, rootMargin },
-  )
+  const resize = new ResizeObserver(schedule)
+  resize.observe(root)
+  resize.observe(view.dom)
+  root.addEventListener('scroll', schedule, { passive: true })
 
   return {
-    observe(el) {
-      if (metrics && !states.has(el)) metrics.created++
-      states.set(el, false)
-      io.observe(el)
+    observe() {
+      if (metrics) metrics.created++
+      schedule()
     },
-    unobserve(el) {
-      const removed = states.delete(el)
-      if (metrics && removed) metrics.destroyed++
-      io.unobserve(el)
+    unobserve() {
+      if (metrics) metrics.destroyed++
+      schedule()
     },
     disconnect() {
+      disconnected = true
       if (raf) cancelAnimationFrame(raf)
       raf = 0
-      io.disconnect()
-      states.clear()
+      resize.disconnect()
+      root.removeEventListener('scroll', schedule)
     },
   }
 }

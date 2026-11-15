@@ -1,4 +1,6 @@
+mod attachments;
 mod fs;
+mod markdown;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::{
@@ -32,9 +34,23 @@ fn editor_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .manage(std::sync::Mutex::new(markdown::PendingDocument::default()))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![fs::read_text, fs::write_text]);
+        .invoke_handler(tauri::generate_handler![
+            fs::read_text,
+            fs::write_text,
+            markdown::open_document,
+            markdown::document_batch,
+            markdown::release_document,
+            attachments::import_attachment,
+            attachments::import_inline_attachment,
+            attachments::read_image,
+            attachments::open_relative_attachment,
+            attachments::plan_document_transfer,
+            attachments::transfer_document,
+            attachments::workspace_documents
+        ]);
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let builder = builder.menu(editor_menu).on_menu_event(|app, event| {
