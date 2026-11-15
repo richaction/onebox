@@ -84,7 +84,7 @@ ui/EditorShell —— Solid 外壳：滚动容器、状态栏
 
 nodeView 向 ProseMirror 交出 `contentDOM` 后，**ProseMirror 自己渲染块内容并接管输入**。因此不需要嵌套 Tiptap 实例，也不需要在多个 EditorState 之间同步。方案 §3.1 第 5 层「每个可视区内的顶层块独立挂载小型 Tiptap 编辑器实例」由「每块一个 nodeView + PM 原生渲染」替代。
 
-Tiptap 仍保留：它提供 schema 装配、命令 API 与扩展生态（StarterKit 已覆盖第一阶段所需全部节点）。nodeView 通过 `editorProps.nodeViews` 注册，这是 Tiptap 透传给 EditorView 的原生 ProseMirror 接口，不需要 Solid 绑定层。Solid 只负责外壳，用 `onMount` 挂载编辑器、`onCleanup` 销毁。
+Tiptap 提供 schema 装配、命令 API 与扩展生态，StarterKit 覆盖了第一阶段所需节点。Tiptap 构造 EditorView 时会以扩展的 nodeViews 覆盖 `editorProps.nodeViews`，因此通过 ProseMirror 插件的 `props.nodeViews` 注册。Solid 用 `onMount` 挂载编辑器、`onCleanup` 销毁。
 
 ### 4.3 为什么不用 TanStack Virtual
 
@@ -218,9 +218,9 @@ export const visibilityKey: PluginKey<{ visible: ReadonlySet<number> }>
 export function createVisibilityPlugin(): Plugin
 ```
 
-plugin state 是可见块的起始位置集合，通过 `tr.setMeta(visibilityKey, { visible })` 更新。`props.decorations` 为每个顶层块生成 `Decoration.node`，属性携带 `data-visible="true" | "false"`。
+plugin state 是可见块的起始位置集合，通过 `tr.setMeta(visibilityKey, { visible })` 更新。`props.decorations` 只为可见及选区内的顶层块生成 `Decoration.node`。占位块自身带 `data-visible="false"`。添加或移除可见装饰都会触发 nodeView 更新。
 
-**装饰集必须按可见集合 memoize。** 每次 transaction 都重建 2 万条 node decoration 是 O(n) 开销；可见集合未变时直接复用上一份 `DecorationSet`。
+文档、可见集合和选区所覆盖的块均未变时，复用上一份 `DecorationSet`。早期实现为离屏块也创建装饰，百万字语料下单次可见性事务峰值约为 1,265 ms。缩减装饰数量后，实测峰值为 10.2 ms。
 
 **可见集合是唯一真相来源**，nodeView 通过 `visibilityKey.getState(view.state)` 读取，不另设外部注册表。
 

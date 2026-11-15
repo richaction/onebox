@@ -42,3 +42,23 @@ body {
 .onebox-block-content {
   min-height: 1.5em;
 }
+
+.statusbar {
+  display: flex;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.statusbar span:first-child {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar span:empty {
+  display: none;
+}

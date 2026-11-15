@@ -8,19 +8,28 @@ export interface VisibilityState {
 
 export const visibilityKey = new PluginKey<VisibilityState>('onebox-visibility')
 
-export function forcedVisiblePositions(state: EditorState): Set<number> {
+const forcedByState = new WeakMap<EditorState, ReadonlySet<number>>()
+
+export function forcedVisiblePositions(state: EditorState): ReadonlySet<number> {
+  const cached = forcedByState.get(state)
+  if (cached) return cached
+
   const forced = new Set<number>()
   const { from, to } = state.selection
   // 范围选区必须覆盖途经的每一个顶层块，只取两端会漏掉中间块；
   // AllSelection（Cmd+A）的 from=0 / to=content.size 更是只命中首块。
   state.doc.nodesBetween(from, to, (node, pos, parent) => {
-    if (parent === state.doc) forced.add(pos)
+    if (parent === state.doc) {
+      forced.add(pos)
+      return false
+    }
   })
   // 折叠选区或端点落在块边界时 nodesBetween 可能不回调，补上两端解析结果
   for (const pos of [from, to]) {
     const $pos = state.doc.resolve(pos)
     forced.add($pos.depth === 0 ? pos : $pos.before(1))
   }
+  forcedByState.set(state, forced)
   return forced
 }
 
@@ -88,16 +97,10 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
         }
         const decos: Decoration[] = []
         state.doc.forEach((node, pos) => {
-          const on = visible.has(pos) || forced.has(pos)
-          // 第 4 个参数才是 Decoration.spec 的返回值；attrs 不在公开 d.ts 上（运行时挂在 type 上）
-          decos.push(
-            Decoration.node(
-              pos,
-              pos + node.nodeSize,
-              { 'data-visible': on ? 'true' : 'false' },
-              { visible: on },
-            ),
-          )
+          // 占位块默认隐藏。添加或移除可见装饰都能触发 nodeView.update。
+          if (visible.has(pos) || forced.has(pos)) {
+            decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-visible': 'true' }, { visible: true }))
+          }
         })
         const deco = DecorationSet.create(state.doc, decos)
         cache = { doc: state.doc, visible, forced, deco }

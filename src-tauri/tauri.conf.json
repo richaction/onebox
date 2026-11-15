@@ -10,7 +10,13 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "onebox", "width": 1100, "height": 760 }],
+    "windows": [{
+      "label": "main",
+      "title": "onebox",
+      "width": 1100,
+      "height": 760,
+      "dragDropEnabled": false
+    }],
     "security": { "csp": null }
   },
   "bundle": { "active": false, "targets": "all", "icon": [] }

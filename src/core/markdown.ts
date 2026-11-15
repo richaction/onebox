@@ -10,6 +10,9 @@ export type UnsupportedKind = 'table' | 'taskList' | 'footnote' | 'html' | 'imag
 
 const tokenizer = MarkdownIt('commonmark', { html: false, linkify: false, typographer: false })
 tokenizer.enable('strikethrough')
+const detector = MarkdownIt('commonmark', { html: true }).enable(['table', 'strikethrough'])
+
+const singleLineComment = /^<!--(?:(?!-->)[^\r\n])*-->$/
 
 // commonmark 预设把段内单换行输出为 softbreak token。转成字面 '\n' 文本，
 // 使往返保持原样，而不是被规范化成 GFM 硬换行（反斜杠或双空格）。
@@ -39,7 +42,7 @@ function buildParser(schema: Schema): MarkdownParser {
     code_block: { block: 'codeBlock', noCloseToken: true },
     fence: {
       block: 'codeBlock',
-      getAttrs: (tok) => ({ language: tok.info || null }),
+      getAttrs: (tok) => ({ language: tok.info.trim() || null }),
       noCloseToken: true,
     },
     hr: { node: 'horizontalRule' },
@@ -67,12 +70,18 @@ const serializer = new MarkdownSerializer(
     heading: base.heading,
     horizontalRule: base.horizontal_rule,
     hardBreak: base.hard_break,
-    text: base.text,
+    text(state, node) {
+      const text = node.text!
+      // Preserve existing single-line comments. Escape literal angle brackets in normal text.
+      state.text(text, !singleLineComment.test(text))
+    },
     bulletList: base.bullet_list,
     listItem: base.list_item,
     // Tiptap 用 language / start，prosemirror-markdown 默认用 params / order
     codeBlock(state, node) {
       const text = node.textContent
+      const language = (node.attrs.language as string | null) ?? ''
+      const marker = language.includes('`') ? '~' : '`'
       // 围栏必须长于内容中任何行首围栏串，否则内层围栏提前闭合、正文被截断改写。
       // 代码块是受支持语法，没有只读闸门兜底，所以这里必须自身正确。
       let longest = 0
@@ -82,8 +91,9 @@ const serializer = new MarkdownSerializer(
         const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
         if (m) longest = Math.max(longest, m[1].length)
       }
-      const fence = '`'.repeat(Math.max(3, longest + 1))
-      state.write(fence + ((node.attrs.language as string | null) || '') + '\n')
+      const fence = marker.repeat(Math.max(3, longest + 1))
+      const separator = language.startsWith(marker) ? ' ' : ''
+      state.write(fence + separator + language + '\n')
       state.text(text, false)
       state.ensureNewLine()
       state.write(fence)
@@ -107,6 +117,7 @@ const serializer = new MarkdownSerializer(
     link: defaultMarkdownSerializer.marks.link,
     strike: { open: '~~', close: '~~', mixable: true, expelEnclosingWhitespace: true },
   },
+  { escapeExtraCharacters: /[<&|]/g, hardBreakNodeName: 'hardBreak' },
 )
 
 export function parseMarkdown(text: string, schema: Schema): Node {
@@ -117,59 +128,39 @@ export function serializeMarkdown(doc: Node): string {
   return serializer.serialize(doc)
 }
 
-function isTableDelimiter(line: string, prev: string): boolean {
-  if (!line.includes('|') || !line.includes('-') || !prev.includes('|')) return false
-  return /^[\s|:-]+$/.test(line)
+export function serializeMarkdownForFile(doc: Node): string {
+  const text = serializeMarkdown(doc)
+  const found = new Set<UnsupportedKind>()
+  collectUnsupportedTokens(detector.parse(text, {}), found)
+  if (found.size) throw new Error('Serialized Markdown contains unsupported syntax')
+  return text
+}
+
+function collectUnsupportedTokens(tokens: ReturnType<typeof detector.parse>, found: Set<UnsupportedKind>) {
+  for (const block of tokens) {
+    if (block.type === 'table_open') found.add('table')
+    if (block.type === 'html_block' && !singleLineComment.test(block.content.trim())) found.add('html')
+    for (const tok of block.children ?? []) {
+      if (tok.type === 'image') found.add('image')
+      if (tok.type === 'html_inline' && !singleLineComment.test(tok.content)) found.add('html')
+    }
+  }
 }
 
 export function detectUnsupported(text: string): UnsupportedKind[] {
   const found = new Set<UnsupportedKind>()
+  const tokens = detector.parse(text, {})
+  collectUnsupportedTokens(tokens, found)
 
-  // 图片用 tokenizer 自身的 token 流判定：markdown-it 能识别 inline / reference /
-  // collapsed / shortcut 全部形式，正则穷尽不了。 fenced code 内的图片天然不产生
-  // image token，无需另行跳过。
-  for (const block of tokenizer.parse(text, {})) {
-    for (const tok of block.children ?? []) {
-      if (tok.type === 'image') found.add('image')
-    }
-  }
-
-  let fenceChar = ''
-  let fenceLen = 0
-  let inHtmlComment = false
-  let prev = ''
-  for (const line of text.split('\n')) {
-    // 围栏按字符与长度配对闭合：4 反引号围栏内的 ``` 行不应翻转状态
-    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
-    if (f) {
-      if (!fenceChar) {
-        fenceChar = f[1][0]
-        fenceLen = f[1].length
-      } else if (f[1][0] === fenceChar && f[1].length >= fenceLen) {
-        fenceChar = ''
-        fenceLen = 0
-      }
-      prev = line
-      continue
-    }
-    if (!fenceChar) {
-      if (isTableDelimiter(line, prev)) found.add('table')
-      // 任意缩进、有序标记、引用前缀、空标签：漏检会让文件以可编辑打开，
-      // 保存时任务列表标记被转义改写成字面文本
-      if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
-      if (/\[\^[^\]]+\]/.test(line)) found.add('footnote')
-      if (/<\/?[a-zA-Z][^>]*>/.test(line)) found.add('html')
-      // 多行 HTML 注释：起始行未同行闭合时进入注释态。单行注释逐字往返无损，
-      // 不纳入检测；多行注释的结束符会被转义成 \-->，在第三方编辑器里永不闭合、
-      // 吞掉后文。
-      const open = line.indexOf('<!--')
-      if (open >= 0 && !line.slice(open + 4).includes('-->')) inHtmlComment = true
-      if (inHtmlComment) {
-        found.add('html')
-        if (line.includes('-->')) inHtmlComment = false
-      }
-    }
-    prev = line
+  // Task items and footnote definitions need source text. Use token line ranges to
+  // exclude fenced code, including fences inside quotes or lists.
+  const fences = tokens.flatMap((token) => token.type === 'fence' && token.map ? [token.map] : [])
+  let fence = 0
+  for (const [index, line] of text.split(/\r\n?|\n/).entries()) {
+    while (fence < fences.length && index >= fences[fence][1]) fence++
+    if (fence < fences.length && index >= fences[fence][0]) continue
+    if (/^\s*(?:>\s*|(?:[-*+]|\d+[.)])\s+)+\[[ xX]\](\s|$)/.test(line)) found.add('taskList')
+    if (/(?<!\\)(?:\\\\)*\[\^[^\]]+\]/.test(line)) found.add('footnote')
   }
   return [...found]
 }
