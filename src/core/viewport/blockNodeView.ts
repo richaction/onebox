@@ -15,12 +15,29 @@ type BlockNodeViewFactory = (
   node: Node, view: EditorView, getPos: () => number | undefined,
 ) => NodeView
 
+interface BlockContent {
+  dom: HTMLElement
+  contentDOM?: HTMLElement
+  updateContent?: (node: Node) => void
+  destroy?: () => void
+  stopEvent?: NodeView['stopEvent']
+}
+
+export type PresentBlock = (node: Node, rendered: BlockContent) => BlockContent
+
+function renderContent(node: Node, document: Document, present?: PresentBlock): BlockContent {
+  const spec = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
+  const rendered = { dom: spec.dom, contentDOM: spec.contentDOM ?? undefined }
+  return present?.(node, rendered) ?? rendered
+}
+
 export function createBlockNodeView(
   node: Node,
   view: EditorView,
   getPos: () => number | undefined,
   heights: HeightCache,
   getObserver: () => ViewportObserver | null,
+  present?: PresentBlock,
 ): NodeView {
   let current = node
   const pos = getPos()
@@ -30,13 +47,19 @@ export function createBlockNodeView(
   // 若走占位分支就会把列表项与引用的内容整段销毁。非顶层一律正常渲染、不参与虚拟化。
   const topLevel = pos !== undefined && view.state.doc.resolve(pos).depth === 0
   if (!topLevel) {
-    const nested = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
+    const nested = renderContent(node, document, present)
     return {
       dom: nested.dom,
-      contentDOM: nested.contentDOM ?? undefined,
+      contentDOM: nested.contentDOM,
+      stopEvent: nested.stopEvent,
+      destroy: nested.destroy,
+      ignoreMutation(mutation) {
+        return mutation.type !== 'selection' && (!nested.contentDOM || !nested.contentDOM.contains(mutation.target))
+      },
       update(next) {
         if (!next.sameMarkup(current)) return false
         current = next
+        nested.updateContent?.(next)
         return true
       },
     }
@@ -48,7 +71,7 @@ export function createBlockNodeView(
   dom.className = 'onebox-block'
   dom.dataset.visible = visible ? 'true' : 'false'
 
-  let contentDOM: HTMLElement | undefined
+  let rendered: BlockContent | undefined
   let resizeObserver: ResizeObserver | undefined
 
   const placeholderHeight = (block: Node) => {
@@ -57,15 +80,10 @@ export function createBlockNodeView(
   }
 
   if (visible) {
-    // 用节点自身的 toDOM 渲染，保留 h1/pre>code/ul/ol/hr 语义。
-    // 恒用 div 会丢掉标题与列表语义，而 nodeView 拥有 DOM，后续 CSS 无法补救。
-    // NodeSpec.toDOM 在 d.ts 上是可选的（TS2722），但七个 TOP_LEVEL_BLOCK_TYPES 全都定义了它，
-    // 且 renderSpec 对它们恒返回元素 dom、contentDOM 为元素或 undefined（已实测）。
-    const rendered = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node))
+    // Read the semantic DOM from the schema before adding any editor chrome.
+    rendered = renderContent(node, dom.ownerDocument, present)
     rendered.dom.classList.add('onebox-block-content')
     dom.appendChild(rendered.dom)
-    // horizontalRule 是 leaf，renderSpec 不返回 contentDOM，这是正确行为
-    contentDOM = rendered.contentDOM ?? undefined
     resizeObserver = new ResizeObserver(() => {
       // 外壳必须是 BFC（Task 9 的 display: flow-root）：否则子元素的 margin 折叠到
       // 外壳之外，offsetHeight 小于实际占据高度，每个占位块都系统性偏矮。
@@ -79,10 +97,12 @@ export function createBlockNodeView(
   }
 
   getObserver()?.observe(dom)
+  const contentDOM = rendered?.contentDOM
 
   return {
     dom,
     contentDOM,
+    stopEvent: rendered?.stopEvent,
     update(nextNode) {
       const p = getPos()
       const nextVisible = p !== undefined && isBlockVisible(view.state, p)
@@ -95,12 +115,14 @@ export function createBlockNodeView(
         if (height !== undefined) heights.set(nextNode, height)
       }
       current = nextNode
+      rendered?.updateContent?.(nextNode)
       // 隐藏块的内容也会被 transaction 改到（撤销、跨块替换），占位高度须跟着重算
       if (!visible) dom.style.height = `${placeholderHeight(current)}px`
       return true
     },
     destroy() {
       resizeObserver?.disconnect()
+      rendered?.destroy?.()
       // 必须重新取，不能用构造时捕获的实例：Task 9 先建 EditorView 再建 observer，
       // 首批 nodeView 构造时 getObserver() 是 null，由 createEditor 补挂。用捕获的
       // null 注销就永远注销不掉，states 与 IO 会随翻转累积脱离文档的元素。
@@ -117,10 +139,11 @@ export function createBlockNodeView(
 export function blockNodeViews(
   heights: HeightCache,
   getObserver: () => ViewportObserver | null,
+  present?: PresentBlock,
 ): Record<string, BlockNodeViewFactory> {
   const out: Record<string, BlockNodeViewFactory> = {}
   for (const name of TOP_LEVEL_BLOCK_TYPES) {
-    out[name] = (node, view, getPos) => createBlockNodeView(node, view, getPos, heights, getObserver)
+    out[name] = (node, view, getPos) => createBlockNodeView(node, view, getPos, heights, getObserver, present)
   }
   return out
 }

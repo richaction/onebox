@@ -120,5 +120,5 @@ export const markdownTableExtensions = [
   }),
   TableRow,
   TableCell.extend({ content: 'paragraph' }),
-  TableHeader.extend({ content: 'paragraph' }),
+  TableHeader.extend({ content: 'paragraph' }).configure({ HTMLAttributes: { scope: 'col' } }),
 ]
