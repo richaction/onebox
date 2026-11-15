@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>onebox · Markdown 排版预览</title>
+<link rel="stylesheet" href="../src/styles/editor.css" />
+<style>
+  /* 仅预览页自身的工具条样式；正文样式全部来自 ../src/styles/editor.css */
+  html { height: 100%; }
+  body { height: 100%; overflow: hidden; }
+
+  .preview-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    height: 44px;
+    padding: 0 16px;
+    box-sizing: content-box;
+    border-bottom: 1px solid var(--ob-border);
+    background: var(--ob-bg);
+    font-size: 13px;
+    user-select: none;
+  }
+
+  .preview-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .preview-brand strong { font-weight: 600; white-space: nowrap; }
+
+  .preview-hint {
+    color: var(--ob-text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .preview-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    background: var(--ob-text);
+    flex: none;
+  }
+
+  .preview-groups { display: flex; align-items: center; gap: 8px; flex: none; }
+
+  .seg {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border-radius: 6px;
+    background: var(--ob-bg-hover);
+  }
+
+  .seg button {
+    border: 0;
+    border-radius: 4px;
+    padding: 3px 9px;
+    background: transparent;
+    color: var(--ob-text-secondary);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .seg button:hover { color: var(--ob-text); }
+
+  .seg button.on {
+    background: var(--ob-bg-overlay);
+    color: var(--ob-text);
+    box-shadow: light-dark(rgb(15 15 15 / 0.1) 0 0 0 1px, rgb(255 255 255 / 0.12) 0 0 0 1px),
+      light-dark(rgb(15 15 15 / 0.06) 0 1px 2px, rgb(0 0 0 / 0.3) 0 1px 2px);
+  }
+
+  .seg button:focus-visible { outline: 2px solid var(--ob-accent); outline-offset: 1px; }
+
+  .preview-scroll {
+    height: calc(100vh - 45px);
+    box-sizing: border-box;
+  }
+
+  .preview-guide {
+    position: fixed;
+    inset-inline-start: 16px;
+    inset-block-end: 16px;
+    z-index: 10;
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(70vh, 560px);
+    overflow: auto;
+    border-radius: 8px;
+    background: var(--ob-bg-overlay);
+    box-shadow: var(--ob-shadow-menu);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+
+  .preview-guide summary {
+    padding: 9px 12px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+    list-style: none;
+  }
+
+  .preview-guide summary::-webkit-details-marker { display: none; }
+
+  .preview-guide summary::before {
+    content: '⌘';
+    display: inline-block;
+    margin-inline-end: 6px;
+    color: var(--ob-text-secondary);
+  }
+
+  .guide-body { padding: 0 12px 12px; color: var(--ob-text-secondary); }
+
+  .guide-body dl {
+    display: grid;
+    grid-template-columns: 128px 1fr;
+    gap: 2px 10px;
+    margin: 6px 0 10px;
+  }
+
+  .guide-body dt {
+    color: var(--ob-text);
+    font-family: var(--ob-font-mono);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .guide-body dd { margin: 0; }
+
+  .guide-body code {
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    background: var(--ob-inline-code-bg);
+    color: var(--ob-inline-code-text);
+    font-family: var(--ob-font-mono);
+    font-size: 0.9em;
+  }
+
+  .guide-body p { margin: 6px 0 0; padding: 0; }
+</style>
+</head>
+<body>
+<header class="preview-bar">
+  <div class="preview-brand">
+    <span class="preview-dot" aria-hidden="true"></span>
+    <strong>onebox 排版预览</strong>
+    <span class="preview-hint">与编辑器共用 src/styles/editor.css，改完变量刷新即可</span>
+  </div>
+  <div class="preview-groups">
+    <div class="seg" role="group" aria-label="主题">
+      <button type="button" data-theme-option="light" class="on">浅色</button>
+      <button type="button" data-theme-option="dark">深色</button>
+      <button type="button" data-theme-option="auto">自动</button>
+    </div>
+    <div class="seg" role="group" aria-label="栏宽">
+      <button type="button" data-width-option="708px" class="on">默认 708</button>
+      <button type="button" data-width-option="900px">宽屏 900</button>
+      <button type="button" data-width-option="100%">全宽</button>
+    </div>
+  </div>
+</header>
+
+<div class="editor-scroll preview-scroll">
+  <div class="editor-mount">
+    <div class="ProseMirror" contenteditable="false" spellcheck="false">
+      <div class="onebox-block" data-visible="true">
+        <h1 class="onebox-block-content">onebox 样式样张 · Style Specimen</h1>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <p class="onebox-block-content">这是一份用于校对 <strong>中英文混排</strong> 的样张文档，覆盖编辑器支持的全部块级语法。目标是与 Notion 的默认排版保持一致：正文 16px、行高 1.5、标题字重 600/700、内联代码使用红色 <code>#EB5757</code>。</p>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <p class="onebox-block-content">This specimen checks <strong>mixed Chinese &amp; English</strong> typography against Notion's defaults: 16px body text, 1.5 line height, semibold headings, and the signature red inline <code>code</code> style.</p>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <h2 class="onebox-block-content">一、文本与行内样式</h2>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <p class="onebox-block-content">中文段落：清晨的光线穿过窗帘，落在键盘上。编辑器应当像纸一样安静，像工具一样可靠。The quick brown fox jumps over the lazy dog. 混排时数字 2026 与单位 16px 不应破坏节奏，标点「」与引号&nbsp;“”&nbsp;也要自然。</p>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <p class="onebox-block-content">行内样式：<strong>加粗 Bold</strong>、<em>斜体 Italic</em>、<strong><em>加粗斜体</em></strong>、<s>删除线 Strikethrough</s>、<code>inline code</code>、<a href="https://example.com">外部链接 Link</a> 与脚注引用<sup class="footnote-reference" data-footnote-ref="note">[note]</sup>。</p>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <blockquote class="onebox-block-content">
+          <p>引用块：好的排版是看不见的。Good typography is invisible.</p>
+          <p>它让读者只注意到内容本身，而不是容器。</p>
+        </blockquote>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <h3 class="onebox-block-content">1.1 列表</h3>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <ul class="onebox-block-content">
+          <li><p>无序列表项一：支持嵌套</p>
+            <ul>
+              <li><p>嵌套子项 A</p></li>
+              <li><p>嵌套子项 B</p></li>
+            </ul>
+          </li>
+          <li><p>无序列表项二：中英文混排 Chinese &amp; English</p></li>
+          <li><p>无序列表项三</p></li>
+        </ul>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <ol class="onebox-block-content">
+          <li><p>有序列表第一步</p></li>
+          <li><p>有序列表第二步</p>
+            <ol>
+              <li><p>子步骤 2.1</p></li>
+              <li><p>子步骤 2.2</p></li>
+            </ol>
+          </li>
+          <li><p>有序列表第三步</p></li>
+        </ol>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <h3 class="onebox-block-content">1.2 任务列表</h3>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <ul class="onebox-block-content">
+          <li data-checked="true">
+            <button type="button" class="task-toggle" role="checkbox" aria-label="完成任务" aria-checked="true" data-task-toggle></button>
+            <div><p>已完成：解析 GFM 表格与脚注</p></div>
+          </li>
+          <li data-checked="true">
+            <button type="button" class="task-toggle" role="checkbox" aria-label="完成任务" aria-checked="true" data-task-toggle></button>
+            <div><p>Done: ship the Notion-style typography</p></div>
+          </li>
+          <li data-checked="false">
+            <button type="button" class="task-toggle" role="checkbox" aria-label="完成任务" aria-checked="false" data-task-toggle></button>
+            <div><p>待办：百万字符桌面端压测</p></div>
+          </li>
+          <li data-checked="false">
+            <button type="button" class="task-toggle" role="checkbox" aria-label="完成任务" aria-checked="false" data-task-toggle></button>
+            <div><p>Todo: manual fine-tuning of spacing</p></div>
+          </li>
+        </ul>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <h2 class="onebox-block-content">二、代码与表格</h2>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <pre class="onebox-block-content"><code>// 序列化在 Worker 中执行，不阻塞主线程
+export function serialize(doc: Node): string {
+  const chunks: string[] = []
+  for (const block of doc.children) {
+    chunks.push(render(block)) // 中文注释对齐测试
+  }
+  return chunks.join('\n\n')
+}</code></pre>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <table class="onebox-block-content">
+          <tbody>
+            <tr>
+              <th><p>阶段 Phase</p></th>
+              <th><p>核心任务 Focus</p></th>
+              <th style="text-align: center"><p>状态 Status</p></th>
+              <th style="text-align: right"><p>字符数 Chars</p></th>
+            </tr>
+            <tr>
+              <td><p>第一阶段</p></td>
+              <td><p>脚手架与虚拟滚动</p></td>
+              <td style="text-align: center"><p>已完成</p></td>
+              <td style="text-align: right"><p>100,000</p></td>
+            </tr>
+            <tr>
+              <td><p>第二阶段</p></td>
+              <td><p>Markdown 双向链路</p></td>
+              <td style="text-align: center"><p>已完成</p></td>
+              <td style="text-align: right"><p>1,000,000</p></td>
+            </tr>
+            <tr>
+              <td><p>第三阶段</p></td>
+              <td><p>块交互体系</p></td>
+              <td style="text-align: center"><p>进行中</p></td>
+              <td style="text-align: right"><p>—</p></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <hr class="onebox-block-content" />
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <h3 class="onebox-block-content">2.1 图片与脚注</h3>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <p class="onebox-block-content"><img alt="山雾 · Mountain mist" src="mountain-mist.jpg" loading="lazy" decoding="async" /></p>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <p class="onebox-block-content">脚注定义位于文档末尾，引用标记应小巧而不喧宾夺主。Footnotes sit at the end of the document<sup class="footnote-reference" data-footnote-ref="note">[note]</sup>.</p>
+      </div>
+
+      <div class="onebox-block" data-visible="true">
+        <aside class="footnote-definition onebox-block-content" data-footnote-label="note">
+          <span contenteditable="false">[note]</span>
+          <div data-footnote-content=""><p>这是脚注内容。This is the footnote body, rendered slightly smaller than the main text.</p></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+
+<details class="preview-guide">
+  <summary>微调指南 · 变量在 src/styles/editor.css 顶部</summary>
+  <div class="guide-body">
+    <dl>
+      <dt>--ob-font-size</dt><dd>正文 16px</dd>
+      <dt>--ob-line-height</dt><dd>正文行高 1.5</dd>
+      <dt>--ob-block-padding</dt><dd>块内上下留白 3px</dd>
+      <dt>--ob-block-margin</dt><dd>块间上下外边距 1px（段间距 = 2×padding + 2×margin）</dd>
+      <dt>--ob-h1-size</dt><dd>1.875em · 30px · 字重 700</dd>
+      <dt>--ob-h2-size</dt><dd>1.5em · 24px · 字重 600</dd>
+      <dt>--ob-h3-size</dt><dd>1.25em · 20px · 字重 600</dd>
+      <dt>--ob-h1-space</dt><dd>标题上间距 2rem / 1.4rem / 1rem</dd>
+      <dt>--ob-content-width</dt><dd>正文栏宽 708px</dd>
+      <dt>--ob-list-indent</dt><dd>列表缩进 1.7em</dd>
+      <dt>--ob-quote-border</dt><dd>引用左线 3px，缩进 1em</dd>
+      <dt>--ob-code-padding</dt><dd>代码块内边距 1.5em 1em</dd>
+      <dt>--ob-code-radius</dt><dd>代码块圆角 4px；内联代码 3px</dd>
+      <dt>--ob-table-font-size</dt><dd>表格字号 0.875rem</dd>
+      <dt>--ob-text / --ob-bg</dt><dd>正文 #37352F / 背景 #FFF（深色自动切换）</dd>
+      <dt>--ob-inline-code-text</dt><dd>内联代码 #EB5757</dd>
+      <dt>--ob-bg-code</dt><dd>代码块底色 #F7F6F3</dd>
+    </dl>
+    <p>字体栈里中文顺序为 PingFang SC → Hiragino Sans GB → Microsoft YaHei → Noto Sans CJK SC。修改后刷新本页即可；<code>pnpm tauri dev</code> 中的应用使用同一份样式。</p>
+  </div>
+</details>
+
+<script>
+  const root = document.documentElement
+  const themeButtons = [...document.querySelectorAll('[data-theme-option]')]
+  const widthButtons = [...document.querySelectorAll('[data-width-option]')]
+
+  const select = (buttons, active) => buttons.forEach((button) => button.classList.toggle('on', button === active))
+
+  themeButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const value = button.dataset.themeOption
+      if (value === 'auto') delete root.dataset.theme
+      else root.dataset.theme = value
+      select(themeButtons, button)
+    })
+  })
+
+  widthButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      root.style.setProperty('--ob-content-width', button.dataset.widthOption)
+      select(widthButtons, button)
+    })
+  })
+</script>
+</body>
+</html>
