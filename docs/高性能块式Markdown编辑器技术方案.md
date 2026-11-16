@@ -25,7 +25,7 @@
 |层级|技术选型|选型说明|
 |---|---|---|
 |**桌面底座**|Tauri v2|轻量桌面容器，负责窗口管理、文件IO、跨平台打包，替代Electron降低内存占用|
-|**前端框架**|SolidJS 2\.0 \+ TypeScript|无虚拟DOM、编译期细粒度响应式，天生适配块级高频挂载卸载场景，局部更新无diff开销|
+|**前端框架**|SolidJS `1.9.X` 稳定版 + TypeScript|细粒度响应式与直接 DOM 更新适合块视图的按需挂载和局部更新|
 |**编辑器内核**|Tiptap \+ ProseMirror|放弃BlockNote与Lexical，利用ProseMirror成熟的GFM双向转换生态，保证跨编辑器兼容性|
 |**Markdown序列化**|prosemirror\-markdown|工业级稳定GFM双向转换，严格遵循标准规范，无私有扩展|
 |**虚拟滚动**|@tanstack/solid\-virtual|视口按需渲染核心，仅渲染可见区域块，离开视口立即销毁DOM与编辑器实例|
@@ -47,17 +47,15 @@ BlockNote虽为现成块UI封装，但采用全量DOM渲染，无内置虚拟滚
 
 TanStack Redact虽为React的轻量化同步运行时，语法与React完全兼容，生态成熟，但底层仍保留虚拟DOM协调机制，在高频块挂载卸载、局部输入更新场景下性能上限低于Solid；且Redact当前为实验版本，存在稳定性风险，不适合作为核心生产框架。
 
-### 2\.2\.4 为什么直接采用 SolidJS 2\.0
+### 2\.2\.4 为什么采用 SolidJS 1.9.X 稳定版
 
-本项目直接采用 **SolidJS 2\.0** 作为前端框架，不做 1\.x 过渡。理由如下：
+本项目采用 **SolidJS `1.9.X` 稳定版**，当前在 `package.json` 和 `pnpm-lock.yaml` 中锁定 `1.9.19`。
 
-- **能力匹配：**2\.0 对异步响应模型、资源管理、组件生命周期做了系统性重构，块级按需挂载与卸载的原语更明确，正是本项目块视图层的核心诉求
+- **渲染需求**　细粒度响应式支持块视图按需挂载和局部更新，文档编辑状态由 ProseMirror 管理。
 
-- **避免二次迁移：**项目为新建自研工程，直接落在 2\.0 可省去后续版本迁移的改造量，文档、schema 与组件约定一次性定型
+- **生态兼容性**　第一阶段选型核验时，相关 Solid 生态依赖的稳定版支持 SolidJS 1.x。版本核验和集成取舍见[第一阶段设计](superpowers/specs/2026-11-12-onebox-foundation-design.md)。
 
-- **风险可控：**本项目为本地桌面端，无线上多租户用户，版本迭代风险可在开发阶段内部消化
-
-**版本管控要求：**锁定具体版本号（package\.json 固定版本，不使用宽松范围），保持内核 Rust 侧与 Cargo\.lock 同步提交；生态依赖（Kobalte、@tanstack/solid\-virtual、Tiptap 绑定层）需在联调阶段逐一验证与 2\.0 的兼容性，出现适配缺口时在项目内提供封装层，不降级回退框架版本。
+前端依赖在 `package.json` 中固定到具体版本，更新时同步提交 `pnpm-lock.yaml`。Rust 依赖更新时同步提交 `src-tauri/Cargo.lock`。升级 SolidJS 或引入 Solid 生态依赖前，检查其 peer dependencies 并验证编辑和桌面构建。
 
 # 三、核心架构设计
 
@@ -111,7 +109,7 @@ TanStack Redact虽为React的轻量化同步运行时，语法与React完全兼�
 
 |阶段|核心任务|验收标准|
 |---|---|---|
-|**第一阶段**|基础脚手架搭建：Vite \+ SolidJS 2\.0 \+ Tauri v2 最小可运行项目；Tiptap基础编辑器集成；@tanstack/solid\-virtual虚拟滚动基础框架|可正常编辑基础Markdown文本，视口外块自动卸载|
+|**第一阶段**|搭建 Vite + SolidJS `1.9.X` 稳定版 + Tauri v2 脚手架，集成 Tiptap 基础编辑器与视口渲染|可正常编辑基础 Markdown 文本，视口外块自动卸载|
 |**第二阶段**|MD双向链路打通：prosemirror\-markdown导入导出；Rust侧pulldown\-cmark大文件分片读取；Typora/Obsidian打开兼容性校验|导入导出的Markdown在第三方编辑器完全正常，十万字文件打开无卡顿|
 |**第三阶段**|块交互体系：基于Kobalte实现块拖拽、块悬浮菜单、斜杠命令面板、块类型转换；Mermaid/KaTeX视口懒加载|核心块编辑体验对齐Notion基础操作，百万字文档滚动60fps|
 |**第四阶段**|性能优化与压测：内存泄漏排查、大文件压力测试、元数据同步机制完善|百万字单文件编辑无明显掉帧，长时间编辑内存稳定|
