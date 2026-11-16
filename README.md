@@ -15,8 +15,6 @@ Onebox 是一款本地桌面 Markdown 编辑器。它以块为单位编辑标题
 
 ![Onebox 桌面窗口，左侧是工作区文件树，右侧是 Markdown 文档](docs/screenshots/workspace.png)
 
-![在编辑器中输入斜杠后打开的块命令菜单](docs/screenshots/slash-menu.png)
-
 ## 本地开发
 
 准备 Git、Node.js（建议 24 或 26）、pnpm 和通过 `rustup` 安装的 Rust 稳定工具链。macOS 桌面开发可用 `xcode-select --install` 安装命令行工具。Windows 需要 C++ Build Tools 和 WebView2，Linux 的系统依赖按发行版安装。[Tauri v2 环境准备](https://v2.tauri.app/start/prerequisites/)
