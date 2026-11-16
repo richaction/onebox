@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Main editor window permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-destroy", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": ["core:default", "core:window:allow-destroy", "core:window:allow-start-dragging", "dialog:allow-open", "dialog:allow-save"]
 }

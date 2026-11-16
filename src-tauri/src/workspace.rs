@@ -13,7 +13,8 @@ use std::{
     io,
     path::{Component, Path, PathBuf},
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_fs::FsExt;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +22,13 @@ pub(crate) struct WorkspaceEntry {
     path: PathBuf,
     name: String,
     directory: bool,
+    markdown: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WorkspaceRoot {
+    root: PathBuf,
+    entries: Vec<WorkspaceEntry>,
 }
 
 #[derive(Serialize)]
@@ -40,7 +48,7 @@ fn workspace_path(root: &Path, real_root: &Path, path: &Path) -> Result<PathBuf,
         .map_err(|_| "路径不在当前工作区内")?;
     for part in relative.components() {
         if !matches!(part, Component::Normal(name) if name.to_str().is_some_and(visible_name)) {
-            return Err("此路径不能在工作区内移动".into());
+            return Err("此路径不能在工作区内操作".into());
         }
     }
     let expected = real_root.join(relative);
@@ -65,8 +73,9 @@ fn list_entries(path: &Path) -> io::Result<Vec<WorkspaceEntry>> {
         }
         let kind = entry.file_type()?;
         let path = entry.path();
-        if kind.is_dir() || (kind.is_file() && document_name(&path)) {
+        if kind.is_dir() || kind.is_file() {
             entries.push(WorkspaceEntry {
+                markdown: kind.is_file() && document_name(&path),
                 path,
                 name,
                 directory: kind.is_dir(),
@@ -81,6 +90,189 @@ fn list_entries(path: &Path) -> io::Result<Vec<WorkspaceEntry>> {
         )
     });
     Ok(entries)
+}
+
+fn workspace_preference(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_config_dir()
+        .map_err(|err| err.to_string())?
+        .join("workspace.json"))
+}
+
+fn remembered_root(settings: &Path) -> Result<Option<PathBuf>, String> {
+    match fs::read_to_string(settings) {
+        Ok(text) => serde_json::from_str(&text).map_err(|err| err.to_string()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn remember_root(settings: &Path, root: Option<&Path>) -> Result<(), String> {
+    fs::create_dir_all(settings.parent().unwrap()).map_err(|err| err.to_string())?;
+    let text = serde_json::to_string(&root).map_err(|err| err.to_string())?;
+    write_file(settings, &text).map_err(|err| err.to_string())
+}
+
+fn workspace_root(path: PathBuf) -> Result<WorkspaceRoot, String> {
+    let entries = list_entries(&path).map_err(|err| format!("读取目录失败：{err}"))?;
+    Ok(WorkspaceRoot {
+        root: path,
+        entries,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn select_workspace_root(
+    app: AppHandle,
+    path: String,
+) -> Result<WorkspaceRoot, String> {
+    let selected = selected_path(&app, path)?;
+    let settings = workspace_preference(&app)?;
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        let root = selected.canonicalize().map_err(|err| err.to_string())?;
+        let workspace = workspace_root(root)?;
+        app.fs_scope()
+            .allow_directory(&workspace.root, true)
+            .map_err(|err| err.to_string())?;
+        remember_root(&settings, Some(&workspace.root))?;
+        Ok(workspace)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn restore_workspace_root(
+    app: AppHandle,
+) -> Result<Option<WorkspaceRoot>, String> {
+    let settings = workspace_preference(&app)?;
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        let Some(root) = remembered_root(&settings)? else {
+            return Ok(None);
+        };
+        if !root.is_absolute() || !root.canonicalize().is_ok_and(|resolved| resolved == root) {
+            return Ok(None);
+        }
+        let workspace = workspace_root(root)?;
+        app.fs_scope()
+            .allow_directory(&workspace.root, true)
+            .map_err(|err| err.to_string())?;
+        Ok(Some(workspace))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn clear_workspace_root(app: AppHandle) -> Result<(), String> {
+    let settings = workspace_preference(&app)?;
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        remember_root(&settings, None)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+fn create_entry(
+    remembered: Option<&Path>,
+    root: &Path,
+    folder: &Path,
+    name: &str,
+    directory: bool,
+) -> Result<WorkspaceEntry, String> {
+    if remembered != Some(root) {
+        return Err("请先打开一个工作区根目录".into());
+    }
+    let name = name.trim();
+    if name.is_empty()
+        || !visible_name(name)
+        || name.ends_with('.')
+        || name
+            .chars()
+            .any(|ch| ch.is_control() || "\\/:*?\"<>|".contains(ch))
+        || Path::new(name).file_name().and_then(|leaf| leaf.to_str()) != Some(name)
+    {
+        return Err("请输入有效的名称".into());
+    }
+    let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+    if real_root != root {
+        return Err("工作区根目录已变化，请重新打开文件夹".into());
+    }
+    let parent = workspace_path(root, &real_root, folder)?;
+    let name = if directory || document_name(Path::new(name)) {
+        name.to_owned()
+    } else {
+        format!("{name}.md")
+    };
+    let path = parent.join(&name);
+    let result = if directory {
+        fs::create_dir(&path)
+    } else {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map(drop)
+    };
+    result.map_err(|err| match err.kind() {
+        io::ErrorKind::AlreadyExists => "这里已有同名文件或文件夹".into(),
+        _ => format!("新建失败：{err}"),
+    })?;
+    Ok(WorkspaceEntry {
+        path,
+        name,
+        directory,
+        markdown: !directory,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn create_workspace_entry(
+    app: AppHandle,
+    root: String,
+    folder: String,
+    name: String,
+    directory: bool,
+) -> Result<WorkspaceEntry, String> {
+    let settings = workspace_preference(&app)?;
+    let root = selected_path(&app, root)?;
+    let folder = selected_path(&app, folder)?;
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        create_entry(
+            remembered_root(&settings)?.as_deref(),
+            &root,
+            &folder,
+            &name,
+            directory,
+        )
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn open_workspace_attachment(
+    app: AppHandle,
+    root: String,
+    path: String,
+) -> Result<(), String> {
+    let root = selected_path(&app, root)?;
+    let entry = selected_path(&app, path)?;
+    tokio::task::spawn_blocking(move || {
+        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+        let path = workspace_path(&root, &real_root, &entry)?;
+        if !path.is_file() {
+            return Err("请选择文件".into());
+        }
+        open::that(path).map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -182,7 +374,7 @@ fn related_edits(
                 folders.push(before_path);
                 continue;
             }
-            if !directory && before_path == source {
+            if !entry.markdown || (!directory && before_path == source) {
                 continue;
             }
             let after_path = moved_path(&before_path, source, destination)
@@ -532,16 +724,58 @@ mod tests {
         let dir = fixture();
         let root = dir.path();
         fs::write(root.join("首页.markdown"), "Home").unwrap();
+        fs::write(root.join("附件.pdf"), b"PDF").unwrap();
         fs::write(root.join("起点/Note.md"), "Nested").unwrap();
         fs::create_dir(root.join(".hidden")).unwrap();
         let root_entries = list_entries(root).unwrap();
-        assert_eq!(root_entries.len(), 3);
+        assert_eq!(root_entries.len(), 4);
         assert!(root_entries[..2].iter().all(|entry| entry.directory));
-        assert_eq!(root_entries[2].name, "首页.markdown");
+        assert!(root_entries
+            .iter()
+            .any(|entry| entry.name == "首页.markdown" && entry.markdown));
+        assert!(root_entries
+            .iter()
+            .any(|entry| entry.name == "附件.pdf" && !entry.markdown && !entry.directory));
         let source = list_entries(&root.join("起点")).unwrap();
         assert_eq!(source.len(), 1);
         assert_eq!(source[0].name, "Note.md");
         assert!(list_entries(&root.join("目标/子目录")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn starts_without_a_root_and_only_restores_the_last_saved_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = temp.path().join("settings/workspace.json");
+        assert_eq!(remembered_root(&settings).unwrap(), None);
+        let root = temp.path().canonicalize().unwrap();
+        remember_root(&settings, Some(&root)).unwrap();
+        assert_eq!(
+            remembered_root(&settings).unwrap().as_deref(),
+            Some(root.as_path())
+        );
+        remember_root(&settings, None).unwrap();
+        assert_eq!(remembered_root(&settings).unwrap(), None);
+    }
+
+    #[test]
+    fn creates_entries_only_under_the_selected_root_without_overwriting() {
+        let dir = fixture();
+        let root = dir.path().canonicalize().unwrap();
+        let nested = root.join("起点");
+        let parent = root.parent().unwrap();
+        assert!(create_entry(None, &root, &root, "新笔记", false).is_err());
+        assert!(create_entry(Some(&root), &root, parent, "新笔记", false).is_err());
+        assert!(create_entry(Some(&root), &root, &nested, "assets", true).is_err());
+        assert!(create_entry(Some(&root), &root, &nested, "../旁路", false).is_err());
+
+        let folder = create_entry(Some(&root), &root, &nested, "子项目", true).unwrap();
+        assert!(folder.directory && folder.path.is_dir());
+        let note = create_entry(Some(&root), &root, &folder.path, "新笔记", false).unwrap();
+        assert!(note.markdown);
+        assert_eq!(note.name, "新笔记.md");
+        fs::write(&note.path, "first edit").unwrap();
+        assert!(create_entry(Some(&root), &root, &folder.path, "新笔记.md", false).is_err());
+        assert_eq!(fs::read_to_string(note.path).unwrap(), "first edit");
     }
 
     #[test]

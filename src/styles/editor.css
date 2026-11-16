@@ -77,16 +77,8 @@
   --ob-accent: #2383e2;
   --ob-checkbox: light-dark(rgb(55 53 47 / 0.5), rgb(255 255 255 / 0.5));
   --ob-scrollbar: light-dark(rgb(55 53 47 / 0.2), rgb(255 255 255 / 0.2));
-  --ob-shadow-menu: light-dark(
-    rgb(15 15 15 / 0.05) 0 0 0 1px,
-    rgb(0 0 0 / 0.3) 0 0 0 1px
-  ), light-dark(
-    rgb(15 15 15 / 0.1) 0 3px 6px,
-    rgb(0 0 0 / 0.4) 0 3px 6px
-  ), light-dark(
-    rgb(15 15 15 / 0.2) 0 9px 24px,
-    rgb(0 0 0 / 0.5) 0 9px 24px
-  );
+  --ob-shadow-menu: 0 2px 6px light-dark(rgb(15 15 15 / 0.08), rgb(0 0 0 / 0.22)),
+    0 9px 24px light-dark(rgb(15 15 15 / 0.14), rgb(0 0 0 / 0.35));
 }
 
 :root[data-theme='light'] {
@@ -113,6 +105,7 @@ body {
 }
 
 .app {
+  --workspace-width: min(252px, 34vw);
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -128,14 +121,62 @@ body {
   flex: 1;
 }
 
-.file-actions {
+.window-bar {
+  box-sizing: border-box;
   display: flex;
-  gap: 4px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--ob-border);
+  align-items: center;
+  flex: none;
+  height: 45px;
+  padding-inline: 10px;
+  border-block-end: 1px solid var(--ob-table-border);
+  background: var(--ob-bg);
+  user-select: none;
 }
 
-.file-actions button,
+.window-bar-sidebar {
+  background: linear-gradient(to right, var(--ob-bg-sidebar) 0 var(--workspace-width), var(--ob-bg) var(--workspace-width));
+}
+
+.window-bar-mac {
+  height: 48px;
+  padding-inline-start: 89px;
+}
+
+.sidebar-toggle {
+  display: grid;
+  place-items: center;
+  inline-size: 29px;
+  block-size: 29px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ob-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: var(--ob-bg-hover);
+  color: var(--ob-text);
+}
+
+.sidebar-toggle-symbol {
+  box-sizing: border-box;
+  position: relative;
+  inline-size: 17px;
+  block-size: 13px;
+  border: 1.3px solid currentColor;
+  border-radius: 2.5px;
+}
+
+.sidebar-toggle-symbol::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 4px;
+  border-inline-start: 1.3px solid currentColor;
+  content: '';
+}
+
 .workspace button {
   border: 0;
   border-radius: 4px;
@@ -147,18 +188,11 @@ body {
   cursor: pointer;
 }
 
-.file-actions button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.file-actions button:enabled:hover,
-.workspace button:enabled:hover,
-.workspace button[aria-current='page'] {
+.workspace button:enabled:hover {
   background: var(--ob-bg-hover);
 }
 
-.file-actions button:focus-visible,
+.sidebar-toggle:focus-visible,
 .workspace button:focus-visible,
 .block-menu button:focus-visible {
   outline: 2px solid var(--ob-accent);
@@ -166,14 +200,19 @@ body {
 }
 
 .workspace {
-  width: min(256px, 34%);
+  flex: none;
+  width: var(--workspace-width);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 9px 8px;
+  gap: 5px;
+  padding: 8px;
   border-right: 1px solid var(--ob-border);
   background: var(--ob-bg-sidebar);
+}
+
+.workspace[hidden] {
+  display: none;
 }
 
 .workspace-title {
@@ -184,6 +223,10 @@ body {
   min-height: 33px;
   border-radius: 6px;
   font-size: 13px;
+}
+
+.workspace-title .workspace-entry-icon {
+  margin-inline: 5px 6px;
 }
 
 .workspace-title strong {
@@ -199,10 +242,33 @@ body {
 }
 
 .workspace-tree {
+  flex: 1;
   min-height: 0;
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--ob-scrollbar) transparent;
+}
+
+.workspace-start {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 5px;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 7px;
+  color: var(--ob-text-secondary);
+  font-size: 13px;
+}
+
+.workspace-start > span {
+  margin: 0 4px 4px;
+}
+
+.workspace-start .workspace-open-folder {
+  border: 1px solid var(--ob-table-border);
+  color: var(--ob-text);
+  background: var(--ob-bg-overlay);
 }
 
 .workspace-rows {
@@ -223,6 +289,10 @@ body {
   user-select: none;
 }
 
+.workspace-row:has([aria-current='page']) {
+  background: var(--ob-bg-active);
+}
+
 .workspace .workspace-row-button {
   display: flex;
   flex: 1;
@@ -234,6 +304,7 @@ body {
 }
 
 .workspace-chevron {
+  position: relative;
   inline-size: 10px;
   flex: 0 0 10px;
   color: var(--ob-text-secondary);
@@ -241,6 +312,15 @@ body {
   line-height: 1;
   text-align: center;
   transition: transform 100ms ease;
+}
+
+.workspace-chevron.has-folder::before {
+  position: absolute;
+  top: calc(50% - 4px);
+  left: 3px;
+  border-block: 4px solid transparent;
+  border-inline-start: 5px solid currentColor;
+  content: '';
 }
 
 .workspace-chevron.is-open {
@@ -260,6 +340,7 @@ body {
   position: relative;
   flex-basis: 13px;
   block-size: 10px;
+  background: currentColor;
 }
 
 .workspace-entry-icon.is-folder::before {
@@ -267,9 +348,20 @@ body {
   inset: -4px auto auto -1px;
   inline-size: 5px;
   block-size: 2px;
-  border: 1px solid currentColor;
-  border-block-end: 0;
+  background: currentColor;
   border-radius: 2px 2px 0 0;
+  content: '';
+}
+
+.workspace-entry-icon.is-document {
+  position: relative;
+}
+
+.workspace-entry-icon.is-document::after {
+  position: absolute;
+  inset: 4px 2px auto;
+  height: 2px;
+  border-block: 1px solid currentColor;
   content: '';
 }
 
@@ -304,6 +396,60 @@ body {
   padding: 4px 10px;
   font-size: 12px;
   color: var(--ob-text-secondary);
+}
+
+.workspace-context-menu {
+  position: fixed;
+  z-index: 7;
+  inset: 0 auto auto 0;
+  box-sizing: border-box;
+  display: grid;
+  width: min(186px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--ob-table-border);
+  border-radius: 10px;
+  background: var(--ob-bg-overlay);
+  box-shadow: var(--ob-shadow-menu);
+}
+
+.workspace-context-menu button {
+  padding: 5px 9px;
+  text-align: start;
+}
+
+.workspace-context-menu button:focus {
+  outline: 0;
+  background: var(--ob-bg-hover);
+}
+
+.workspace-menu-separator {
+  margin: 4px 6px;
+  border-block-start: 1px solid var(--ob-table-border);
+}
+
+.workspace-name-field {
+  display: grid;
+  gap: 6px;
+  padding: 6px 12px 13px;
+  font-size: 13px;
+}
+
+.workspace-name-field input {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--ob-border);
+  border-radius: 5px;
+  color: inherit;
+  background: var(--ob-bg);
+  font: inherit;
+}
+
+.workspace-name-field input:focus-visible {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: 1px;
 }
 
 .workspace-move-dialog {
@@ -967,6 +1113,10 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
     max-height: min(30dvh, 10rem);
     border-inline-end: 0;
     border-block-end: 1px solid var(--ob-border);
+  }
+
+  .window-bar-sidebar {
+    background: var(--ob-bg-sidebar);
   }
 
   .editor-scroll {

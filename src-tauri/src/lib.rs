@@ -7,16 +7,16 @@ mod workspace_links;
 #[cfg(target_os = "macos")]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use tauri::{
     menu::{Menu, MenuItem, MenuItemKind},
     AppHandle, Manager,
 };
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const QUIT: &str = "onebox-quit";
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn editor_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::default(app)?;
     // Tauri's first submenu ends with the native Quit action. Route Quit through
@@ -54,11 +54,16 @@ pub fn run() {
             attachments::open_relative_attachment,
             attachments::plan_document_transfer,
             attachments::transfer_document,
+            workspace::select_workspace_root,
+            workspace::restore_workspace_root,
+            workspace::clear_workspace_root,
+            workspace::create_workspace_entry,
+            workspace::open_workspace_attachment,
             workspace::workspace_entries,
             workspace::move_workspace_entry
         ]);
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let builder = builder.menu(editor_menu).on_menu_event(|app, event| {
         if event.id() == QUIT {
             if let Some(window) = app.get_webview_window("main") {

@@ -8,11 +8,10 @@ import { relativeReferences, rewriteAttachmentLinks } from './core/attachmentLin
 import type { EditorHandle } from './core/editor'
 import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
-import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry } from './io/tauri'
+import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import WorkspaceSidebar from './ui/WorkspaceSidebar'
 
-const SAMPLE = '# onebox\n'
 const SAVE_DEBOUNCE_MS = 800
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
@@ -36,6 +35,7 @@ function setEditable(handle: EditorHandle, editable: boolean) {
 
 export default function App() {
   const desktop = isTauri()
+  const mac = desktop && /Mac OS X/u.test(navigator.userAgent)
   let handle: EditorHandle | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let savedDoc: Node | undefined
@@ -47,11 +47,17 @@ export default function App() {
   const [readonly, setReadonly] = createSignal(false)
   const [loading, setLoading] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
-  const [workspace, setWorkspace] = createSignal<{ root: string; entries: WorkspaceEntry[] }>()
+  const [workspace, setWorkspace] = createSignal<WorkspaceRoot>()
+  const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop)
+  const [sidebarVisible, setSidebarVisible] = createSignal(true)
   const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
   const [workspaceReveal, setWorkspaceReveal] = createSignal<string>()
   const [workspaceMoving, setWorkspaceMoving] = createSignal(false)
   const [failure, setFailure] = createSignal<Failure>()
+  const sidebarLabel = () => sidebarVisible() ? '关闭侧栏' : '打开侧栏'
+  const toggleSidebar = () => setSidebarVisible((visible) => !visible)
+
+  const editorIsEditable = () => !desktop || (!!path() && !readonly())
 
   const clearSaveTimer = () => {
     clearTimeout(timer)
@@ -112,7 +118,7 @@ export default function App() {
       return false
     } finally {
       busy = false
-      setEditable(editor, !readonly())
+      setEditable(editor, editorIsEditable())
     }
   }
 
@@ -176,12 +182,58 @@ export default function App() {
   const openWorkspace = () => runFileAction(async () => {
     const picked = await open({ directory: true, recursive: true, multiple: false })
     if (typeof picked !== 'string') return true
-    const entries = await desktopWorkspace.entries(picked, picked)
     setWorkspaceReveal(undefined)
-    setWorkspace({ root: picked, entries })
+    setWorkspace(await desktopWorkspace.selectRoot(picked))
+    setSidebarVisible(true)
     setFailure(undefined)
     return true
   }, '读取工作区失败')
+
+  const closeWorkspace = () => runFileAction(async () => {
+    await desktopWorkspace.clearRoot()
+    setWorkspace(undefined)
+    setWorkspaceReveal(undefined)
+    setFailure(undefined)
+    return true
+  }, '读取工作区失败')
+
+  const createWorkspaceEntry = async (folder: string, name: string, directory: boolean) => {
+    const current = workspace()
+    if (!current || busy) throw new Error('请先打开工作区并等待文件操作完成')
+    let cause: unknown
+    let opened = false
+    const success = await runFileAction(async (editor) => {
+      try {
+        if (!await flush()) throw new Error('当前文档保存失败')
+        const entry = await desktopWorkspace.create(current.root, folder, name, directory)
+        setWorkspaceReveal(entry.path)
+        refreshWorkspace()
+        setFailure(undefined)
+        if (!entry.directory) {
+          try {
+            opened = await readDocument(editor, entry.path)
+          } catch {
+            setFailure('打开失败')
+          }
+        }
+        return true
+      } catch (err) {
+        cause = err
+        return false
+      }
+    }, '保存失败')
+    if (!success) throw cause ?? new Error('新建失败')
+    if (opened) requestAnimationFrame(() => handle?.editor.view.focus())
+  }
+
+  const openWorkspaceEntry = (entry: WorkspaceEntry) => {
+    if (entry.markdown) {
+      void runFileAction((editor) => readDocument(editor, entry.path), '打开失败')
+    } else {
+      const current = workspace()
+      if (current) void desktopWorkspace.openAttachment(current.root, entry.path).catch(() => setFailure('打开失败'))
+    }
+  }
 
   const relocateWorkspaceEntry = async (editor: EditorHandle, root: string, source: string, target: string, name?: string) => {
     setWorkspaceMoving(true)
@@ -225,8 +277,8 @@ export default function App() {
   const transferDocument = (mode: Transfer) => runFileAction(async (editor) => {
     if (readonly()) return true
     const source = path()
-    if (mode !== 'saveAs' && !source) return false
-    const name = source ? nameOf(source) : 'Untitled.md'
+    if (!source) return false
+    const name = nameOf(source)
     const picked = await save({
       defaultPath: mode === 'copy' ? name.replace(/\.(md|markdown)$/i, '-copy.$1') : name,
       filters: MARKDOWN_FILTERS,
@@ -243,7 +295,7 @@ export default function App() {
     }
 
     if (mode === 'move' && !await flush()) return false
-    if (!source || source === picked) {
+    if (source === picked) {
       if (mode !== 'saveAs') return true
       clearSaveTimer()
       while (writer) await writer
@@ -269,15 +321,6 @@ export default function App() {
     return true
   }, '保存失败')
 
-  const ensureDocumentPath = async (editor: EditorHandle) => {
-    if (path()) return path()
-    const selected = await save({ defaultPath: 'Untitled.md', filters: MARKDOWN_FILTERS })
-    if (typeof selected !== 'string' || !await writeDocument(selected, editor.editor.state.doc)) return null
-    setPath(selected)
-    refreshWorkspace()
-    return selected
-  }
-
   const insertAttachments = (editor: EditorHandle, attachments: Attachment[], range?: Range) => {
     if (!attachments.length) return
     const content: JSONContent[] = []
@@ -292,11 +335,11 @@ export default function App() {
   }
 
   const pickAttachment = (kind: AttachmentKind, range?: Range) => {
+    const document = path()
+    if (!document) return
     void runFileAction(async (editor) => {
       const chosen = await open({ multiple: false, filters: kind === 'image' ? IMAGE_FILTERS : undefined })
       if (typeof chosen !== 'string') return true
-      const document = await ensureDocumentPath(editor)
-      if (!document) return false
       const attachment = await desktopAttachments.import(document, chosen)
       insertAttachments(editor, [attachment], range)
       setFailure(undefined)
@@ -305,9 +348,9 @@ export default function App() {
   }
 
   const insertFiles = (files: File[]) => {
+    const document = path()
+    if (!document) return
     void runFileAction(async (editor) => {
-      const document = await ensureDocumentPath(editor)
-      if (!document) return false
       const imported: Attachment[] = []
       try {
         for (const file of files) imported.push(await desktopAttachments.importFile(document, file))
@@ -327,13 +370,18 @@ export default function App() {
     }
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.isComposing) return
     switch (event.key.toLowerCase()) {
+      case '\\':
+        if (document.querySelector('dialog[open]')) return
+        event.preventDefault()
+        toggleSidebar()
+        break
       case 'o':
         event.preventDefault()
-        void openFile()
+        if (!restoringWorkspace()) void (event.shiftKey ? openWorkspace() : openFile())
         break
       case 's':
         event.preventDefault()
-        if (event.shiftKey || !path()) void transferDocument('saveAs')
+        if (event.shiftKey && path()) void transferDocument('saveAs')
         else if (!busy) void flush()
         break
     }
@@ -341,6 +389,9 @@ export default function App() {
 
   onMount(() => {
     if (!desktop) return
+    void desktopWorkspace.restoreRoot().then((current) => {
+      if (current) setWorkspace(current)
+    }).catch(() => setFailure('读取工作区失败')).finally(() => setRestoringWorkspace(false))
     window.addEventListener('keydown', onKeydown)
     const listener = getCurrentWindow().onCloseRequested(async (event) => {
       if (busy || !handle) {
@@ -353,7 +404,7 @@ export default function App() {
 
       event.preventDefault()
       busy = false
-      setEditable(handle, !readonly())
+      setEditable(handle, editorIsEditable())
     }).catch(() => {
       setFailure('保存失败')
     })
@@ -365,6 +416,7 @@ export default function App() {
 
   const onReady = (editor: EditorHandle) => {
     handle = editor
+    setEditable(editor, editorIsEditable())
     if (!import.meta.env.DEV) return
 
     const dev = window as Window & {
@@ -391,29 +443,37 @@ export default function App() {
 
   onCleanup(clearSaveTimer)
 
+  const renderSidebar = (current?: WorkspaceRoot) => (
+    <WorkspaceSidebar
+      workspace={current} visible={sidebarVisible()} restoring={restoringWorkspace()}
+      active={path()} readonly={readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
+      onOpen={openWorkspaceEntry} onOpenFile={() => void openFile()} onOpenWorkspace={() => void openWorkspace()}
+      onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry}
+      onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
+      onClose={() => void closeWorkspace()}
+    />
+  )
+
   return (
     <main class="app">
       <Show when={desktop}>
-        <header class="file-actions">
-          <button type="button" onClick={() => void openFile()}>打开</button>
-          <button type="button" onClick={() => void openWorkspace()}>工作区</button>
-          <button type="button" disabled={!path() || readonly() || loading()} onClick={() => void transferDocument('move')}>移动</button>
-          <button type="button" disabled={!path() || readonly() || loading()} onClick={() => void transferDocument('copy')}>复制</button>
+        <header class="window-bar" classList={{ 'window-bar-mac': mac, 'window-bar-sidebar': sidebarVisible() }}
+          data-tauri-drag-region="">
+          <button type="button" class="sidebar-toggle"
+            aria-label={sidebarLabel()} aria-expanded={sidebarVisible()} aria-controls="workspace-sidebar"
+            title={`${sidebarLabel()}（${mac ? '⌘' : 'Ctrl+'}\\）`} onClick={toggleSidebar}>
+            <span class="sidebar-toggle-symbol" aria-hidden="true" />
+          </button>
         </header>
       </Show>
       <div class="editor-layout">
-        <Show when={workspace()} keyed>
-          {(current) => (
-            <WorkspaceSidebar
-              root={current.root} entries={current.entries}
-              active={path()} reveal={workspaceReveal()} revision={workspaceRevision()}
-              onOpen={(file) => { void runFileAction((editor) => readDocument(editor, file), '打开失败') }}
-              onMove={moveWorkspaceEntry} onClose={() => setWorkspace(undefined)}
-            />
-          )}
+        <Show when={desktop}>
+          <Show when={workspace()} keyed fallback={renderSidebar()}>
+            {(current) => renderSidebar(current)}
+          </Show>
         </Show>
         <EditorShell
-          markdown={SAMPLE}
+          markdown=""
           onReady={onReady}
           onUpdate={onUpdate}
           onInsertAttachment={desktop ? pickAttachment : undefined}
@@ -430,7 +490,7 @@ export default function App() {
         />
       </div>
       <footer class="statusbar" role="status">
-        <span title={path() ?? undefined}>{path() ? nameOf(path()!) : '未打开'}</span>
+        <span title={path() ?? undefined}>{path() ? nameOf(path()!) : ''}</span>
         <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : readonly() ? '只读' : ''}</span>
         <span>{failure()}</span>
       </footer>

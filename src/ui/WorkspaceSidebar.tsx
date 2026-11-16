@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
+import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
 
 interface Directory {
   entries?: WorkspaceEntry[]
@@ -26,26 +26,98 @@ function ancestors(root: string, path: string) {
 
 const nameOf = (path: string) => path.split(/[/\\]/u).filter(Boolean).at(-1) ?? path
 
+interface SidebarContext {
+  x: number
+  y: number
+  trigger: HTMLElement
+  entry?: WorkspaceEntry
+}
+
+interface SidebarAction {
+  label: string
+  run: () => void
+  separator?: boolean
+}
+
+function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; close: (restoreFocus: boolean) => void }) {
+  let menu!: HTMLDivElement
+  const buttons = () => Array.from(menu.querySelectorAll('button'))
+  onMount(() => {
+    const bounds = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(props.at.x, window.innerWidth - bounds.width - 8))}px`
+    menu.style.top = `${Math.max(8, Math.min(props.at.y, window.innerHeight - bounds.height - 8))}px`
+    buttons()[0]?.focus({ preventScroll: true })
+    const outside = (event: PointerEvent) => {
+      if (!menu.contains(event.target as Node)) props.close(false)
+    }
+    const away = () => props.close(false)
+    document.addEventListener('pointerdown', outside)
+    window.addEventListener('resize', away)
+    window.addEventListener('blur', away)
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', outside)
+      window.removeEventListener('resize', away)
+      window.removeEventListener('blur', away)
+    })
+  })
+  return (
+    <div class="workspace-context-menu" ref={menu} role="menu" aria-label="文件操作"
+      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation() }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' || event.key === 'Tab') {
+          event.preventDefault()
+          props.close(true)
+          return
+        }
+        const items = buttons()
+        const current = items.indexOf(document.activeElement as HTMLButtonElement)
+        const next = event.key === 'ArrowDown' ? (current + 1) % items.length
+          : event.key === 'ArrowUp' ? (current + items.length - 1) % items.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1
+        if (next < 0) return
+        event.preventDefault()
+        items[next]?.focus()
+      }}>
+      <For each={props.actions}>{(action) => (
+        <>
+          <Show when={action.separator}><div class="workspace-menu-separator" role="separator" /></Show>
+          <button type="button" role="menuitem" tabIndex={-1}
+            onClick={() => { props.close(true); action.run() }}>{action.label}</button>
+        </>
+      )}</For>
+    </div>
+  )
+}
+
 export default function WorkspaceSidebar(props: {
-  root: string
-  entries: WorkspaceEntry[]
+  workspace?: WorkspaceRoot
+  visible: boolean
+  restoring: boolean
   active: string | null
+  readonly: boolean
   reveal?: string
   revision: number
-  onOpen: (path: string) => void
+  onOpen: (entry: WorkspaceEntry) => void
+  onOpenFile: () => void
+  onOpenWorkspace: () => void
+  onCreate: (folder: string, name: string, directory: boolean) => Promise<void>
   onMove: (entry: WorkspaceEntry, target: string) => Promise<void>
+  onCopy: () => void
+  onMoveDocument: () => void
   onClose: () => void
 }) {
-  const root = props.root
-  const [directories, setDirectory] = createStore<Record<string, Directory>>({
-    [root]: { entries: props.entries, loading: false },
-  })
+  const root = props.workspace?.root ?? ''
+  const [directories, setDirectory] = createStore<Record<string, Directory>>(
+    props.workspace ? { [root]: { entries: props.workspace.entries, loading: false } } : {},
+  )
   const [expanded, setExpanded] = createSignal(new Set<string>())
   const [dragged, setDragged] = createSignal<WorkspaceEntry>()
   const [dropTarget, setDropTarget] = createSignal<string>()
   const [moving, setMoving] = createSignal(false)
   const [error, setError] = createSignal<string>()
   const [moveEntry, setMoveEntry] = createSignal<WorkspaceEntry>()
+  const [context, setContext] = createSignal<SidebarContext>()
+  const [creation, setCreation] = createSignal<{ folder: string; directory: boolean }>()
   const [targetFolder, setTargetFolder] = createSignal(root)
   let tree!: HTMLElement
   let disposed = false
@@ -70,19 +142,22 @@ export default function WorkspaceSidebar(props: {
     }
   }
 
-  createEffect(on(() => props.revision, () => {
-    void load(root, true)
-    for (const path of expanded()) {
-      if (ancestors(root, path).every((parent) => expanded().has(parent))) void load(path, true)
-    }
-  }, { defer: true }))
-
   createEffect(on(() => [props.active, props.reveal], (paths) => {
+    if (!root) return
     const folders = new Set(paths.flatMap((path) => path ? ancestors(root, path) : []))
     if (!folders.size) return
     setExpanded((open) => new Set([...open, ...folders]))
     for (const folder of folders) void load(folder)
   }))
+
+  const refresh = () => {
+    if (!root) return
+    void load(root, true)
+    for (const path of expanded()) {
+      if (ancestors(root, path).every((parent) => expanded().has(parent))) void load(path, true)
+    }
+  }
+  createEffect(on(() => props.revision, refresh, { defer: true }))
 
   const toggle = (path: string) => {
     const opened = new Set(expanded())
@@ -105,6 +180,68 @@ export default function WorkspaceSidebar(props: {
     setError(undefined)
     setTargetFolder(root)
     setMoveEntry(entry)
+  }
+
+  const closeContext = (restoreFocus: boolean) => {
+    const trigger = context()?.trigger
+    setContext(undefined)
+    if (restoreFocus) trigger?.focus({ preventScroll: true })
+  }
+  createEffect(on(() => props.visible, (visible) => { if (!visible) closeContext(false) }))
+
+  const showContext = (event: MouseEvent | KeyboardEvent, entry?: WorkspaceEntry) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (moving() || props.restoring) return
+    const target = event.target as HTMLElement
+    const trigger = target.closest('button') ?? (event.currentTarget as HTMLElement)
+    const bounds = trigger.getBoundingClientRect()
+    const pointer = 'clientX' in event && event.type === 'contextmenu' && (event.clientX || event.clientY) ? event : undefined
+    setContext({
+      x: pointer?.clientX ?? bounds.left,
+      y: pointer?.clientY ?? bounds.bottom + 4,
+      trigger,
+      entry,
+    })
+  }
+
+  const contextShortcut = (event: KeyboardEvent, entry?: WorkspaceEntry) => {
+    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) showContext(event, entry)
+  }
+
+  const actionsFor = ({ entry }: SidebarContext) => {
+    const actions: SidebarAction[] = []
+    if (entry) {
+      if (entry.directory) {
+        actions.push({
+          label: expanded().has(entry.path) ? '折叠文件夹' : '展开文件夹',
+          run: () => toggle(entry.path),
+        })
+      } else {
+        actions.push({ label: entry.markdown ? '打开此文档' : '用系统应用打开', run: () => props.onOpen(entry) })
+      }
+    }
+    if (root && (!entry || entry.directory)) {
+      const folder = entry?.path ?? root
+      actions.push(
+        { label: '新建 Markdown…', run: () => setCreation({ folder, directory: false }) },
+        { label: '新建文件夹…', run: () => setCreation({ folder, directory: true }) },
+      )
+    }
+    if (entry?.directory || entry?.markdown) {
+      actions.push({ label: '移动到…', run: () => beginMove(entry) })
+    }
+    const activeFileActions = props.active && !props.readonly
+    if (activeFileActions && ((!entry && (!root || !childOf(props.active!, root))) || entry?.path === props.active)) {
+      if (!entry) actions.push({ label: '移动当前文档…', run: props.onMoveDocument })
+      actions.push({ label: entry ? '复制到…' : '复制当前文档…', run: props.onCopy })
+    }
+    actions.push(
+      { label: '打开文件夹…', run: props.onOpenWorkspace, separator: actions.length > 0 },
+      { label: '打开 Markdown…', run: props.onOpenFile },
+    )
+    if (root && !entry) actions.push({ label: '刷新文件夹', run: refresh }, { label: '关闭文件夹', run: props.onClose })
+    return actions
   }
 
   const move = async (entry: WorkspaceEntry, target: string) => {
@@ -146,6 +283,7 @@ export default function WorkspaceSidebar(props: {
 
   const pressRow = (event: PointerEvent, entry: WorkspaceEntry) => {
     if (moving() || event.button !== 0 || event.pointerType === 'touch') return
+    if (!entry.directory && !entry.markdown) return
     if ((event.target as Element).closest('.workspace-row-action')) return
     press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, entry }
   }
@@ -234,7 +372,8 @@ export default function WorkspaceSidebar(props: {
               classList={{ 'workspace-drop-target': dropTarget() === entry.path, 'workspace-dragged': dragged()?.path === entry.path }}
               data-workspace-folder={entry.directory ? entry.path : undefined}
               onPointerDown={(event) => pressRow(event, entry)}
-              onContextMenu={(event) => { event.preventDefault(); beginMove(entry) }}
+              onContextMenu={(event) => showContext(event, entry)}
+              onKeyDown={(event) => contextShortcut(event, entry)}
             >
               <button
                 type="button"
@@ -242,17 +381,15 @@ export default function WorkspaceSidebar(props: {
                 title={entry.name}
                 aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
                 aria-current={!entry.directory && props.active === entry.path ? 'page' : undefined}
-                onClick={() => { if (entry.directory) toggle(entry.path); else props.onOpen(entry.path) }}
+                onClick={() => { if (entry.directory) toggle(entry.path); else props.onOpen(entry) }}
               >
-                <span classList={{ 'workspace-chevron': true, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true">
-                  {entry.directory ? '›' : ''}
-                </span>
-                <span classList={{ 'workspace-entry-icon': true, 'is-folder': entry.directory }} aria-hidden="true" />
+                <span classList={{ 'workspace-chevron': true, 'has-folder': entry.directory, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true" />
+                <span classList={{ 'workspace-entry-icon': true, 'is-folder': entry.directory, 'is-document': entry.markdown }} aria-hidden="true" />
                 <span class="workspace-entry-name">{entry.name}</span>
               </button>
               <button
-                type="button" class="workspace-row-action" title="移动到"
-                aria-label={`移动 ${entry.name}`} onClick={() => beginMove(entry)}
+                type="button" class="workspace-row-action" title="更多操作" aria-haspopup="menu"
+                aria-label={`${entry.name} 的操作`} onClick={(event) => showContext(event, entry)}
               >…</button>
             </div>
             <Show when={entry.directory && expanded().has(entry.path)}>
@@ -314,22 +451,82 @@ export default function WorkspaceSidebar(props: {
     )
   }
 
+  const CreateDialog = (propsForDialog: { folder: string; directory: boolean }) => {
+    let dialog!: HTMLDialogElement
+    let field!: HTMLInputElement
+    const [pending, setPending] = createSignal(false)
+    const [issue, setIssue] = createSignal<string>()
+    const [name, setName] = createSignal('')
+    const label = propsForDialog.directory ? '新建文件夹' : '新建 Markdown'
+    const submit = async (event: SubmitEvent) => {
+      event.preventDefault()
+      if (!name().trim() || pending()) return
+      setPending(true)
+      setIssue(undefined)
+      try {
+        await props.onCreate(propsForDialog.folder, name(), propsForDialog.directory)
+        setCreation(undefined)
+      } catch (err) {
+        setIssue(err instanceof Error ? err.message : String(err))
+      } finally {
+        setPending(false)
+      }
+    }
+    onMount(() => { dialog.showModal(); field.focus() })
+    return (
+      <dialog class="workspace-move-dialog workspace-create-dialog" ref={dialog} aria-label={label}
+        onCancel={(event) => { event.preventDefault(); if (!pending()) setCreation(undefined) }}>
+        <form onSubmit={submit}>
+          <header>
+            <strong>{label}</strong>
+            <span title={propsForDialog.folder}>{nameOf(propsForDialog.folder)}</span>
+          </header>
+          <div class="workspace-name-field">
+            <label for="workspace-new-name">名称</label>
+            <input id="workspace-new-name" ref={field}
+              placeholder={propsForDialog.directory ? '文件夹名称' : '文档名称.md'}
+              value={name()} disabled={pending()} onInput={(event) => { setName(event.currentTarget.value); setIssue(undefined) }} />
+          </div>
+          <Show when={issue()}><p class="workspace-move-error" role="alert">{issue()}</p></Show>
+          <footer>
+            <button type="button" disabled={pending()} onClick={() => setCreation(undefined)}>取消</button>
+            <button type="submit" class="workspace-confirm" disabled={pending() || !name().trim()}>创建</button>
+          </footer>
+        </form>
+      </dialog>
+    )
+  }
+
   return (
-    <aside class="workspace" aria-label="工作区文件" ref={tree}>
+    <aside class="workspace" id="workspace-sidebar" aria-label="工作区文件" ref={tree}
+      hidden={!props.visible} onContextMenu={(event) => showContext(event)}
+      onKeyDown={(event) => contextShortcut(event)}>
       <div
         class="workspace-title" classList={{ 'workspace-drop-target': dropTarget() === root }}
-        data-workspace-folder={root}
+        data-workspace-folder={root || undefined}
       >
-        <strong title={root}>{nameOf(root)}</strong>
-        <button type="button" aria-label="刷新工作区" disabled={moving()} onClick={() => {
-          void load(root, true)
-          for (const path of expanded()) void load(path, true)
-        }}>↻</button>
-        <button type="button" aria-label="关闭工作区" disabled={moving()} onClick={props.onClose}>×</button>
+        <Show when={root}><span class="workspace-entry-icon is-folder" aria-hidden="true" /></Show>
+        <strong title={root || undefined}>{root ? nameOf(root) : '工作区'}</strong>
+        <button type="button" class="workspace-more" aria-label="工作区操作" aria-haspopup="menu"
+          disabled={moving() || props.restoring} onClick={(event) => showContext(event)}>⋯</button>
       </div>
-      <nav class="workspace-tree" aria-label="文件目录"><Rows path={root} /></nav>
+      <Show when={root} fallback={
+        <div class="workspace-start">
+          <span>{props.restoring ? '正在恢复工作区…' : '没有打开的文件夹'}</span>
+          <button type="button" class="workspace-open-folder" disabled={props.restoring} onClick={props.onOpenWorkspace}>
+            打开文件夹…
+          </button>
+          <button type="button" disabled={props.restoring} onClick={props.onOpenFile}>打开 Markdown…</button>
+        </div>
+      }>
+        <nav class="workspace-tree" aria-label="文件目录"><Rows path={root} /></nav>
+      </Show>
       <Show when={error() && !moveEntry()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
+      <Show when={context()} keyed>
+        {(current) => <ContextMenu at={current} actions={actionsFor(current)} close={closeContext} />}
+      </Show>
       <Show when={moveEntry()} keyed>{(entry) => <MoveDialog entry={entry} />}</Show>
+      <Show when={creation()} keyed>{(entry) => <CreateDialog folder={entry.folder} directory={entry.directory} />}</Show>
     </aside>
   )
 }

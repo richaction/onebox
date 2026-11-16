@@ -37,9 +37,21 @@ export interface WorkspaceEntry {
   path: string
   name: string
   directory: boolean
+  markdown: boolean
+}
+
+export interface WorkspaceRoot {
+  root: string
+  entries: WorkspaceEntry[]
 }
 
 export const desktopWorkspace = {
+  selectRoot: (path: string) => invoke<WorkspaceRoot>('select_workspace_root', { path }),
+  restoreRoot: () => invoke<WorkspaceRoot | null>('restore_workspace_root'),
+  clearRoot: () => invoke<void>('clear_workspace_root'),
+  create: (root: string, folder: string, name: string, directory: boolean) =>
+    invoke<WorkspaceEntry>('create_workspace_entry', { root, folder, name, directory }),
+  openAttachment: (root: string, path: string) => invoke<void>('open_workspace_attachment', { root, path }),
   entries: (root: string, folder: string) =>
     invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),
   move: (root: string, source: string, target: string, activeDocument: string | null, name?: string) =>
