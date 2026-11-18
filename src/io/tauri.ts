@@ -38,6 +38,7 @@ export interface WorkspaceEntry {
   name: string
   directory: boolean
   markdown: boolean
+  accessible?: boolean
 }
 
 export interface WorkspaceRoot {
@@ -51,7 +52,10 @@ export const desktopWorkspace = {
   clearRoot: () => invoke<void>('clear_workspace_root'),
   create: (root: string, folder: string, name: string, directory: boolean) =>
     invoke<WorkspaceEntry>('create_workspace_entry', { root, folder, name, directory }),
-  openAttachment: (root: string, path: string) => invoke<void>('open_workspace_attachment', { root, path }),
+  openAttachment: (root: string, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
+  fileApplications: (root: string, path: string) => invoke<{ path: string; name: string; default: boolean; icon?: number[] }[]>('workspace_file_applications', { root, path }),
+  preparePreview: (root: string, path: string) => invoke<ArrayBuffer>('workspace_preview', { root, path }),
+  videoPoster: (root: string, path: string) => invoke<ArrayBuffer>('workspace_video_poster', { root, path }),
   entries: (root: string, folder: string) =>
     invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),
   move: (root: string, source: string, target: string, activeDocument: string | null, name?: string) =>

@@ -59,6 +59,9 @@ pub fn run() {
             workspace::clear_workspace_root,
             workspace::create_workspace_entry,
             workspace::open_workspace_attachment,
+            workspace::workspace_file_applications,
+            workspace::workspace_preview,
+            workspace::workspace_video_poster,
             workspace::workspace_entries,
             workspace::move_workspace_entry
         ]);

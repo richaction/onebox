@@ -54,11 +54,7 @@ fn checked_file(path: &Path) -> Result<File, String> {
     File::open(path).map_err(|err| err.to_string())
 }
 
-pub(crate) fn attachment_file(
-    app: &AppHandle,
-    base: &Path,
-    path: &Path,
-) -> Result<PathBuf, String> {
+fn attachment_path(app: &AppHandle, base: &Path, path: &Path) -> Result<PathBuf, String> {
     let actual = base
         .join(path)
         .canonicalize()
@@ -66,6 +62,11 @@ pub(crate) fn attachment_file(
     if !actual.starts_with(base) && !app.fs_scope().is_allowed(&actual) {
         return Err("attachment is outside the document or selected workspace".into());
     }
+    Ok(actual)
+}
+
+fn attachment_file(app: &AppHandle, base: &Path, path: &Path) -> Result<PathBuf, String> {
+    let actual = attachment_path(app, base, path)?;
     if !actual.is_file() {
         return Err("expected a regular attachment file".into());
     }
@@ -250,7 +251,10 @@ pub(crate) async fn open_relative_attachment(
     let document = selected_path(&app, document)?;
     tokio::task::spawn_blocking(move || {
         let (relative, _) = relative_href(&href).ok_or("expected a relative path")?;
-        let actual = attachment_file(&app, &parent(&document)?, Path::new(&relative))?;
+        let actual = attachment_path(&app, &parent(&document)?, Path::new(&relative))?;
+        if !actual.is_file() && !actual.is_dir() {
+            return Err("expected a regular file or directory".into());
+        }
         open::that(actual).map_err(|err| err.to_string())
     })
     .await
@@ -385,10 +389,11 @@ pub(crate) fn plan_transfer(
             continue;
         }
         let is_asset = reference.image
-            || candidate
-                .strip_prefix(&from)
-                .is_ok_and(|path| path.starts_with("assets"))
-            || (!document_name(relative) && candidate.is_file());
+            || (!candidate.is_dir()
+                && (candidate
+                    .strip_prefix(&from)
+                    .is_ok_and(|path| path.starts_with("assets"))
+                    || (!document_name(relative) && candidate.is_file())));
         let rewritten = if is_asset {
             let actual = find_attachment(&from, relative)?;
             let hash = copy_with_hash(checked_file(&actual)?, io::sink())?;

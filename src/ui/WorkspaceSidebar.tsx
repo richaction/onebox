@@ -1,12 +1,15 @@
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
+import { previewKind } from './FilePreview'
 
 interface Directory {
   entries?: WorkspaceEntry[]
   loading: boolean
   error?: string
 }
+
+type DropLocation = { folder: string; anchor: string; edge: 'before' | 'after' | 'inside' }
 
 function separator(path: string) {
   return path.startsWith('/') ? '/' : '\\'
@@ -94,6 +97,7 @@ export default function WorkspaceSidebar(props: {
   visible: boolean
   restoring: boolean
   active: string | null
+  pending?: string
   readonly: boolean
   reveal?: string
   revision: number
@@ -112,7 +116,12 @@ export default function WorkspaceSidebar(props: {
   )
   const [expanded, setExpanded] = createSignal(new Set<string>())
   const [dragged, setDragged] = createSignal<WorkspaceEntry>()
-  const [dropTarget, setDropTarget] = createSignal<string>()
+  const [dropTarget, setDropTarget] = createSignal<DropLocation>()
+  const orderKey = `onebox:workspace-order:${root}`
+  const [orders, setOrders] = createSignal<Record<string, string[]>>((() => {
+    try { return JSON.parse(localStorage.getItem(orderKey) ?? '{}') ?? {} }
+    catch { return {} }
+  })())
   const [moving, setMoving] = createSignal(false)
   const [error, setError] = createSignal<string>()
   const [moveEntry, setMoveEntry] = createSignal<WorkspaceEntry>()
@@ -175,6 +184,15 @@ export default function WorkspaceSidebar(props: {
     return destination !== parent && (!entry.directory || !childOf(target, entry.path, true))
   }
 
+  const orderedEntries = (folder: string) => {
+    const entries = directories[folder]?.entries ?? []
+    const order = orders()[folder]
+    if (!Array.isArray(order)) return entries
+    const ranks = new Map(order.map((path, index) => [path, index]))
+    return [...entries].sort((first, second) =>
+      (ranks.get(first.path) ?? entries.length) - (ranks.get(second.path) ?? entries.length))
+  }
+
   const beginMove = (entry: WorkspaceEntry) => {
     if (moving()) return
     setError(undefined)
@@ -218,7 +236,8 @@ export default function WorkspaceSidebar(props: {
           run: () => toggle(entry.path),
         })
       } else {
-        actions.push({ label: entry.markdown ? '打开此文档' : '用系统应用打开', run: () => props.onOpen(entry) })
+        const label = entry.markdown ? '打开此文档' : previewKind(entry.name) ? '预览' : '用系统应用打开'
+        actions.push({ label, run: () => props.onOpen(entry) })
       }
     }
     if (root && (!entry || entry.directory)) {
@@ -228,7 +247,7 @@ export default function WorkspaceSidebar(props: {
         { label: '新建文件夹…', run: () => setCreation({ folder, directory: true }) },
       )
     }
-    if (entry?.directory || entry?.markdown) {
+    if (entry && entry.accessible !== false) {
       actions.push({ label: '移动到…', run: () => beginMove(entry) })
     }
     const activeFileActions = props.active && !props.readonly
@@ -245,7 +264,7 @@ export default function WorkspaceSidebar(props: {
   }
 
   const move = async (entry: WorkspaceEntry, target: string) => {
-    if (moving() || !canMoveTo(entry, target)) return
+    if (moving() || !canMoveTo(entry, target)) return false
     setMoving(true)
     setError(undefined)
     try {
@@ -262,14 +281,36 @@ export default function WorkspaceSidebar(props: {
         }
       }
       setMoveEntry(undefined)
+      return true
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
+      return false
     } finally {
       setMoving(false)
     }
   }
 
-  let press: { pointer: number; x: number; y: number; entry: WorkspaceEntry } | undefined
+  const drop = async (entry: WorkspaceEntry, target: DropLocation) => {
+    if (target.edge === 'inside') {
+      await move(entry, target.folder)
+      return
+    }
+    const paths = orderedEntries(target.folder).map((item) => item.path).filter((path) => path !== entry.path)
+    const index = paths.indexOf(target.anchor)
+    if (index < 0) return
+    let destination = entry.path
+    if (canMoveTo(entry, target.folder)) {
+      if (!await move(entry, target.folder)) return
+      const sep = separator(target.folder)
+      destination = `${target.folder}${target.folder.endsWith(sep) ? '' : sep}${entry.name}`
+    }
+    paths.splice(index + (target.edge === 'after' ? 1 : 0), 0, destination)
+    const updated = { ...orders(), [target.folder]: paths }
+    setOrders(updated)
+    try { localStorage.setItem(orderKey, JSON.stringify(updated)) } catch { /* Keep session order. */ }
+  }
+
+  let press: { pointer: number; x: number; y: number; row: HTMLElement; entry: WorkspaceEntry } | undefined
   let openTimer: ReturnType<typeof setTimeout> | undefined
   let clickTimer: ReturnType<typeof setTimeout> | undefined
   let suppressClick = false
@@ -283,16 +324,25 @@ export default function WorkspaceSidebar(props: {
 
   const pressRow = (event: PointerEvent, entry: WorkspaceEntry) => {
     if (moving() || event.button !== 0 || event.pointerType === 'touch') return
-    if (!entry.directory && !entry.markdown) return
+    if (entry.accessible === false) return
     if ((event.target as Element).closest('.workspace-row-action')) return
-    press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, entry }
+    press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, row: event.currentTarget as HTMLElement, entry }
   }
 
-  const folderAt = (event: PointerEvent, entry: WorkspaceEntry) => {
+  const locationAt = (event: PointerEvent, entry: WorkspaceEntry): DropLocation | undefined => {
     const hovered = document.elementFromPoint(event.clientX, event.clientY)
-      ?.closest<HTMLElement>('[data-workspace-folder]')
-    const folder = hovered && tree.contains(hovered) ? hovered.dataset.workspaceFolder : undefined
-    return folder && canMoveTo(entry, folder) ? folder : undefined
+      ?.closest<HTMLElement>('[data-workspace-entry], [data-workspace-folder]')
+    if (!hovered || !tree.contains(hovered)) return
+    const { workspaceEntry: anchor, workspaceFolder: folder, workspaceParent: parent } = hovered.dataset
+    if (anchor === entry.path) return
+    const row = hovered.getBoundingClientRect()
+    const ratio = (event.clientY - row.top) / Math.max(row.height, 1)
+    if (folder && (!anchor || (ratio >= 0.25 && ratio <= 0.75))) {
+      if (canMoveTo(entry, folder)) return { folder, anchor: folder, edge: 'inside' }
+      return
+    }
+    if (!anchor || !parent || (entry.directory && childOf(parent, entry.path, true))) return
+    return { folder: parent, anchor, edge: ratio < 0.5 ? 'before' : 'after' }
   }
 
   const movePointer = (event: PointerEvent) => {
@@ -302,28 +352,32 @@ export default function WorkspaceSidebar(props: {
       return
     }
     if (!dragged()) {
-      if (Math.hypot(event.clientX - press.x, event.clientY - press.y) < 6) return
+      const row = press.row.getBoundingClientRect()
+      const stillOnRow = event.clientY >= row.top && event.clientY < row.bottom
+        && event.clientX >= row.left && event.clientX < row.right
+      if (stillOnRow || Math.hypot(event.clientX - press.x, event.clientY - press.y) < 10) return
       setDragged(press.entry)
       setError(undefined)
     }
-    const target = folderAt(event, press.entry)
-    if (target === dropTarget()) return
+    const target = locationAt(event, press.entry)
+    const previous = dropTarget()
+    if (target?.anchor === previous?.anchor && target?.edge === previous?.edge) return
     setDropTarget(target)
     clearTimeout(openTimer)
-    if (target && target !== root && !expanded().has(target)) {
-      openTimer = setTimeout(() => { if (!expanded().has(target)) toggle(target) }, 550)
+    if (target?.edge === 'inside' && target.folder !== root && !expanded().has(target.folder)) {
+      openTimer = setTimeout(() => { if (!expanded().has(target.folder)) toggle(target.folder) }, 550)
     }
   }
 
   const releasePointer = (event: PointerEvent) => {
     if (!press || press.pointer !== event.pointerId) return
     const source = dragged()
-    const target = source && folderAt(event, source)
+    const target = source && locationAt(event, source)
     clearDrag()
     if (!source) return
     suppressClick = true
     clickTimer = setTimeout(() => { suppressClick = false }, 0)
-    if (target) void move(source, target)
+    if (target) void drop(source, target)
   }
 
   onMount(() => {
@@ -362,15 +416,39 @@ export default function WorkspaceSidebar(props: {
     </Show>
   )
 
+  const FolderBranch = (folder: { path: string }) => {
+    const opened = () => expanded().has(folder.path)
+    const [mounted, setMounted] = createSignal(opened())
+    createEffect(() => {
+      if (opened()) {
+        setMounted(true)
+        return
+      }
+      const timer = setTimeout(() => setMounted(false), 180)
+      onCleanup(() => clearTimeout(timer))
+    })
+    return (
+      <div class="workspace-branch" classList={{ 'is-expanded': opened() }} inert={!opened()}>
+        <div class="workspace-branch-content">
+          <Show when={opened() || mounted()}><Rows path={folder.path} /></Show>
+        </div>
+      </div>
+    )
+  }
+
   const Rows = (rows: { path: string }) => (
-    <ul class="workspace-rows">
-      <For each={directories[rows.path]?.entries} fallback={<li><DirectoryStatus path={rows.path} empty="空文件夹" /></li>}>
+    <ul class="workspace-rows" data-workspace-folder={rows.path}>
+      <For each={orderedEntries(rows.path)} fallback={<li><DirectoryStatus path={rows.path} empty="空文件夹" /></li>}>
         {(entry) => (
-          <li>
+          <li classList={{
+            'workspace-drop-before': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'before',
+            'workspace-drop-after': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'after',
+          }}>
             <div
               class="workspace-row"
-              classList={{ 'workspace-drop-target': dropTarget() === entry.path, 'workspace-dragged': dragged()?.path === entry.path }}
+              classList={{ 'workspace-drop-target': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'inside', 'workspace-dragged': dragged()?.path === entry.path }}
               data-workspace-folder={entry.directory ? entry.path : undefined}
+              data-workspace-entry={entry.path} data-workspace-parent={rows.path}
               onPointerDown={(event) => pressRow(event, entry)}
               onContextMenu={(event) => showContext(event, entry)}
               onKeyDown={(event) => contextShortcut(event, entry)}
@@ -379,21 +457,30 @@ export default function WorkspaceSidebar(props: {
                 type="button"
                 class="workspace-row-button"
                 title={entry.name}
+                disabled={entry.accessible === false}
                 aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
                 aria-current={!entry.directory && props.active === entry.path ? 'page' : undefined}
+                aria-busy={props.pending === entry.path || undefined}
                 onClick={() => { if (entry.directory) toggle(entry.path); else props.onOpen(entry) }}
               >
                 <span classList={{ 'workspace-chevron': true, 'has-folder': entry.directory, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true" />
-                <span classList={{ 'workspace-entry-icon': true, 'is-folder': entry.directory, 'is-document': entry.markdown }} aria-hidden="true" />
+                <span classList={{
+                  'workspace-entry-icon': true,
+                  'is-folder': entry.directory,
+                  'is-folder-open': entry.directory && expanded().has(entry.path),
+                  'is-document': entry.markdown,
+                }} aria-hidden="true" />
                 <span class="workspace-entry-name">{entry.name}</span>
               </button>
-              <button
-                type="button" class="workspace-row-action" title="更多操作" aria-haspopup="menu"
-                aria-label={`${entry.name} 的操作`} onClick={(event) => showContext(event, entry)}
-              >…</button>
+              <Show when={entry.accessible !== false}>
+                <button
+                  type="button" class="workspace-row-action" title="更多操作" aria-haspopup="menu"
+                  aria-label={`${entry.name} 的操作`} onClick={(event) => showContext(event, entry)}
+                >…</button>
+              </Show>
             </div>
-            <Show when={entry.directory && expanded().has(entry.path)}>
-              <Rows path={entry.path} />
+            <Show when={entry.directory}>
+              <FolderBranch path={entry.path} />
             </Show>
           </li>
         )}
@@ -499,13 +586,13 @@ export default function WorkspaceSidebar(props: {
 
   return (
     <aside class="workspace" id="workspace-sidebar" aria-label="工作区文件" ref={tree}
-      hidden={!props.visible} onContextMenu={(event) => showContext(event)}
+      inert={!props.visible} onContextMenu={(event) => showContext(event)}
       onKeyDown={(event) => contextShortcut(event)}>
       <div
-        class="workspace-title" classList={{ 'workspace-drop-target': dropTarget() === root }}
+        class="workspace-title" classList={{ 'workspace-drop-target': dropTarget()?.anchor === root }}
         data-workspace-folder={root || undefined}
       >
-        <Show when={root}><span class="workspace-entry-icon is-folder" aria-hidden="true" /></Show>
+        <Show when={root}><span class="workspace-entry-icon is-folder is-folder-open" aria-hidden="true" /></Show>
         <strong title={root || undefined}>{root ? nameOf(root) : '工作区'}</strong>
         <button type="button" class="workspace-more" aria-label="工作区操作" aria-haspopup="menu"
           disabled={moving() || props.restoring} onClick={(event) => showContext(event)}>⋯</button>

@@ -1,14 +1,17 @@
 use crate::{
-    attachments::{normalize, relative_href, relative_link, Reference},
+    attachments::{normalize, relative_href, relative_link},
     markdown,
 };
 use pulldown_cmark::{CowStr, Event, LinkType, Tag};
-use std::{collections::BTreeMap, ops::Range, path::Path};
+use std::{
+    collections::BTreeMap,
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 pub(crate) struct Link<'a> {
-    href: CowStr<'a>,
+    pub(crate) href: CowStr<'a>,
     source: Option<Range<usize>>,
-    image: bool,
 }
 
 fn borrowed_range(text: &str, url: &CowStr<'_>) -> Option<Range<usize>> {
@@ -84,19 +87,19 @@ pub(crate) fn links(text: &str) -> Vec<Link<'_>> {
     let mut parser = markdown::relocation_parser(text).into_offset_iter();
     let mut links = Vec::new();
     while let Some((event, span)) = parser.next() {
-        let (href, kind, id, image) = match event {
+        let (href, kind, id) = match event {
             Event::Start(Tag::Link {
                 dest_url,
                 link_type,
                 id,
                 ..
-            }) => (dest_url, link_type, id, false),
+            }) => (dest_url, link_type, id),
             Event::Start(Tag::Image {
                 dest_url,
                 link_type,
                 id,
                 ..
-            }) => (dest_url, link_type, id, true),
+            }) => (dest_url, link_type, id),
             _ => continue,
         };
         if relative_href(&href).is_none() {
@@ -110,25 +113,9 @@ pub(crate) fn links(text: &str) -> Vec<Link<'_>> {
                 escaped_range(text, definition.span.clone(), "]:", &href)
             }
         });
-        links.push(Link {
-            href,
-            source,
-            image,
-        });
+        links.push(Link { href, source });
     }
     links
-}
-
-pub(crate) fn references(links: &[Link<'_>]) -> Vec<Reference> {
-    let mut references = BTreeMap::new();
-    for link in links {
-        let image = references.entry(link.href.to_string()).or_insert(false);
-        *image |= link.image;
-    }
-    references
-        .into_iter()
-        .map(|(href, image)| Reference { href, image })
-        .collect()
 }
 
 pub(crate) fn rewrite(
@@ -167,18 +154,13 @@ pub(crate) fn rebased_link(
     href: &str,
     old_dir: &Path,
     new_dir: &Path,
-    source: &Path,
-    destination: &Path,
+    relocate: impl Fn(&Path) -> Option<PathBuf>,
 ) -> Result<Option<String>, String> {
     let Some((relative, suffix)) = relative_href(href) else {
         return Ok(None);
     };
     let previous = normalize(&old_dir.join(&relative));
-    let updated = match previous.strip_prefix(source) {
-        Ok(tail) if tail.as_os_str().is_empty() => destination.to_owned(),
-        Ok(tail) => destination.join(tail),
-        Err(_) => previous,
-    };
+    let updated = relocate(&previous).unwrap_or(previous);
     if updated == normalize(&new_dir.join(&relative)) {
         return Ok(None);
     }
