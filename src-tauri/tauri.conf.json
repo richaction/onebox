@@ -3,6 +3,7 @@
   "productName": "onebox",
   "version": "0.1.0",
   "identifier": "com.onebox.editor",
+  "plugins": { "fs": { "requireLiteralLeadingDot": false } },
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -17,7 +18,7 @@
       "height": 760,
       "dragDropEnabled": false
     }],
-    "security": { "csp": null }
+    "security": { "csp": null, "assetProtocol": { "enable": true, "scope": [] } }
   },
   "bundle": {
     "active": false,

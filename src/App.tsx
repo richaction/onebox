@@ -10,6 +10,7 @@ import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
+import FilePreview, { previewKind } from './ui/FilePreview'
 import WorkspaceSidebar from './ui/WorkspaceSidebar'
 
 const SAVE_DEBOUNCE_MS = 800
@@ -37,17 +38,21 @@ export default function App() {
   const desktop = isTauri()
   const mac = desktop && /Mac OS X/u.test(navigator.userAgent)
   let handle: EditorHandle | undefined
+  let sidebarToggle: HTMLButtonElement | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let savedDoc: Node | undefined
   let writer: Promise<boolean> | undefined
   let busy = false
   let cancelLoad = false
+  let openingFromSidebar = false
 
   const [path, setPath] = createSignal<string | null>(null)
   const [readonly, setReadonly] = createSignal(false)
   const [loading, setLoading] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
   const [workspace, setWorkspace] = createSignal<WorkspaceRoot>()
+  const [preview, setPreview] = createSignal<WorkspaceEntry>()
+  const [pendingOpen, setPendingOpen] = createSignal<{ entry: WorkspaceEntry; root: string }>()
   const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop)
   const [sidebarVisible, setSidebarVisible] = createSignal(true)
   const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
@@ -55,7 +60,12 @@ export default function App() {
   const [workspaceMoving, setWorkspaceMoving] = createSignal(false)
   const [failure, setFailure] = createSignal<Failure>()
   const sidebarLabel = () => sidebarVisible() ? '关闭侧栏' : '打开侧栏'
-  const toggleSidebar = () => setSidebarVisible((visible) => !visible)
+  const toggleSidebar = () => {
+    if (sidebarVisible() && document.getElementById('workspace-sidebar')?.contains(document.activeElement)) {
+      sidebarToggle?.focus({ preventScroll: true })
+    }
+    setSidebarVisible((visible) => !visible)
+  }
 
   const editorIsEditable = () => !desktop || (!!path() && !readonly())
 
@@ -119,6 +129,7 @@ export default function App() {
     } finally {
       busy = false
       setEditable(editor, editorIsEditable())
+      queueMicrotask(openPendingEntry)
     }
   }
 
@@ -157,6 +168,7 @@ export default function App() {
         limit = Math.round(Math.min(512, Math.max(48, limit * Math.min(1.33, 7 / duration))))
       }
       savedDoc = editor.editor.state.doc
+      setPreview(undefined)
       setReadonly(start.readonly)
       setFailure(undefined)
       return true
@@ -184,6 +196,7 @@ export default function App() {
     if (typeof picked !== 'string') return true
     setWorkspaceReveal(undefined)
     setWorkspace(await desktopWorkspace.selectRoot(picked))
+    setPreview(undefined)
     setSidebarVisible(true)
     setFailure(undefined)
     return true
@@ -191,6 +204,7 @@ export default function App() {
 
   const closeWorkspace = () => runFileAction(async () => {
     await desktopWorkspace.clearRoot()
+    setPreview(undefined)
     setWorkspace(undefined)
     setWorkspaceReveal(undefined)
     setFailure(undefined)
@@ -227,12 +241,45 @@ export default function App() {
   }
 
   const openWorkspaceEntry = (entry: WorkspaceEntry) => {
-    if (entry.markdown) {
-      void runFileAction((editor) => readDocument(editor, entry.path), '打开失败')
-    } else {
-      const current = workspace()
-      if (current) void desktopWorkspace.openAttachment(current.root, entry.path).catch(() => setFailure('打开失败'))
+    const current = workspace()
+    if (!current) return
+    setPendingOpen({ entry, root: current.root })
+    if (openingFromSidebar && loading() && path() !== entry.path) cancelLoad = true
+    openPendingEntry()
+  }
+
+  function openPendingEntry() {
+    const pending = pendingOpen()
+    if (!pending || busy || openingFromSidebar || !handle) return
+    const { entry, root } = pending
+    if (workspace()?.root !== root) {
+      setPendingOpen(undefined)
+      return
     }
+    if (entry.markdown) {
+      openingFromSidebar = true
+      void runFileAction(async (editor) => {
+        if (path() !== entry.path) return readDocument(editor, entry.path)
+        setPreview(undefined)
+        setFailure(undefined)
+        return true
+      }, '打开失败').finally(() => {
+        openingFromSidebar = false
+        if (pendingOpen() === pending) setPendingOpen(undefined)
+        openPendingEntry()
+      })
+    } else {
+      setPendingOpen(undefined)
+      if (previewKind(entry.name)) {
+        setPreview(entry)
+        setFailure(undefined)
+      } else openWorkspaceAttachment(entry.path)
+    }
+  }
+
+  const openWorkspaceAttachment = (file: string, application?: string) => {
+    const current = workspace()
+    if (current) void desktopWorkspace.openAttachment(current.root, file, application).catch(() => setFailure('打开失败'))
   }
 
   const relocateWorkspaceEntry = async (editor: EditorHandle, root: string, source: string, target: string, name?: string) => {
@@ -368,6 +415,10 @@ export default function App() {
       cancelLoad = true
       return
     }
+    if (event.key === 'Escape' && preview() && !document.querySelector('dialog[open], .workspace-context-menu, [role="menu"]:popover-open')) {
+      setPreview(undefined)
+      return
+    }
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.isComposing) return
     switch (event.key.toLowerCase()) {
       case '\\':
@@ -446,7 +497,8 @@ export default function App() {
   const renderSidebar = (current?: WorkspaceRoot) => (
     <WorkspaceSidebar
       workspace={current} visible={sidebarVisible()} restoring={restoringWorkspace()}
-      active={path()} readonly={readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
+      active={preview()?.path ?? path()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
+      pending={pendingOpen()?.entry.path}
       onOpen={openWorkspaceEntry} onOpenFile={() => void openFile()} onOpenWorkspace={() => void openWorkspace()}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry}
       onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
@@ -455,11 +507,11 @@ export default function App() {
   )
 
   return (
-    <main class="app">
+    <main class="app" classList={{ 'workspace-open': desktop && sidebarVisible() }}>
       <Show when={desktop}>
-        <header class="window-bar" classList={{ 'window-bar-mac': mac, 'window-bar-sidebar': sidebarVisible() }}
+        <header class="window-bar" classList={{ 'window-bar-mac': mac }}
           data-tauri-drag-region="">
-          <button type="button" class="sidebar-toggle"
+          <button type="button" class="sidebar-toggle" ref={sidebarToggle}
             aria-label={sidebarLabel()} aria-expanded={sidebarVisible()} aria-controls="workspace-sidebar"
             title={`${sidebarLabel()}（${mac ? '⌘' : 'Ctrl+'}\\）`} onClick={toggleSidebar}>
             <span class="sidebar-toggle-symbol" aria-hidden="true" />
@@ -468,30 +520,40 @@ export default function App() {
       </Show>
       <div class="editor-layout">
         <Show when={desktop}>
-          <Show when={workspace()} keyed fallback={renderSidebar()}>
-            {(current) => renderSidebar(current)}
-          </Show>
+          <div class="workspace-slot">
+            <Show when={workspace()} keyed fallback={renderSidebar()}>
+              {(current) => renderSidebar(current)}
+            </Show>
+          </div>
         </Show>
-        <EditorShell
-          markdown=""
-          onReady={onReady}
-          onUpdate={onUpdate}
-          onInsertAttachment={desktop ? pickAttachment : undefined}
-          onInsertFiles={desktop ? insertFiles : undefined}
-          imageContext={path}
-          readImage={desktop ? (href) => {
-            const document = path()
-            return document ? desktopAttachments.readImage(document, href) : Promise.resolve(undefined)
-          } : undefined}
-          openResource={desktop ? (href) => {
-            const document = path()
-            if (document) void desktopAttachments.open(document, href).catch(() => setFailure('附件操作失败'))
-          } : undefined}
-        />
+        <div class="editor-content">
+          <div class="editor-document" inert={!!preview()} hidden={!!preview()}>
+            <EditorShell
+              markdown=""
+              onReady={onReady}
+              onUpdate={onUpdate}
+              onInsertAttachment={desktop ? pickAttachment : undefined}
+              onInsertFiles={desktop ? insertFiles : undefined}
+              imageContext={path}
+              readImage={desktop ? (href) => {
+                const document = path()
+                return document ? desktopAttachments.readImage(document, href) : Promise.resolve(undefined)
+              } : undefined}
+              openResource={desktop ? (href) => {
+                const document = path()
+                if (document) void desktopAttachments.open(document, href).catch(() => setFailure('附件操作失败'))
+              } : undefined}
+            />
+          </div>
+          <Show when={preview()} keyed>
+            {(entry) => <FilePreview root={workspace()!.root} entry={entry}
+              onOpenExternal={(application) => openWorkspaceAttachment(entry.path, application)} />}
+          </Show>
+        </div>
       </div>
       <footer class="statusbar" role="status">
-        <span title={path() ?? undefined}>{path() ? nameOf(path()!) : ''}</span>
-        <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : readonly() ? '只读' : ''}</span>
+        <span title={preview()?.path ?? path() ?? undefined}>{preview()?.name ?? (path() ? nameOf(path()!) : '')}</span>
+        <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : preview() || readonly() ? '只读' : ''}</span>
         <span>{failure()}</span>
       </footer>
     </main>
