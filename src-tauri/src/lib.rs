@@ -82,6 +82,7 @@ pub fn run() {
             workspace::open_workspace_attachment,
             workspace::workspace_file_applications,
             workspace::workspace_file_application_icons,
+            workspace::import_workspace_files,
             workspace::workspace_preview,
             workspace::release_workspace_preview,
             workspace::workspace_entries,

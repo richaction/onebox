@@ -1,12 +1,12 @@
 import type { EditorState } from '@tiptap/pm/state'
 import type { Node, Schema } from '@tiptap/pm/model'
-import type { WorkspaceEntry, WorkspaceRoot } from '../io/tauri'
+import type { PreviewEntry, WorkspaceRoot } from '../io/tauri'
 
 export interface DevelopmentSnapshot {
   path: string | null
   readonly: boolean
   workspace?: WorkspaceRoot
-  preview?: WorkspaceEntry
+  preview?: PreviewEntry
   sidebarVisible: boolean
   savedDoc?: Node
   writer?: Promise<boolean>

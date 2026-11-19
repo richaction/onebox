@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { JSONContent, Range } from '@tiptap/core'
 import type { Node } from '@tiptap/pm/model'
@@ -11,16 +12,17 @@ import { EditorState } from '@tiptap/pm/state'
 import { schema } from './core/schema'
 import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
-import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
+import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type PreviewEntry, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
 import WorkspaceSidebar from './ui/WorkspaceSidebar'
+import WorkspaceResizeHandle, { initialWorkspaceWidth } from './ui/WorkspaceResizeHandle'
 
 const SAVE_DEBOUNCE_MS = 800
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
 
-type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '移动失败' | '移动已完成，请重新打开文档'
+type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '移动失败' | '移动已完成，请重新打开文档' | '导入失败'
 type Transfer = 'saveAs' | 'copy' | 'move'
 
 function nameOf(path: string) {
@@ -62,14 +64,20 @@ export default function App() {
   const [loading, setLoading] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
   const [workspace, setWorkspace] = createSignal<WorkspaceRoot | undefined>(restored?.workspace)
-  const [preview, setPreview] = createSignal<WorkspaceEntry | undefined>(restored?.preview)
+  const [preview, setPreview] = createSignal<PreviewEntry | undefined>(restored?.preview)
   const [pendingOpen, setPendingOpen] = createSignal<{ entry: WorkspaceEntry; root: string }>()
   const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop && !restored)
   const [sidebarVisible, setSidebarVisible] = createSignal(restored?.sidebarVisible ?? true)
+  const [sidebarWidth, setSidebarWidth] = createSignal(initialWorkspaceWidth())
+  const [resizingSidebar, setResizingSidebar] = createSignal(false)
   const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
   const [workspaceReveal, setWorkspaceReveal] = createSignal<string>()
   const [workspaceMoving, setWorkspaceMoving] = createSignal(false)
+  const [importTarget, setImportTarget] = createSignal<string>()
+  const [workspaceImporting, setWorkspaceImporting] = createSignal(false)
+  const [importMessage, setImportMessage] = createSignal<string>()
   const [failure, setFailure] = createSignal<Failure>()
+  const activeFile = () => preview()?.path ?? path()
   const sidebarLabel = () => sidebarVisible() ? '关闭侧栏' : '打开侧栏'
   const toggleSidebar = () => {
     if (sidebarVisible() && document.getElementById('workspace-sidebar')?.contains(document.activeElement)) {
@@ -198,11 +206,36 @@ export default function App() {
     }
   }
 
-  const openFile = () => runFileAction(async (editor) => {
-    const picked = await open({ multiple: false, filters: MARKDOWN_FILTERS })
+  const openFile = (folder?: string) => runFileAction(async (editor) => {
+    const picked = await open({ multiple: false, defaultPath: folder })
     if (typeof picked !== 'string') return true
-    return readDocument(editor, picked)
+    const root = workspace()?.root
+    const entry = fileEntry(picked)
+    if (folder && root) {
+      const separator = folder.startsWith('/') ? '/' : '\\'
+      const parent = picked.slice(0, picked.lastIndexOf(separator) + 1)
+      const destination = folder.endsWith(separator) ? folder : folder + separator
+      if (parent !== destination) {
+        if (picked === path() && !await flush()) return false
+        return importWorkspaceFiles(root, folder, [picked], true)
+      }
+    }
+    if (entry.markdown) {
+      if (!await readDocument(editor, picked)) return false
+    } else {
+      setPreview({ ...entry, workspaceRoot: root && inWorkspace(picked, root) ? root : undefined })
+      setFailure(undefined)
+    }
+    if (root && inWorkspace(picked, root)) {
+      setWorkspaceReveal(picked)
+      refreshWorkspace()
+    } else setWorkspaceReveal(undefined)
+    return true
   }, '打开失败')
+
+  const fileEntry = (file: string): WorkspaceEntry => ({
+    path: file, name: nameOf(file), directory: false, markdown: /\.(md|markdown)$/iu.test(file),
+  })
 
   const refreshWorkspace = () => setWorkspaceRevision((version) => version + 1)
 
@@ -270,6 +303,7 @@ export default function App() {
   const openWorkspaceEntry = (entry: WorkspaceEntry) => {
     const current = workspace()
     if (!current) return
+    if (workspaceReveal() !== entry.path) setWorkspaceReveal(undefined)
     setPendingOpen({ entry, root: current.root })
     if (openingFromSidebar && loading() && path() !== entry.path) cancelLoad = true
     openPendingEntry()
@@ -297,14 +331,13 @@ export default function App() {
       })
     } else {
       setPendingOpen(undefined)
-      setPreview(entry)
+      setPreview({ ...entry, workspaceRoot: root })
       setFailure(undefined)
     }
   }
 
-  const openWorkspaceAttachment = (file: string, application?: string) => {
-    const current = workspace()
-    if (current) void desktopWorkspace.openAttachment(current.root, file, application).catch(() => setFailure('打开失败'))
+  const openWorkspaceAttachment = (entry: PreviewEntry, application?: string) => {
+    void desktopWorkspace.openAttachment(entry.workspaceRoot, entry.path, application).catch(() => setFailure('打开失败'))
   }
 
   const relocateWorkspaceEntry = async (editor: EditorHandle, root: string, source: string, target: string, name?: string) => {
@@ -419,20 +452,73 @@ export default function App() {
     }, '附件操作失败')
   }
 
-  const insertFiles = (files: File[]) => {
+  const insertFiles = (files: (File | string)[], range?: Range) => {
     const document = path()
     if (!document) return
     void runFileAction(async (editor) => {
       const imported: Attachment[] = []
       try {
-        for (const file of files) imported.push(await desktopAttachments.importFile(document, file))
+        for (const file of files) {
+          imported.push(await (typeof file === 'string'
+            ? desktopAttachments.import(document, file) : desktopAttachments.importFile(document, file)))
+        }
         setFailure(undefined)
         return true
       } finally {
-        insertAttachments(editor, imported)
+        insertAttachments(editor, imported, range)
       }
     }, '附件操作失败')
   }
+
+  const importWorkspaceFiles = async (root: string, folder: string, files: string[], openCopy = false) => {
+    if (workspaceImporting()) return false
+    setWorkspaceImporting(true)
+    setImportMessage(undefined)
+    setFailure(undefined)
+    try {
+      const result = await desktopWorkspace.importFiles(root, folder, files)
+      if (workspace()?.root !== root) return false
+      if (result.paths.length) {
+        setWorkspaceReveal(result.paths[0])
+        refreshWorkspace()
+      }
+      setImportMessage(result.failed
+        ? `已导入 ${result.paths.length} 项，${result.failed} 项无法导入`
+        : `已导入 ${result.paths.length} 个文件`)
+      if (openCopy && result.paths.length === 1) openWorkspaceEntry(fileEntry(result.paths[0]))
+      return result.paths.length > 0
+    } catch {
+      setFailure('导入失败')
+      return false
+    } finally {
+      setWorkspaceImporting(false)
+    }
+  }
+
+  const listenForFileDrops = () => getCurrentWebview().onDragDropEvent(({ payload }) => {
+    if (disposed) return
+    if (payload.type === 'leave') {
+      setImportTarget(undefined)
+      return
+    }
+    // Wry's macOS drag coordinates come from AppKit in points.
+    const scale = mac ? 1 : window.devicePixelRatio || 1
+    const point = { left: payload.position.x / scale, top: payload.position.y / scale }
+    const target = document.elementFromPoint(point.left, point.top)
+    const root = workspace()?.root
+    const row = target?.closest<HTMLElement>('[data-workspace-entry]')
+    const folder = root && sidebarVisible() && target?.closest('#workspace-sidebar')
+      ? row?.dataset.workspaceFolder ?? row?.dataset.workspaceParent
+        ?? target.closest<HTMLElement>('[data-workspace-folder]')?.dataset.workspaceFolder ?? root
+      : undefined
+    setImportTarget(payload.type === 'drop' ? undefined : folder)
+    if (payload.type !== 'drop' || !payload.paths.length) return
+    if (root && folder) void importWorkspaceFiles(root, folder, payload.paths)
+    else if (handle && !preview() && editorIsEditable() && target?.closest('.ProseMirror')) {
+      const pos = handle.editor.view.posAtCoords(point)?.pos
+      insertFiles(payload.paths, pos === undefined ? undefined : { from: pos, to: pos })
+    }
+  })
 
   const onKeydown = (event: KeyboardEvent) => {
     if (event.key === 'Escape' && loading()) {
@@ -480,6 +566,7 @@ export default function App() {
       })
     }
     window.addEventListener('keydown', onKeydown)
+    const fileDrops = desktop ? listenForFileDrops().catch(() => { setFailure('导入失败') }) : undefined
     const listener = getCurrentWindow().onCloseRequested(async (event) => {
       if (busy || !handle) {
         event.preventDefault()
@@ -498,6 +585,7 @@ export default function App() {
     onCleanup(() => {
       window.removeEventListener('keydown', onKeydown)
       void listener.then((unlisten) => unlisten?.())
+      void fileDrops?.then((unlisten) => unlisten?.())
     })
   })
 
@@ -627,9 +715,9 @@ export default function App() {
   const renderSidebar = (current?: WorkspaceRoot) => (
     <WorkspaceSidebar
       workspace={current} visible={sidebarVisible()} restoring={restoringWorkspace()}
-      active={preview()?.path ?? path()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
-      pending={pendingOpen()?.entry.path}
-      onOpen={openWorkspaceEntry} onOpenFile={() => void openFile()} onOpenWorkspace={() => void openWorkspace()}
+      active={activeFile()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
+      pending={pendingOpen()?.entry.path} importTarget={importTarget()}
+      onOpen={openWorkspaceEntry} onOpenFile={(folder) => void openFile(folder)} onOpenWorkspace={() => void openWorkspace()}
       onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry}
       onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
@@ -638,7 +726,8 @@ export default function App() {
   )
 
   return (
-    <main class="app" classList={{ 'workspace-open': desktop && sidebarVisible() }}>
+    <main class="app" classList={{ 'workspace-open': desktop && sidebarVisible(), 'workspace-resizing': resizingSidebar() }}
+      style={{ '--workspace-preferred-width': `${sidebarWidth()}px` }}>
       <Show when={desktop}>
         <header class="window-bar" classList={{ 'window-bar-mac': mac }}
           data-tauri-drag-region="">
@@ -656,6 +745,9 @@ export default function App() {
               {(current) => renderSidebar(current)}
             </Show>
           </div>
+        </Show>
+        <Show when={desktop && sidebarVisible()}>
+          <WorkspaceResizeHandle width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
         </Show>
         <div class="editor-content">
           <div class="editor-document" inert={!!preview()} hidden={!!preview()}>
@@ -677,16 +769,16 @@ export default function App() {
             />
           </div>
           <Show when={preview()} keyed>
-            {(entry) => <FilePreview root={workspace()!.root} entry={entry}
-              onOpenExternal={(application) => openWorkspaceAttachment(entry.path, application)}
+            {(entry) => <FilePreview root={entry.workspaceRoot} entry={entry}
+              onOpenExternal={(application) => openWorkspaceAttachment(entry, application)}
               onClose={() => setPreview(undefined)} />}
           </Show>
         </div>
       </div>
       <footer class="statusbar" role="status">
         <span title={preview()?.path ?? path() ?? undefined}>{preview()?.name ?? (path() ? nameOf(path()!) : '')}</span>
-        <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : preview() || readonly() ? '只读' : ''}</span>
-        <span>{failure()}</span>
+        <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : workspaceImporting() ? '正在导入' : preview() || readonly() ? '只读' : ''}</span>
+        <span>{failure() ?? importMessage()}</span>
       </footer>
     </main>
   )

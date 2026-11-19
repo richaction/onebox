@@ -13,7 +13,7 @@ function AppIcon(props: { bytes?: number[] }) {
 }
 
 export default function FilePreview(props: {
-  root: string
+  root?: string
   entry: WorkspaceEntry
   onOpenExternal: (application?: string) => void
   onClose: () => void

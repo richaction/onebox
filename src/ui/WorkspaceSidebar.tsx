@@ -100,8 +100,9 @@ export default function WorkspaceSidebar(props: {
   readonly: boolean
   reveal?: string
   revision: number
+  importTarget?: string
   onOpen: (entry: WorkspaceEntry) => void
-  onOpenFile: () => void
+  onOpenFile: (folder?: string) => void
   onOpenWorkspace: () => void
   onOpenDemo?: () => void
   onCreate: (folder: string, name: string, directory: boolean) => Promise<void>
@@ -168,6 +169,18 @@ export default function WorkspaceSidebar(props: {
   }
   createEffect(on(() => props.revision, refresh, { defer: true }))
 
+  createEffect(() => {
+    const file = props.reveal ?? props.active
+    if (!props.visible || !root || !file || !childOf(file, root)) return
+    const folder = ancestors(root, file).at(-1) ?? root
+    if (!directories[folder]?.entries?.some((entry) => entry.path === file)) return
+    const frame = requestAnimationFrame(() => {
+      const row = tree.querySelector(`[data-workspace-entry="${CSS.escape(file)}"]`)
+      row?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
+    onCleanup(() => cancelAnimationFrame(frame))
+  })
+
   const toggle = (path: string) => {
     const opened = new Set(expanded())
     if (!opened.delete(path)) {
@@ -229,6 +242,7 @@ export default function WorkspaceSidebar(props: {
 
   const actionsFor = ({ entry }: SidebarContext) => {
     const actions: SidebarAction[] = []
+    const folder = entry ? (entry.directory ? entry.path : undefined) : root || undefined
     if (entry) {
       if (entry.directory) {
         actions.push({
@@ -240,8 +254,7 @@ export default function WorkspaceSidebar(props: {
         actions.push({ label, run: () => props.onOpen(entry) })
       }
     }
-    if (root && (!entry || entry.directory)) {
-      const folder = entry?.path ?? root
+    if (folder) {
       actions.push(
         { label: '新建 Markdown…', run: () => setCreation({ folder, directory: false }) },
         { label: '新建文件夹…', run: () => setCreation({ folder, directory: true }) },
@@ -257,7 +270,7 @@ export default function WorkspaceSidebar(props: {
     }
     actions.push(
       { label: '打开文件夹…', run: props.onOpenWorkspace, separator: actions.length > 0 },
-      { label: '打开 Markdown…', run: props.onOpenFile },
+      { label: '打开文件…', run: () => props.onOpenFile(folder) },
     )
     if (root && !entry) actions.push({ label: '刷新文件夹', run: refresh }, { label: '关闭文件夹', run: props.onClose })
     if (!entry && props.onOpenDemo) actions.push({ label: '打开调试样例', run: props.onOpenDemo })
@@ -447,7 +460,7 @@ export default function WorkspaceSidebar(props: {
           }}>
             <div
               class="workspace-row"
-              classList={{ 'workspace-drop-target': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'inside', 'workspace-dragged': dragged()?.path === entry.path }}
+              classList={{ 'workspace-drop-target': props.importTarget === entry.path || (dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'inside'), 'workspace-dragged': dragged()?.path === entry.path }}
               data-workspace-folder={entry.directory ? entry.path : undefined}
               data-workspace-entry={entry.path} data-workspace-parent={rows.path}
               onPointerDown={(event) => pressRow(event, entry)}
@@ -590,7 +603,7 @@ export default function WorkspaceSidebar(props: {
       inert={!props.visible} onContextMenu={(event) => showContext(event)}
       onKeyDown={(event) => contextShortcut(event)}>
       <div
-        class="workspace-title" classList={{ 'workspace-drop-target': dropTarget()?.anchor === root }}
+        class="workspace-title" classList={{ 'workspace-drop-target': props.importTarget === root || dropTarget()?.anchor === root }}
         data-workspace-folder={root || undefined}
       >
         <Show when={root}><span class="workspace-entry-icon is-folder is-folder-open" aria-hidden="true" /></Show>
@@ -604,7 +617,7 @@ export default function WorkspaceSidebar(props: {
           <button type="button" class="workspace-open-folder" disabled={props.restoring} onClick={props.onOpenWorkspace}>
             打开文件夹…
           </button>
-          <button type="button" disabled={props.restoring} onClick={props.onOpenFile}>打开 Markdown…</button>
+          <button type="button" disabled={props.restoring} onClick={() => props.onOpenFile()}>打开文件…</button>
           <Show when={props.onOpenDemo}>
             <button type="button" disabled={props.restoring} onClick={props.onOpenDemo}>打开调试样例</button>
           </Show>

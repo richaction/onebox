@@ -46,6 +46,8 @@ export interface WorkspaceRoot {
   entries: WorkspaceEntry[]
 }
 
+export type PreviewEntry = WorkspaceEntry & { workspaceRoot?: string }
+
 export const desktopWorkspace = {
   openDemo: () => invoke<WorkspaceRoot>('open_demo_workspace'),
   selectRoot: (path: string) => invoke<WorkspaceRoot>('select_workspace_root', { path }),
@@ -53,11 +55,13 @@ export const desktopWorkspace = {
   clearRoot: () => invoke<void>('clear_workspace_root'),
   create: (root: string, folder: string, name: string, directory: boolean) =>
     invoke<WorkspaceEntry>('create_workspace_entry', { root, folder, name, directory }),
-  openAttachment: (root: string, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
-  fileApplications: (root: string, path: string) => invoke<{ path: string; name: string; default: boolean }[]>('workspace_file_applications', { root, path }),
-  fileApplicationIcons: (root: string, path: string, applications: string[]) =>
+  importFiles: (root: string, folder: string, paths: string[]) =>
+    invoke<{ paths: string[]; failed: number }>('import_workspace_files', { root, folder, paths }),
+  openAttachment: (root: string | undefined, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
+  fileApplications: (root: string | undefined, path: string) => invoke<{ path: string; name: string; default: boolean }[]>('workspace_file_applications', { root, path }),
+  fileApplicationIcons: (root: string | undefined, path: string, applications: string[]) =>
     invoke<Record<string, number[]>>('workspace_file_application_icons', { root, path, applications }),
-  preparePreview: (root: string, path: string) =>
+  preparePreview: (root: string | undefined, path: string) =>
     invoke<string | { path: string; convertedName: string }>('workspace_preview', { root, path }),
   releasePreview: (path: string) => invoke<void>('release_workspace_preview', { path }),
   entries: (root: string, folder: string) =>

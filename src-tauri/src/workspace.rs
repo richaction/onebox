@@ -334,20 +334,112 @@ pub(crate) async fn create_workspace_entry(
 }
 
 #[tauri::command]
-pub(crate) async fn open_workspace_attachment(
+pub(crate) async fn import_workspace_files(
     app: AppHandle,
     root: String,
+    folder: String,
+    paths: Vec<String>,
+) -> Result<WorkspaceImport, String> {
+    let settings = workspace_preference(&app)?;
+    let root = selected_path(&app, root)?;
+    let folder = selected_path(&app, folder)?;
+    let sources = paths
+        .into_iter()
+        .map(|path| selected_path(&app, path))
+        .collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+        if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
+            return Err("请先打开此工作区".into());
+        }
+        let folder = workspace_path(&root, &real_root, &folder)?;
+        let mut result = WorkspaceImport::default();
+        for source in sources {
+            match source.and_then(|source| {
+                copy_into_workspace(&source, &folder).map_err(|err| err.to_string())
+            }) {
+                Ok(path) => result.paths.push(path),
+                Err(_) => result.failed += 1,
+            }
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct WorkspaceImport {
+    paths: Vec<PathBuf>,
+    failed: usize,
+}
+
+fn copy_into_workspace(source: &Path, folder: &Path) -> io::Result<PathBuf> {
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "无效文件名"))?;
+    if !fs::symlink_metadata(source)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "请选择普通文件",
+        ));
+    }
+    let mut input = File::open(source)?;
+    let mut staged = tempfile::NamedTempFile::new_in(folder)?;
+    io::copy(&mut input, &mut staged)?;
+    staged.as_file().sync_all()?;
+    let stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(name);
+    let extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    let mut destination = folder.join(name);
+    let mut suffix = 2;
+    loop {
+        match staged.persist_noclobber(&destination) {
+            Ok(_) => return Ok(destination),
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
+                staged = error.file;
+                destination = folder.join(format!("{stem} ({suffix}){extension}"));
+                suffix += 1;
+            }
+            Err(error) => return Err(error.error),
+        }
+    }
+}
+
+fn preview_file(root: Option<&Path>, entry: &Path) -> Result<PathBuf, String> {
+    let path = match root {
+        Some(root) => workspace_path(
+            root,
+            &root.canonicalize().map_err(|err| err.to_string())?,
+            entry,
+        )?,
+        None => entry.canonicalize().map_err(|err| err.to_string())?,
+    };
+    if !path.is_file() {
+        return Err("请选择普通文件".into());
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+pub(crate) async fn open_workspace_attachment(
+    app: AppHandle,
+    root: Option<String>,
     path: String,
     application: Option<String>,
 ) -> Result<(), String> {
-    let root = selected_path(&app, root)?;
+    let root = root.map(|root| selected_path(&app, root)).transpose()?;
     let entry = selected_path(&app, path)?;
     tokio::task::spawn_blocking(move || {
-        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-        let path = workspace_path(&root, &real_root, &entry)?;
-        if !path.is_file() {
-            return Err("请选择文件".into());
-        }
+        let path = preview_file(root.as_deref(), &entry)?;
         #[cfg(target_os = "macos")]
         if let Some(application) = application.as_deref() {
             if !objc2::rc::autoreleasepool(|_| {
@@ -477,17 +569,13 @@ fn file_application_icon(path: &str) -> Option<Vec<u8>> {
 #[tauri::command]
 pub(crate) async fn workspace_file_applications(
     app: AppHandle,
-    root: String,
+    root: Option<String>,
     path: String,
 ) -> Result<Vec<FileApplication>, String> {
-    let root = selected_path(&app, root)?;
+    let root = root.map(|root| selected_path(&app, root)).transpose()?;
     let entry = selected_path(&app, path)?;
     tokio::task::spawn_blocking(move || {
-        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-        let path = workspace_path(&root, &real_root, &entry)?;
-        if !path.is_file() {
-            return Err("请选择文件".into());
-        }
+        let path = preview_file(root.as_deref(), &entry)?;
         #[cfg(target_os = "macos")]
         return Ok(objc2::rc::autoreleasepool(|_| file_applications(&path)));
         #[cfg(not(target_os = "macos"))]
@@ -500,18 +588,14 @@ pub(crate) async fn workspace_file_applications(
 #[tauri::command]
 pub(crate) async fn workspace_file_application_icons(
     app: AppHandle,
-    root: String,
+    root: Option<String>,
     path: String,
     applications: Vec<String>,
 ) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let root = selected_path(&app, root)?;
+    let root = root.map(|root| selected_path(&app, root)).transpose()?;
     let entry = selected_path(&app, path)?;
     tokio::task::spawn_blocking(move || {
-        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-        let path = workspace_path(&root, &real_root, &entry)?;
-        if !path.is_file() {
-            return Err("请选择文件".into());
-        }
+        let path = preview_file(root.as_deref(), &entry)?;
         #[cfg(target_os = "macos")]
         return objc2::rc::autoreleasepool(|_| {
             use std::sync::{Mutex, OnceLock};
@@ -548,21 +632,20 @@ pub(crate) async fn workspace_file_application_icons(
 #[tauri::command]
 pub(crate) async fn workspace_preview(
     app: AppHandle,
-    root: String,
+    root: Option<String>,
     path: String,
 ) -> Result<WorkspacePreview, String> {
     let settings = workspace_preference(&app)?;
-    let root = selected_path(&app, root)?;
+    let root = root.map(|root| selected_path(&app, root)).transpose()?;
     let entry = selected_path(&app, path)?;
     tokio::task::spawn_blocking(move || {
-        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-        if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
-            return Err("请先打开此工作区".into());
+        if let Some(root) = &root {
+            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+            if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
+                return Err("请先打开此工作区".into());
+            }
         }
-        let path = workspace_path(&root, &real_root, &entry)?;
-        if !path.is_file() {
-            return Err("请选择普通文件".into());
-        }
+        let path = preview_file(root.as_deref(), &entry)?;
         let Some(format) = wps_preview::format(&path) else {
             app.asset_protocol_scope()
                 .allow_file(&path)
@@ -1100,6 +1183,25 @@ pub(crate) async fn move_workspace_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn importing_a_dropped_file_keeps_the_source_and_existing_copies() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source = source_dir.path().join("文档.wps");
+        fs::write(&source, "dropped").unwrap();
+        fs::write(destination.path().join("文档.wps"), "existing").unwrap();
+        fs::write(destination.path().join("文档 (2).wps"), "another").unwrap();
+        let copied = copy_into_workspace(&source, destination.path()).unwrap();
+        assert_eq!(copied, destination.path().join("文档 (3).wps"));
+        assert_eq!(fs::read_to_string(&copied).unwrap(), "dropped");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "dropped");
+        assert_eq!(
+            fs::read_to_string(destination.path().join("文档.wps")).unwrap(),
+            "existing"
+        );
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 3);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

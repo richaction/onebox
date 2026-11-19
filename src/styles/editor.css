@@ -82,7 +82,7 @@ body {
 }
 
 .app {
-  --workspace-width: min(252px, 34vw);
+  --workspace-width: clamp(180px, var(--workspace-preferred-width, 252px), min(460px, calc(100vw - 360px)));
   --workspace-reveal: 0px;
   --sidebar-transition: 220ms cubic-bezier(0.2, 0.75, 0.25, 1);
   display: flex;
@@ -99,6 +99,7 @@ body {
 /* ---------------------------------------------------------------- app 外壳 */
 
 .editor-layout {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -193,6 +194,36 @@ body {
   overflow: clip;
   transition: inline-size var(--sidebar-transition);
 }
+
+.workspace-resize-handle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(var(--workspace-width) - 4px);
+  width: 8px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-resize-handle::after {
+  position: absolute;
+  inset: 0 3px 0 auto;
+  width: 2px;
+  content: '';
+}
+
+.workspace-resize-handle:is(:hover, :focus-visible)::after,
+.workspace-resizing .workspace-resize-handle::after {
+  background: var(--ob-text-secondary);
+}
+
+.workspace-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.workspace-resizing .workspace-slot { transition: none; }
+.workspace-resizing iframe { pointer-events: none; }
 
 .workspace {
   flex: none;
@@ -1312,6 +1343,8 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 }
 
 @media (max-width: 600px) {
+  .workspace-resize-handle { display: none; }
+
   .editor-layout {
     flex-direction: column;
   }

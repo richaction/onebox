@@ -16,7 +16,7 @@
       "title": "",
       "width": 1100,
       "height": 760,
-      "dragDropEnabled": false
+      "dragDropEnabled": true
     }],
     "security": { "csp": null, "assetProtocol": { "enable": true, "scope": [] } }
   },

@@ -4,7 +4,7 @@ import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 
 const LOADING_DELAY_MS = 300
 
-export default function ViewerFrame(props: { root: string; entry: WorkspaceEntry; onClose: () => void }) {
+export default function ViewerFrame(props: { root?: string; entry: WorkspaceEntry; onClose: () => void }) {
   let frame!: HTMLIFrameElement
   const [loading, setLoading] = createSignal(false)
   const [visible, setVisible] = createSignal(false)
