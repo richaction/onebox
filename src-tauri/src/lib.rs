@@ -1,6 +1,8 @@
 mod attachments;
 mod fs;
 mod markdown;
+#[cfg(target_os = "macos")]
+mod office_preview;
 mod workspace;
 mod workspace_links;
 
@@ -60,7 +62,9 @@ pub fn run() {
             workspace::create_workspace_entry,
             workspace::open_workspace_attachment,
             workspace::workspace_file_applications,
+            workspace::workspace_file_application_icons,
             workspace::workspace_preview,
+            workspace::workspace_office_preview,
             workspace::workspace_video_poster,
             workspace::workspace_entries,
             workspace::move_workspace_entry

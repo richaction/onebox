@@ -2,10 +2,13 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { createSignal, For, lazy, Match, onCleanup, onMount, Show, Suspense, Switch } from 'solid-js'
 import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 
-const formats: Record<string, 'text' | 'pdf' | 'audio' | 'video'> = {
+const formats: Record<string, 'text' | 'pdf' | 'audio' | 'video' | 'image' | 'office'> = {
   txt: 'text', pdf: 'pdf',
   mp3: 'audio', m4a: 'audio', aac: 'audio', wav: 'audio', flac: 'audio', ogg: 'audio', opus: 'audio',
   mp4: 'video', m4v: 'video', mov: 'video', webm: 'video', ogv: 'video',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', avif: 'image',
+  bmp: 'image', svg: 'image', ico: 'image',
+  doc: 'office', docx: 'office', xls: 'office', xlsx: 'office', ppt: 'office', pptx: 'office',
 }
 
 export function previewKind(name: string) {
@@ -27,6 +30,16 @@ function decodeText(bytes: Uint8Array, truncated: boolean) {
 
 const PdfPreview = lazy(() => import('./PdfPreview'))
 
+function AppIcon(props: { bytes?: number[] }) {
+  return (
+    <span class="file-open-with-icon" aria-hidden="true">
+      <Show when={props.bytes?.length ? props.bytes : undefined} fallback={<span class="file-open-with-generic" />}>
+        {(bytes) => <img src={`data:image/png;base64,${btoa(String.fromCharCode(...bytes()))}`} alt="" />}
+      </Show>
+    </span>
+  )
+}
+
 export default function FilePreview(props: {
   root: string
   entry: WorkspaceEntry
@@ -39,18 +52,40 @@ export default function FilePreview(props: {
   const [truncated, setTruncated] = createSignal(false)
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [applications, setApplications] = createSignal<Awaited<ReturnType<typeof desktopWorkspace.fileApplications>>>()
+  const [applicationIcons, setApplicationIcons] = createSignal<Record<string, number[]>>({})
+  const [officeError, setOfficeError] = createSignal('')
   const [outlineAvailable, setOutlineAvailable] = createSignal(false)
   const [outlineVisible, setOutlineVisible] = createSignal(false)
   const [poster, setPoster] = createSignal<string>()
-  const [videoStarted, setVideoStarted] = createSignal(false)
-  let video!: HTMLVideoElement
   let openWithButton!: HTMLButtonElement
   let openWithMenu!: HTMLDivElement
   const url = convertFileSrc(props.entry.path)
   let disposed = false
   let localPoster: string | undefined
 
+  const openOfficePreview = async () => {
+    setOfficeError('')
+    try {
+      await desktopWorkspace.officePreview(props.root, props.entry.path)
+    } catch (error) {
+      if (!disposed) setOfficeError(typeof error === 'string' ? error : '无法打开 Office 预览')
+    }
+  }
+
   onMount(() => {
+    void desktopWorkspace.fileApplications(props.root, props.entry.path).catch(() => []).then((items) => {
+      if (disposed) return
+      setApplications(items)
+      if (items.length) {
+        void desktopWorkspace.fileApplicationIcons(props.root, props.entry.path, items.map((app) => app.path))
+          .then((icons) => { if (!disposed) setApplicationIcons(icons) }).catch(() => {})
+      }
+    })
+    if (kind === 'office') {
+      setReady(true)
+      void openOfficePreview()
+      return
+    }
     if (kind === 'video') {
       void desktopWorkspace.videoPoster(props.root, props.entry.path).then((bytes) => {
         if (disposed || !bytes.byteLength) return
@@ -83,35 +118,35 @@ export default function FilePreview(props: {
     openWithMenu.style.maxHeight = `${Math.max(48, window.innerHeight - bounds.bottom - 14)}px`
   }
 
-  const updateOpenWith = async () => {
+  const focusMenuItem = () => openWithMenu.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+
+  const updateOpenWith = () => {
     const visible = openWithMenu.matches(':popover-open')
     setMenuOpen(visible)
-    if (!visible) return
-    if (!applications()) {
-      const items = await desktopWorkspace.fileApplications(props.root, props.entry.path).catch(() => [])
-      if (disposed || !openWithMenu.matches(':popover-open')) return
-      setApplications(items)
-    }
-    openWithMenu.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+    if (visible) focusMenuItem()
   }
 
   const openWith = (application?: string) => {
-    openWithMenu.hidePopover()
-    openWithButton.focus()
+    if (openWithMenu.matches(':popover-open')) {
+      openWithMenu.hidePopover()
+      openWithButton.focus()
+    }
     props.onOpenExternal(application)
   }
 
   const onMenuKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      openWithMenu.hidePopover()
+      openWithButton.focus()
+      return
+    }
     const entries = Array.from(openWithMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+    if (!entries.length) return
     const index = entries.indexOf(document.activeElement as HTMLButtonElement)
     let next: number
     switch (event.key) {
-      case 'Escape':
-        event.preventDefault()
-        event.stopPropagation()
-        openWithMenu.hidePopover()
-        openWithButton.focus()
-        return
       case 'ArrowDown': next = (index + 1) % entries.length; break
       case 'ArrowUp': next = index <= 0 ? entries.length - 1 : index - 1; break
       case 'Home': next = 0; break
@@ -124,19 +159,7 @@ export default function FilePreview(props: {
 
   const defaultApp = () => applications()?.find((app) => app.default)
   const alternatives = () => applications()?.filter((app) => !app.default) ?? []
-  const appIcon = (bytes?: number[]) => bytes?.length ? `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}` : undefined
-
-  const firstFrame = (video: HTMLVideoElement) => {
-    if (poster() || !video.videoWidth || !video.videoHeight) return
-    const canvas = document.createElement('canvas')
-    const scale = Math.min(1, 960 / video.videoWidth)
-    canvas.width = Math.max(1, Math.round(video.videoWidth * scale))
-    canvas.height = Math.max(1, Math.round(video.videoHeight * scale))
-    try {
-      canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
-      setPoster(canvas.toDataURL('image/jpeg', 0.85))
-    } catch { /* The video element can still display its decoded frame. */ }
-  }
+  const defaultIcon = () => applicationIcons()[defaultApp()?.path ?? '']
 
   return (
     <section class="file-preview" aria-label="文件预览">
@@ -145,23 +168,32 @@ export default function FilePreview(props: {
         <Show when={outlineAvailable()}>
           <button type="button" aria-expanded={outlineVisible()} onClick={() => setOutlineVisible((visible) => !visible)}>目录</button>
         </Show>
-        <button type="button" class="file-open-with" ref={openWithButton} aria-haspopup="menu" aria-expanded={menuOpen()}
-          aria-controls="preview-open-with" popovertarget="preview-open-with" onClick={positionOpenWith}>打开方式<span aria-hidden="true" /></button>
+        <div class="file-open-with" role="group" aria-label="打开方式">
+          <button type="button" class="file-open-with-default"
+            aria-label={`用${defaultApp()?.name ?? '系统默认应用'}打开`}
+            title={`用${defaultApp()?.name ?? '系统默认应用'}打开`} onClick={() => openWith()}>
+            <AppIcon bytes={defaultIcon()} />
+          </button>
+          <button type="button" class="file-open-with-toggle" ref={openWithButton} aria-label="打开方式"
+            aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls="preview-open-with"
+            popovertarget="preview-open-with" onClick={positionOpenWith}>
+            <span aria-hidden="true" />
+          </button>
+        </div>
         <div ref={openWithMenu} id="preview-open-with" class="file-open-with-menu" popover="auto" role="menu" aria-label="打开方式"
-          onToggle={() => void updateOpenWith()} onKeyDown={onMenuKey}>
-          <Show when={applications()} fallback={<span class="file-open-with-loading">正在查找应用…</span>}>
-            <button type="button" role="menuitem" onClick={() => openWith()}>
-              <span class="file-open-with-icon"><Show when={appIcon(defaultApp()?.icon)}>{(icon) => <img src={icon()} alt="" />}</Show></span>
-              <span class="file-open-with-name">{defaultApp()?.name ?? '系统应用'}</span><small>默认</small>
+          onToggle={updateOpenWith} onKeyDown={onMenuKey}>
+          <button type="button" role="menuitem" aria-label={`${defaultApp()?.name ?? '系统应用'}，默认`} onClick={() => openWith()}>
+            <AppIcon bytes={defaultIcon()} />
+            <span class="file-open-with-name">{defaultApp()?.name ?? '系统应用'}</span>
+            <span class="file-open-with-check" aria-hidden="true" />
+          </button>
+          <For each={alternatives()}>{(app) => (
+            <button type="button" role="menuitem" onClick={() => openWith(app.path)}>
+              <AppIcon bytes={applicationIcons()[app.path]} />
+              <span class="file-open-with-name">{app.name}</span>
             </button>
-            <Show when={alternatives().length}><div role="separator" /></Show>
-            <For each={alternatives()}>{(app) => (
-              <button type="button" role="menuitem" onClick={() => openWith(app.path)}>
-                <span class="file-open-with-icon"><Show when={appIcon(app.icon)}>{(icon) => <img src={icon()} alt="" />}</Show></span>
-                <span class="file-open-with-name">{app.name}</span>
-              </button>
-            )}</For>
-          </Show>
+          )}</For>
+          <Show when={!applications()}><span class="file-open-with-loading" role="status">正在查找其他应用…</span></Show>
         </div>
       </header>
       <Switch>
@@ -181,22 +213,19 @@ export default function FilePreview(props: {
         </Match>
         <Match when={kind === 'video'}>
           <div class="file-preview-media">
-            <div class="file-video-stage">
-              <video ref={video} controls playsinline preload="auto" crossorigin="anonymous"
-                src={`${url}#t=0.001`} poster={poster()} onError={mediaError}
-                onLoadedData={(event) => firstFrame(event.currentTarget)}
-                onSeeked={(event) => { if (event.currentTarget.currentTime < 0.05) firstFrame(event.currentTarget) }}
-                onPlay={() => setVideoStarted(true)} onEnded={(event) => {
-                  setVideoStarted(false)
-                  event.currentTarget.currentTime = 0.001
-                }} />
-              <Show when={!videoStarted() && poster()}>
-                <div class="file-video-cover">
-                  <img src={poster()} alt="视频预览图" />
-                  <button type="button" aria-label="播放视频" onClick={() => void video.play().catch(mediaError)} />
-                </div>
-              </Show>
-            </div>
+            <video controls playsinline preload="auto" src={url} poster={poster()} onError={mediaError}
+              onEnded={(event) => { event.currentTarget.currentTime = 0 }} />
+          </div>
+        </Match>
+        <Match when={kind === 'image'}>
+          <div class="file-preview-media">
+            <img class="file-preview-image" src={url} alt={props.entry.name} onError={() => setError('无法显示此图片')} />
+          </div>
+        </Match>
+        <Match when={kind === 'office'}>
+          <div class="file-preview-office">
+            <Show when={officeError()}><p role="status">{officeError()}</p></Show>
+            <button type="button" onClick={() => void openOfficePreview()}>打开快速查看</button>
           </div>
         </Match>
       </Switch>

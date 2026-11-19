@@ -22,7 +22,7 @@ tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tempfile = "3"
-tokio = { version = "1", features = ["fs", "rt", "macros"] }
+tokio = { version = "1", features = ["fs", "rt", "macros", "sync"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 rustix = { version = "1", features = ["fs"] }
@@ -31,5 +31,5 @@ rustix = { version = "1", features = ["fs"] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSBitmapImageRep", "NSGraphics", "NSImage", "NSImageRep", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSBundle", "NSData", "NSDictionary", "NSFileManager", "NSString", "NSURL"] }

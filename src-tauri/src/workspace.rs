@@ -10,7 +10,7 @@ use std::{
     io::{self, Read},
     path::{Component, Path, PathBuf},
 };
-use tauri::{ipc::Response, AppHandle, Manager};
+use tauri::{ipc::Response, AppHandle, Manager, WebviewWindow};
 use tauri_plugin_fs::FsExt;
 
 #[derive(Serialize)]
@@ -292,8 +292,6 @@ pub(crate) struct FileApplication {
     path: String,
     name: String,
     default: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    icon: Option<Vec<u8>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -326,7 +324,6 @@ fn file_applications(path: &Path) -> Vec<FileApplication> {
                     path,
                     name,
                     default: default_url.as_deref() == Some(&*app),
-                    icon: None,
                 },
             ))
         })
@@ -404,15 +401,57 @@ pub(crate) async fn workspace_file_applications(
             return Err("请选择文件".into());
         }
         #[cfg(target_os = "macos")]
-        return objc2::rc::autoreleasepool(|_| {
-            let mut applications = file_applications(&path);
-            for application in &mut applications {
-                application.icon = file_application_icon(&application.path);
-            }
-            Ok(applications)
-        });
+        return Ok(objc2::rc::autoreleasepool(|_| file_applications(&path)));
         #[cfg(not(target_os = "macos"))]
         Ok(Vec::new())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn workspace_file_application_icons(
+    app: AppHandle,
+    root: String,
+    path: String,
+    applications: Vec<String>,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let root = selected_path(&app, root)?;
+    let entry = selected_path(&app, path)?;
+    tokio::task::spawn_blocking(move || {
+        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+        let path = workspace_path(&root, &real_root, &entry)?;
+        if !path.is_file() {
+            return Err("请选择文件".into());
+        }
+        #[cfg(target_os = "macos")]
+        return objc2::rc::autoreleasepool(|_| {
+            use std::sync::{Mutex, OnceLock};
+            static CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
+            let allowed = file_applications(&path);
+            let mut cache = CACHE
+                .get_or_init(Default::default)
+                .lock()
+                .map_err(|err| err.to_string())?;
+            let mut icons = BTreeMap::new();
+            for application in allowed {
+                if !applications.contains(&application.path) {
+                    continue;
+                }
+                if let Some(icon) = cache.get(&application.path) {
+                    icons.insert(application.path, icon.clone());
+                } else if let Some(icon) = file_application_icon(&application.path) {
+                    cache.insert(application.path.clone(), icon.clone());
+                    icons.insert(application.path, icon);
+                }
+            }
+            Ok(icons)
+        });
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = applications;
+            Ok(BTreeMap::new())
+        }
     })
     .await
     .map_err(|err| err.to_string())?
@@ -450,7 +489,8 @@ pub(crate) async fn workspace_preview(
                 Ok(Response::new(bytes))
             }
             "pdf" | "mp3" | "m4a" | "aac" | "wav" | "flac" | "ogg" | "opus" | "mp4" | "m4v"
-            | "mov" | "webm" | "ogv" => {
+            | "mov" | "webm" | "ogv" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp"
+            | "svg" | "ico" => {
                 app.asset_protocol_scope()
                     .allow_file(&path)
                     .map_err(|err| err.to_string())?;
@@ -461,6 +501,49 @@ pub(crate) async fn workspace_preview(
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn workspace_office_preview(
+    app: AppHandle,
+    window: WebviewWindow,
+    root: String,
+    path: String,
+) -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, window, root, path);
+        Err("当前系统不支持 Office 快速查看，可使用「打开方式」".into())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let settings = workspace_preference(&app)?;
+        let root = selected_path(&app, root)?;
+        let entry = selected_path(&app, path)?;
+        let path = tokio::task::spawn_blocking(move || {
+            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+            if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
+                return Err("请先打开此工作区".into());
+            }
+            let path = workspace_path(&root, &real_root, &entry)?;
+            let extension = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default();
+            if !path.is_file()
+                || !matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
+                )
+            {
+                return Err("请选择 Word、Excel 或 PowerPoint 文件".into());
+            }
+            Ok::<_, String>(path)
+        })
+        .await
+        .map_err(|err| err.to_string())??;
+        crate::office_preview::show(window, path).await
+    }
 }
 
 #[tauri::command]
@@ -1028,7 +1111,6 @@ mod tests {
                     path: path.into(),
                     name: name.into(),
                     default,
-                    icon: None,
                 },
             )
         };
