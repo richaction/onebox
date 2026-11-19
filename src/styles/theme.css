@@ -1,0 +1,33 @@
+:root {
+  color-scheme: light dark;
+  --ob-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display',
+    'Segoe UI', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Apple Color Emoji', Arial, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --ob-content-width: 708px;
+  --ob-page-padding-block: 32px;
+  --ob-page-padding-inline: 40px;
+  --ob-text: light-dark(rgb(55 53 47), rgb(255 255 255 / 0.81));
+  --ob-text-secondary: light-dark(rgb(55 53 47 / 0.6), rgb(255 255 255 / 0.46));
+  --ob-bg: light-dark(#fff, #191919);
+  --ob-bg-sidebar: light-dark(#f7f6f3, #202020);
+  --ob-bg-overlay: light-dark(#fff, #252525);
+  --ob-bg-hover: light-dark(rgb(55 53 47 / 0.06), rgb(255 255 255 / 0.055));
+  --ob-bg-active: light-dark(rgb(55 53 47 / 0.1), rgb(255 255 255 / 0.1));
+  --ob-border: light-dark(rgb(55 53 47 / 0.16), rgb(255 255 255 / 0.13));
+  --ob-scrollbar: light-dark(rgb(55 53 47 / 0.2), rgb(255 255 255 / 0.2));
+}
+
+@media (max-width: 600px) {
+  :root {
+    --ob-page-padding-block: 20px;
+    --ob-page-padding-inline: clamp(14px, 4vw, 22px);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}

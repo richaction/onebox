@@ -1,0 +1,296 @@
+@import '../styles/theme.css';
+
+html, body, #viewer { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var(--ob-font-sans); }
+
+.file-viewer-loading,
+.file-viewer-web-source-status[data-file-viewer-source-state='loading'],
+.pdf-state:not(.pdf-state--error),
+.pdfViewer .page.loading::after,
+.typst-loading,
+.fv-video-software-loading,
+.pptx-loading,
+.ppt-binary-loading,
+.excel-wrapper .loading,
+.excel-wrapper .sheet-loading {
+  display: none !important;
+}
+
+/* The preview frame shares Onebox's palette while preserving document colors. */
+#viewer .file-viewer-web-shell {
+  --file-viewer-bg: var(--ob-bg-sidebar);
+  --file-viewer-content-bg: var(--ob-bg-sidebar);
+  --file-viewer-render-surface-background: var(--ob-bg-sidebar);
+  --file-viewer-panel: var(--ob-bg-overlay);
+  --file-viewer-text: var(--ob-text);
+  --file-viewer-muted: var(--ob-text-secondary);
+  --file-viewer-border: var(--ob-border);
+  --file-viewer-toolbar-bg: var(--ob-bg-overlay);
+  --file-viewer-toolbar-border: var(--ob-border);
+  --file-viewer-button-color: var(--ob-text-secondary);
+  --file-viewer-button-hover-bg: var(--ob-bg-hover);
+  --file-viewer-button-hover-color: var(--ob-text);
+  --file-viewer-font: 14px / 1.45 var(--ob-font-sans);
+}
+
+#viewer .file-viewer-web-content,
+#viewer .image-viewer,
+#viewer .excel-wrapper .btn-group,
+#viewer .pdf-wrapper,
+#viewer .pdf-page-list,
+#viewer .pdf-outline-list {
+  scrollbar-color: var(--ob-scrollbar) transparent;
+  scrollbar-width: thin;
+}
+
+#viewer .excel-wrapper {
+  font-family: var(--ob-font-sans);
+}
+
+#viewer .excel-wrapper .table-wrapper {
+  background: var(--ob-bg-sidebar);
+}
+
+#viewer .excel-wrapper .table-host {
+  inset: 12px 12px 0;
+  transform: translateX(var(--ob-sheet-inset, 0));
+}
+
+#viewer .excel-wrapper .e-virt-table-stage {
+  width: min(100%, calc(var(--ob-sheet-width, 100%) + 2px)) !important;
+  border-color: var(--ob-border) !important;
+  border-radius: 6px !important;
+  background: var(--ob-bg);
+}
+
+#viewer .excel-wrapper .toolbar {
+  min-height: 40px;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--ob-bg-sidebar);
+  border-color: var(--ob-border);
+}
+
+#viewer .excel-wrapper .sheet-tab {
+  height: 28px;
+  min-width: 0;
+  padding-inline: 10px;
+  border-radius: 6px;
+  color: var(--ob-text-secondary);
+  font-weight: 500;
+}
+
+#viewer .excel-wrapper .sheet-tab:hover {
+  background: var(--ob-bg-hover);
+  color: var(--ob-text);
+}
+
+#viewer .excel-wrapper .sheet-tab.active {
+  background: var(--ob-bg-active);
+  border-color: transparent;
+  color: var(--ob-text);
+  font-weight: 600;
+}
+
+#viewer .excel-wrapper .sheet-tab:focus-visible {
+  outline: 2px solid var(--ob-text-secondary);
+  outline-offset: -2px;
+}
+
+#viewer .excel-wrapper .summary {
+  color: var(--ob-text-secondary);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* PDF also draws its own toolbar and navigation panel inside the shared shell. */
+#viewer .pdf-shell,
+#viewer .pdf-wrapper,
+#viewer .pptx-viewer-shell,
+#viewer .ppt-binary-shell {
+  background: var(--ob-bg-sidebar);
+  color: var(--ob-text);
+}
+
+#viewer .pdf-toolbar,
+#viewer .pdf-nav-pane,
+#viewer .pdf-nav-head,
+#viewer .pdf-nav-tabs {
+  background: var(--ob-bg-sidebar);
+  border-color: var(--ob-border);
+  color: var(--ob-text-secondary);
+  box-shadow: none;
+}
+
+#viewer .pdf-toolbar {
+  min-height: 40px;
+  gap: 6px;
+  padding: 5px 12px;
+}
+
+#viewer .pdf-toolbar-group {
+  height: 30px;
+  gap: 3px;
+  padding-inline: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+#viewer .pdf-icon-button,
+#viewer .pdf-scale-button,
+#viewer .pdf-page-meter,
+#viewer .pdf-page-meter strong,
+#viewer .pdf-nav-head strong,
+#viewer .pdf-nav-tabs button,
+#viewer .pdf-outline-button {
+  color: var(--ob-text);
+}
+
+#viewer .pdf-icon-button,
+#viewer .pdf-scale-button {
+  height: 26px;
+  border-radius: 5px;
+}
+
+#viewer .pdf-page-button,
+#viewer .pdf-page-thumb,
+#viewer .pdf-outline-empty,
+#viewer .pdf-state {
+  border-color: var(--ob-border);
+  background: var(--ob-bg-overlay);
+  color: var(--ob-text-secondary);
+}
+
+#viewer .pdf-icon-button:hover:not(:disabled),
+#viewer .pdf-scale-button:hover,
+#viewer .pdf-nav-tabs button:hover,
+#viewer .pdf-page-button:hover,
+#viewer .pdf-outline-button:hover {
+  background: var(--ob-bg-hover);
+  border-color: transparent;
+  color: var(--ob-text);
+}
+
+#viewer .pdf-icon-button--active,
+#viewer .pdf-nav-tabs button.active,
+#viewer .pdf-page-button--active {
+  background: var(--ob-bg-active);
+  border-color: transparent;
+  color: var(--ob-text);
+  box-shadow: none;
+}
+
+#viewer .pdfViewer .page {
+  box-shadow: 0 0 0 1px var(--ob-border);
+}
+
+#viewer .code-viewer {
+  --code-bg: var(--ob-bg);
+  --code-toolbar-bg: var(--ob-bg-sidebar);
+  --code-text: var(--ob-text);
+  --code-muted: var(--ob-text-secondary);
+  --code-border: var(--ob-border);
+  --code-accent: var(--ob-text);
+  --code-accent-border: var(--ob-border);
+  --code-accent-soft: var(--ob-bg-hover);
+}
+
+#viewer .pdf-toolbar-group--rotate,
+#viewer .pptx-slideshow-button,
+#viewer .code-format-status:empty {
+  display: none;
+}
+
+#viewer.preview-plain-text .code-viewer {
+  padding: var(--ob-page-padding-block) var(--ob-page-padding-inline) 48px;
+}
+
+#viewer.preview-plain-text :is(.code-area, .code-virtual-scroll) {
+  width: 100%;
+  max-width: var(--ob-content-width);
+  margin-inline: auto;
+  padding: 0;
+}
+
+#viewer.preview-plain-text .code-virtual-content {
+  padding-inline: 0;
+}
+
+#viewer :is(.image-stage, .tiff-stage) img {
+  cursor: default;
+}
+
+#viewer :is(.image-toolbar, .tiff-toolbar) {
+  background: var(--ob-bg-overlay);
+  border-color: var(--ob-border);
+  color: var(--ob-text);
+  border-radius: 8px;
+  box-shadow: none;
+  font-family: var(--ob-font-sans);
+}
+
+#viewer :is(.image-toolbar, .tiff-toolbar) button {
+  color: var(--ob-text);
+}
+
+#viewer :is(.image-rotation-meter, .tiff-rotation-meter, .tiff-page-meter) {
+  color: var(--ob-text-secondary);
+}
+
+#viewer :is(.image-toolbar, .tiff-toolbar) button:hover {
+  background: var(--ob-bg-hover);
+  border-color: var(--ob-border);
+  color: var(--ob-text);
+}
+
+#viewer :is(.image-toolbar, .tiff-toolbar) button:focus-visible {
+  outline: 2px solid var(--ob-text-secondary);
+}
+
+#viewer :is(.fv-audio-viewer, .fv-video-viewer, .epub-stage, .umd-stage, .drawing-viewer,
+  .xmind-viewer, .ofd-viewer, .typst-viewer, .data-viewer, .email-viewer, .odf-viewer, .flyfish-rtf-viewer) {
+  background: var(--ob-bg-sidebar);
+  color: var(--ob-text);
+}
+
+#viewer :is(.fv-audio-card, .fv-video-shell, .epub-toolbar, .umd-toolbar, .drawing-toolbar,
+  .xmind-toolbar, .ofd-toolbar, .typst-toolbar, .data-card, .email-header, .email-sidebar) {
+  background: var(--ob-bg-overlay);
+  border-color: var(--ob-border);
+  color: var(--ob-text);
+  box-shadow: none;
+}
+
+#viewer :is(.fv-audio-copy strong, .fv-video-heading strong) {
+  color: var(--ob-text);
+}
+
+#viewer :is(.fv-audio-kicker, .fv-audio-copy p, .fv-video-heading span, .fv-video-hint) {
+  color: var(--ob-text-secondary);
+}
+
+#viewer .fv-audio-art {
+  background: var(--ob-bg-active);
+  box-shadow: none;
+}
+
+#viewer .fv-audio-art span {
+  border-color: var(--ob-text-secondary);
+}
+
+#viewer :is(.fv-audio-art i, .fv-audio-progress i) {
+  background: var(--ob-text-secondary);
+}
+
+#viewer .fv-audio-progress {
+  background: var(--ob-bg-active);
+}
+
+#viewer .fv-audio-meter {
+  color: var(--ob-text-secondary);
+}
+
+#viewer .fv-video-software-seek {
+  accent-color: var(--ob-text-secondary);
+}

@@ -16,6 +16,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@file-viewer/vite-plugin": "3.3.4",
+    "@file-viewer/web-full": "3.3.4",
     "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-dialog": "2.8.4",
     "@tiptap/core": "3.33.1",
@@ -27,7 +29,6 @@
     "lowlight": "3.3.0",
     "markdown-it": "14.3.3",
     "markdown-it-footnote": "4.0.0",
-    "pdfjs-dist": "6.5.438",
     "prosemirror-markdown": "1.13.9",
     "solid-js": "1.9.19"
   },

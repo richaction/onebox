@@ -2,9 +2,9 @@ mod attachments;
 mod development;
 mod fs;
 mod markdown;
-mod office_preview;
 mod workspace;
 mod workspace_links;
+mod wps_preview;
 
 #[cfg(target_os = "macos")]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -56,6 +56,7 @@ pub fn run() {
 
     let builder = builder
         .manage(std::sync::Mutex::new(markdown::PendingDocument::default()))
+        .manage(wps_preview::TemporaryPreviews::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -82,8 +83,7 @@ pub fn run() {
             workspace::workspace_file_applications,
             workspace::workspace_file_application_icons,
             workspace::workspace_preview,
-            workspace::workspace_office_preview,
-            workspace::workspace_video_poster,
+            workspace::release_workspace_preview,
             workspace::workspace_entries,
             workspace::move_workspace_entry
         ]);

@@ -1,7 +1,6 @@
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
-import { previewKind } from './FilePreview'
 
 interface Directory {
   entries?: WorkspaceEntry[]
@@ -237,7 +236,7 @@ export default function WorkspaceSidebar(props: {
           run: () => toggle(entry.path),
         })
       } else {
-        const label = entry.markdown ? '打开此文档' : previewKind(entry.name) ? '预览' : '用系统应用打开'
+        const label = entry.markdown ? '打开此文档' : '预览'
         actions.push({ label, run: () => props.onOpen(entry) })
       }
     }

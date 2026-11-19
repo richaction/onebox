@@ -1,3 +1,5 @@
+@import './theme.css';
+
 /* ==========================================================================
    onebox · Notion 排版规范
    人工微调入口：下方 :root 变量控制字号、行高、间距与配色。
@@ -6,12 +8,7 @@
    ========================================================================== */
 
 :root {
-  color-scheme: light dark;
-
   /* 字体：西文优先系统 UI 字体，中文显式声明苹方 / 微软雅黑 / Noto */
-  --ob-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display',
-    'Segoe UI', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
-    'Apple Color Emoji', Arial, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
   --ob-font-mono: 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono',
     'Noto Sans Mono CJK SC', 'Microsoft YaHei', Courier, monospace;
 
@@ -20,9 +17,6 @@
   --ob-line-height: 1.5;
   --ob-block-padding: 3px;   /* 每个块的上下内边距 */
   --ob-block-margin: 1px;    /* 每个块的上下外边距（段间距 = 2×padding + 2×margin） */
-  --ob-content-width: 708px; /* Notion 默认正文栏宽 */
-  --ob-page-padding-block: 32px;
-  --ob-page-padding-inline: 40px;
 
   /* 标题 */
   --ob-heading-line-height: 1.3;
@@ -45,11 +39,7 @@
   --ob-image-radius: 4px;
 
   /* 配色 · 浅色 / 深色（light-dark 跟随 color-scheme 切换） */
-  --ob-text: light-dark(rgb(55 53 47), rgb(255 255 255 / 0.81));
-  --ob-text-secondary: light-dark(rgb(55 53 47 / 0.6), rgb(255 255 255 / 0.46));
   --ob-text-faint: light-dark(rgb(55 53 47 / 0.4), rgb(255 255 255 / 0.28));
-  --ob-bg: light-dark(#fff, #191919);
-  --ob-bg-sidebar: light-dark(#f7f6f3, #202020);
   --ob-bg-code: light-dark(#f7f6f3, #252525);
   --ob-quote-bg: light-dark(#f8f8f5, #232322);
   --ob-quote-rail: light-dark(#787d70, #a5aa9a);
@@ -61,10 +51,6 @@
   --ob-code-meta: light-dark(#82601e, #e5c77e);
   --ob-code-addition: light-dark(#2c723d, #9dda9c);
   --ob-code-deletion: light-dark(#a33d48, #f5a6aa);
-  --ob-bg-overlay: light-dark(#fff, #252525);
-  --ob-bg-hover: light-dark(rgb(55 53 47 / 0.06), rgb(255 255 255 / 0.055));
-  --ob-bg-active: light-dark(rgb(55 53 47 / 0.1), rgb(255 255 255 / 0.1));
-  --ob-border: light-dark(rgb(55 53 47 / 0.16), rgb(255 255 255 / 0.13));
   --ob-divider: light-dark(rgb(55 53 47 / 0.16), rgb(255 255 255 / 0.13));
   --ob-table-border: light-dark(rgb(55 53 47 / 0.09), rgb(255 255 255 / 0.1));
   --ob-table-head: light-dark(#f7f6f3, #252525);
@@ -76,17 +62,8 @@
   --ob-selection: light-dark(rgb(35 131 226 / 0.28), rgb(35 131 226 / 0.4));
   --ob-accent: #2383e2;
   --ob-checkbox: light-dark(rgb(55 53 47 / 0.5), rgb(255 255 255 / 0.5));
-  --ob-scrollbar: light-dark(rgb(55 53 47 / 0.2), rgb(255 255 255 / 0.2));
   --ob-shadow-menu: 0 2px 6px light-dark(rgb(15 15 15 / 0.08), rgb(0 0 0 / 0.22)),
     0 9px 24px light-dark(rgb(15 15 15 / 0.14), rgb(0 0 0 / 0.35));
-}
-
-:root[data-theme='light'] {
-  color-scheme: light;
-}
-
-:root[data-theme='dark'] {
-  color-scheme: dark;
 }
 
 html,
@@ -773,131 +750,33 @@ body {
 }
 .file-open-with-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-open-with-loading { display: block; padding: 6px 8px; color: var(--ob-text-secondary); }
-.file-preview-message { margin: 12px; color: var(--ob-text-secondary); }
-
-.file-preview-text {
-  margin: 0;
-  flex: 1;
-  overflow: auto;
-  padding: 16px 20px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: 13px/1.6 ui-monospace, monospace;
-  tab-size: 4;
-}
-
-.file-preview-media {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  place-items: center;
-  padding: 16px;
-}
-
-.file-preview-media audio { width: min(100%, 420px); }
-.file-preview-media video {
-  max-width: 100%;
-  max-height: 100%;
-  min-width: 0;
-  min-height: 0;
-  object-fit: contain;
-}
-
-.file-preview-office {
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  flex: 1;
-  padding: 16px;
-}
-
-.file-preview-office p { color: var(--ob-text-secondary); }
-.file-preview-office button {
-  padding: 6px 12px;
-  border: 1px solid var(--ob-border);
-  border-radius: 6px;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-.file-preview-office button:hover { background: var(--ob-bg-hover); }
-
-.image-viewer,
-.pdf-viewer { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-
-.preview-controls {
+.preview-surface { position: relative; flex: 1; min-width: 0; min-height: 0; background: var(--ob-bg-sidebar); }
+.preview-surface iframe { display: block; width: 100%; height: 100%; border: 0; visibility: hidden; }
+.preview-surface iframe.preview-frame-ready { visibility: visible; }
+.file-preview:has(.file-open-with-menu:popover-open) .preview-surface iframe { pointer-events: none; }
+.preview-status { position: absolute; inset: 0; display: grid; place-content: center; padding: 16px; color: var(--ob-text-secondary); pointer-events: none; }
+.preview-status p { margin: 0; }
+.preview-status:has(.preview-spinner) {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 3px;
-  padding: 5px 12px;
-  border-block-end: 1px solid var(--ob-border);
-  font: 12px/1.4 system-ui, sans-serif;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  animation: preview-hint-in 120ms ease-out both;
 }
-
-.preview-controls button {
-  min-width: 30px;
-  min-height: 30px;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 6px;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
+.preview-spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--ob-border);
+  border-top-color: var(--ob-text-secondary);
+  border-radius: 50%;
+  animation: preview-spin 750ms linear infinite;
 }
-
-.preview-controls button:enabled:hover,
-.preview-controls button[aria-pressed="true"] { background: var(--ob-bg-hover); }
-.preview-controls button:disabled { opacity: 0.35; cursor: default; }
-.preview-controls output { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
-.preview-control-separator { height: 16px; margin-inline: 3px; border-inline-start: 1px solid var(--ob-border); }
-.image-dimensions { margin-inline-start: auto; color: var(--ob-text-secondary); font-variant-numeric: tabular-nums; }
-
-.image-preview-stage {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  background: var(--ob-bg-sidebar);
+@keyframes preview-hint-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes preview-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) {
+  .preview-status:has(.preview-spinner), .preview-spinner { animation: none; }
 }
-
-.image-preview-canvas {
-  display: grid;
-  place-items: center;
-  width: max-content;
-  height: max-content;
-  min-width: 100%;
-  min-height: 100%;
-  box-sizing: border-box;
-  padding: 16px;
-}
-
-.image-preview-canvas img {
-  display: block;
-  max-width: none;
-  user-select: none;
-  background: repeating-conic-gradient(#0001 0 25%, transparent 0 50%) 0 0 / 16px 16px;
-  box-shadow: 0 0 0 1px var(--ob-border);
-}
-
-.image-preview-stage.can-pan img { cursor: grab; }
-.image-preview-stage.is-panning,
-.image-preview-stage.is-panning img { cursor: grabbing; }
-
-.pdf-preview-layout { display: flex; flex: 1; min-height: 0; }
-.pdf-preview-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; background: var(--ob-bg-sidebar); }
-.pdf-preview-pages { display: grid; justify-items: center; gap: 16px; width: max-content; min-width: 100%; box-sizing: border-box; padding: 16px; }
-.pdf-preview-page { background: white; box-shadow: 0 0 0 1px var(--ob-border); }
-.pdf-preview-page canvas { display: block; width: 100%; height: auto; }
-.pdf-preview-page canvas[hidden] { display: none; }
-.pdf-outline { width: min(220px, 35%); padding: 8px; overflow: auto; border-inline-end: 1px solid var(--ob-border); font-size: 13px; }
-.pdf-outline ul { list-style: none; margin: 0; padding-inline-start: 10px; }
-.pdf-outline > ul { padding-inline-start: 0; }
-.pdf-outline button { display: block; padding: 4px; color: inherit; background: none; border: 0; font: inherit; text-align: start; }
-.pdf-outline button:hover:not(:disabled) { background: var(--ob-bg-hover); }
 
 .editor-shell {
   display: flex;
@@ -1454,11 +1333,6 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
     max-height: min(30dvh, 10rem);
     border-inline-end: 0;
     border-block-end: 1px solid var(--ob-border);
-  }
-
-  .editor-scroll {
-    padding-block-start: 20px;
-    padding-inline: clamp(14px, 4vw, 22px);
   }
 
   .code-toolbar {

@@ -2,15 +2,16 @@ use crate::{
     attachments::{copy_with_hash, document_name, normalize, relative_href, FILE_OPERATION},
     fs::{selected_path, write_file},
     workspace_links::{links, rebased_link, rewrite},
+    wps_preview::{self, TemporaryPreviews},
 };
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{self, Read},
+    io,
     path::{Component, Path, PathBuf},
 };
-use tauri::{ipc::Response, AppHandle, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FsExt;
 
 #[derive(Serialize)]
@@ -126,12 +127,16 @@ pub(crate) async fn open_demo_workspace(app: AppHandle) -> Result<WorkspaceRoot,
     if !cfg!(debug_assertions) {
         return Err("调试样例仅在开发版提供".into());
     }
-    let demo = app
+    let demo = demo_workspace_path(&app)?;
+    activate_workspace(app, demo, true).await
+}
+
+fn demo_workspace_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
         .path()
         .app_data_dir()
         .map_err(|err| err.to_string())?
-        .join("Onebox 调试样例");
-    activate_workspace(app, demo, true).await
+        .join("Onebox 调试样例"))
 }
 
 fn copy_sample_files(from: &Path, to: &Path) -> io::Result<()> {
@@ -150,17 +155,42 @@ fn copy_sample_files(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 fn seed_demo_workspace(path: &Path) -> io::Result<()> {
-    if path.exists() {
-        return Ok(());
-    }
     let seed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/manual-testing");
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("Missing sample directory parent"))?;
-    fs::create_dir_all(parent)?;
-    let staging = tempfile::tempdir_in(parent)?;
-    copy_sample_files(&seed, staging.path())?;
-    fs::rename(staging.path(), path)
+    let marker = parent.join("demo-excel-v1");
+    if !path.exists() {
+        fs::create_dir_all(parent)?;
+        let staging = tempfile::tempdir_in(parent)?;
+        copy_sample_files(&seed, staging.path())?;
+        fs::rename(staging.path(), path)?;
+    } else if !marker.exists() {
+        // Add the new fixture once. Never overwrite a file in the editable copy.
+        let folder = path.join("04 文件预览");
+        match fs::create_dir(&folder) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+        if folder.symlink_metadata()?.is_dir() {
+            let name = "Excel 冻结窗格与两万行.xlsx";
+            let mut staged = tempfile::NamedTempFile::new_in(&folder)?;
+            io::copy(
+                &mut File::open(seed.join("04 文件预览").join(name))?,
+                &mut staged,
+            )?;
+            match staged.persist_noclobber(folder.join(name)) {
+                Ok(_) => {}
+                Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err.error),
+            }
+        }
+    }
+    if !marker.exists() {
+        File::create(marker)?;
+    }
+    Ok(())
 }
 
 async fn activate_workspace(
@@ -198,6 +228,11 @@ pub(crate) async fn restore_workspace_root(
         };
         if !root.is_absolute() || !root.canonicalize().is_ok_and(|resolved| resolved == root) {
             return Ok(None);
+        }
+        if cfg!(debug_assertions) && demo_workspace_path(&app).is_ok_and(|demo| demo == root) {
+            if let Err(err) = seed_demo_workspace(&root) {
+                eprintln!("Unable to refresh demo fixtures: {err}");
+            }
         }
         let workspace = workspace_root(root)?;
         app.fs_scope()
@@ -515,129 +550,59 @@ pub(crate) async fn workspace_preview(
     app: AppHandle,
     root: String,
     path: String,
-) -> Result<Response, String> {
-    let settings = workspace_preference(&app)?;
-    let root = selected_path(&app, root)?;
-    let path = selected_path(&app, path)?;
-    tokio::task::spawn_blocking(move || {
-        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-        if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
-            return Err("请先打开此工作区".into());
-        }
-        let path = workspace_path(&root, &real_root, &path)?;
-        if !path.is_file() {
-            return Err("请选择普通文件".into());
-        }
-        let extension = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default();
-        match extension.to_ascii_lowercase().as_str() {
-            "txt" => {
-                const LIMIT: u64 = 4 * 1024 * 1024;
-                let mut bytes = Vec::new();
-                File::open(path)
-                    .and_then(|file| file.take(LIMIT + 1).read_to_end(&mut bytes))
-                    .map_err(|err| err.to_string())?;
-                Ok(Response::new(bytes))
-            }
-            "pdf" | "mp3" | "m4a" | "aac" | "wav" | "flac" | "ogg" | "opus" | "mp4" | "m4v"
-            | "mov" | "webm" | "ogv" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp"
-            | "svg" | "ico" => {
-                app.asset_protocol_scope()
-                    .allow_file(&path)
-                    .map_err(|err| err.to_string())?;
-                Ok(Response::new(Vec::<u8>::new()))
-            }
-            _ => Err("此文件类型不支持预览".into()),
-        }
-    })
-    .await
-    .map_err(|err| err.to_string())?
-}
-
-#[tauri::command]
-pub(crate) async fn workspace_office_preview(
-    app: AppHandle,
-    root: String,
-    path: String,
-) -> Result<Response, String> {
+) -> Result<WorkspacePreview, String> {
     let settings = workspace_preference(&app)?;
     let root = selected_path(&app, root)?;
     let entry = selected_path(&app, path)?;
-    let permit = crate::office_preview::CONVERTERS
-        .try_acquire()
-        .map_err(|_| "正在生成其他 Office 预览，请稍后重试")?;
     tokio::task::spawn_blocking(move || {
-        let _permit = permit;
         let real_root = root.canonicalize().map_err(|err| err.to_string())?;
         if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
             return Err("请先打开此工作区".into());
         }
         let path = workspace_path(&root, &real_root, &entry)?;
-        let extension = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if !matches!(
-            extension.as_str(),
-            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-        ) {
-            return Err("请选择 Word、Excel 或 PowerPoint 文件".into());
+        if !path.is_file() {
+            return Err("请选择普通文件".into());
         }
-        crate::office_preview::render(&path, &extension).map(Response::new)
+        let Some(format) = wps_preview::format(&path) else {
+            app.asset_protocol_scope()
+                .allow_file(&path)
+                .map_err(|err| err.to_string())?;
+            return Ok(WorkspacePreview::Original(path));
+        };
+        let (converted, scratch) = wps_preview::convert(&path, format)?;
+        let converted_name = converted
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("无法准备 WPS 预览。")?
+            .to_owned();
+        app.asset_protocol_scope()
+            .allow_file(&converted)
+            .map_err(|err| err.to_string())?;
+        app.state::<TemporaryPreviews>()
+            .retain(converted.clone(), scratch)?;
+        Ok(WorkspacePreview::Converted {
+            path: converted,
+            converted_name,
+        })
     })
     .await
     .map_err(|err| err.to_string())?
 }
 
+#[derive(Serialize)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub(crate) enum WorkspacePreview {
+    Original(PathBuf),
+    Converted {
+        path: PathBuf,
+        converted_name: String,
+    },
+}
+
 #[tauri::command]
-pub(crate) async fn workspace_video_poster(
-    app: AppHandle,
-    root: String,
-    path: String,
-) -> Result<Response, String> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (app, root, path);
-        return Ok(Response::new(Vec::<u8>::new()));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let root = selected_path(&app, root)?;
-        let entry = selected_path(&app, path)?;
-        tokio::task::spawn_blocking(move || {
-            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-            let path = workspace_path(&root, &real_root, &entry)?;
-            let extension = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if !path.is_file()
-                || !matches!(extension.as_str(), "mp4" | "m4v" | "mov" | "webm" | "ogv")
-            {
-                return Err("请选择视频文件".into());
-            }
-            let temporary = tempfile::tempdir().map_err(|err| err.to_string())?;
-            let result = std::process::Command::new("/usr/bin/qlmanage")
-                .args(["-t", "-s", "640", "-o"])
-                .arg(temporary.path())
-                .arg(&path)
-                .output()
-                .map_err(|err| err.to_string())?;
-            if !result.status.success() {
-                return Ok(Response::new(Vec::<u8>::new()));
-            }
-            let mut name = path.file_name().ok_or("无效的视频文件名")?.to_os_string();
-            name.push(".png");
-            let bytes = fs::read(temporary.path().join(name)).unwrap_or_default();
-            Ok(Response::new(bytes))
-        })
-        .await
-        .map_err(|err| err.to_string())?
-    }
+pub(crate) async fn release_workspace_preview(app: AppHandle, path: PathBuf) {
+    let _ =
+        tokio::task::spawn_blocking(move || app.state::<TemporaryPreviews>().release(&path)).await;
 }
 
 #[tauri::command]

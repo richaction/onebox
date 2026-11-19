@@ -13,7 +13,7 @@ import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
-import FilePreview, { previewKind } from './ui/FilePreview'
+import FilePreview from './ui/FilePreview'
 import WorkspaceSidebar from './ui/WorkspaceSidebar'
 
 const SAVE_DEBOUNCE_MS = 800
@@ -297,10 +297,8 @@ export default function App() {
       })
     } else {
       setPendingOpen(undefined)
-      if (previewKind(entry.name)) {
-        setPreview(entry)
-        setFailure(undefined)
-      } else openWorkspaceAttachment(entry.path)
+      setPreview(entry)
+      setFailure(undefined)
     }
   }
 
@@ -680,7 +678,8 @@ export default function App() {
           </div>
           <Show when={preview()} keyed>
             {(entry) => <FilePreview root={workspace()!.root} entry={entry}
-              onOpenExternal={(application) => openWorkspaceAttachment(entry.path, application)} />}
+              onOpenExternal={(application) => openWorkspaceAttachment(entry.path, application)}
+              onClose={() => setPreview(undefined)} />}
           </Show>
         </div>
       </div>

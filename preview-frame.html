@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost; img-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost; media-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost; font-src 'self' blob: data:; frame-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>文件预览</title>
+</head>
+<body>
+  <div id="viewer"></div>
+  <script src="/file-viewer/flyfish-file-viewer-web-full.iife.js"></script>
+  <script type="module" src="/src/ui/previewFrame.ts"></script>
+</body>
+</html>
