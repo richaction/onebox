@@ -1,5 +1,6 @@
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { createSignal, For, lazy, Match, onCleanup, onMount, Show, Suspense, Switch } from 'solid-js'
+import ImagePreview from './ImagePreview'
 import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 
 const formats: Record<string, 'text' | 'pdf' | 'audio' | 'video' | 'image' | 'office'> = {
@@ -54,6 +55,7 @@ export default function FilePreview(props: {
   const [applications, setApplications] = createSignal<Awaited<ReturnType<typeof desktopWorkspace.fileApplications>>>()
   const [applicationIcons, setApplicationIcons] = createSignal<Record<string, number[]>>({})
   const [officeError, setOfficeError] = createSignal('')
+  const [officePdf, setOfficePdf] = createSignal<string>()
   const [outlineAvailable, setOutlineAvailable] = createSignal(false)
   const [outlineVisible, setOutlineVisible] = createSignal(false)
   const [poster, setPoster] = createSignal<string>()
@@ -62,11 +64,15 @@ export default function FilePreview(props: {
   const url = convertFileSrc(props.entry.path)
   let disposed = false
   let localPoster: string | undefined
+  let localOfficePdf: string | undefined
 
   const openOfficePreview = async () => {
     setOfficeError('')
     try {
-      await desktopWorkspace.officePreview(props.root, props.entry.path)
+      const bytes = await desktopWorkspace.officePreview(props.root, props.entry.path)
+      if (disposed) return
+      localOfficePdf = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      setOfficePdf(localOfficePdf)
     } catch (error) {
       if (!disposed) setOfficeError(typeof error === 'string' ? error : '无法打开 Office 预览')
     }
@@ -107,6 +113,7 @@ export default function FilePreview(props: {
   onCleanup(() => {
     disposed = true
     if (localPoster) URL.revokeObjectURL(localPoster)
+    if (localOfficePdf) URL.revokeObjectURL(localOfficePdf)
   })
 
   const mediaError = () => setError('当前系统无法播放此文件的编码格式')
@@ -218,15 +225,23 @@ export default function FilePreview(props: {
           </div>
         </Match>
         <Match when={kind === 'image'}>
-          <div class="file-preview-media">
-            <img class="file-preview-image" src={url} alt={props.entry.name} onError={() => setError('无法显示此图片')} />
-          </div>
+          <ImagePreview url={url} name={props.entry.name} onError={() => setError('无法显示此图片')} />
         </Match>
         <Match when={kind === 'office'}>
-          <div class="file-preview-office">
-            <Show when={officeError()}><p role="status">{officeError()}</p></Show>
-            <button type="button" onClick={() => void openOfficePreview()}>打开快速查看</button>
-          </div>
+          <Show when={officePdf()} keyed fallback={
+            <div class="file-preview-office" role="status">
+              <Show when={officeError()} fallback={<p>正在排版 Office 文档…</p>}>
+                <p>{officeError()}</p>
+                <button type="button" onClick={() => void openOfficePreview()}>重试</button>
+              </Show>
+            </div>
+          }>
+            {(pdfUrl) => (
+              <Suspense fallback={<p class="file-preview-message" role="status">正在载入分页预览…</p>}>
+                <PdfPreview url={pdfUrl} onError={setError} outlineVisible={outlineVisible()} onOutline={setOutlineAvailable} />
+              </Suspense>
+            )}
+          </Show>
         </Match>
       </Switch>
     </section>

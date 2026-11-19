@@ -10,7 +10,7 @@ use std::{
     io::{self, Read},
     path::{Component, Path, PathBuf},
 };
-use tauri::{ipc::Response, AppHandle, Manager, WebviewWindow};
+use tauri::{ipc::Response, AppHandle, Manager};
 use tauri_plugin_fs::FsExt;
 
 #[derive(Serialize)]
@@ -118,9 +118,62 @@ pub(crate) async fn select_workspace_root(
     path: String,
 ) -> Result<WorkspaceRoot, String> {
     let selected = selected_path(&app, path)?;
+    activate_workspace(app, selected, false).await
+}
+
+#[tauri::command]
+pub(crate) async fn open_demo_workspace(app: AppHandle) -> Result<WorkspaceRoot, String> {
+    if !cfg!(debug_assertions) {
+        return Err("调试样例仅在开发版提供".into());
+    }
+    let demo = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?
+        .join("Onebox 调试样例");
+    activate_workspace(app, demo, true).await
+}
+
+fn copy_sample_files(from: &Path, to: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let destination = to.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            fs::create_dir(&destination)?;
+            copy_sample_files(&entry.path(), &destination)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn seed_demo_workspace(path: &Path) -> io::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    let seed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/manual-testing");
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing sample directory parent"))?;
+    fs::create_dir_all(parent)?;
+    let staging = tempfile::tempdir_in(parent)?;
+    copy_sample_files(&seed, staging.path())?;
+    fs::rename(staging.path(), path)
+}
+
+async fn activate_workspace(
+    app: AppHandle,
+    selected: PathBuf,
+    demo: bool,
+) -> Result<WorkspaceRoot, String> {
     let settings = workspace_preference(&app)?;
     tokio::task::spawn_blocking(move || {
         let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        if demo {
+            seed_demo_workspace(&selected).map_err(|err| format!("无法准备调试样例：{err}"))?;
+        }
         let root = selected.canonicalize().map_err(|err| err.to_string())?;
         let workspace = workspace_root(root)?;
         app.fs_scope()
@@ -506,44 +559,37 @@ pub(crate) async fn workspace_preview(
 #[tauri::command]
 pub(crate) async fn workspace_office_preview(
     app: AppHandle,
-    window: WebviewWindow,
     root: String,
     path: String,
-) -> Result<(), String> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (app, window, root, path);
-        Err("当前系统不支持 Office 快速查看，可使用「打开方式」".into())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let settings = workspace_preference(&app)?;
-        let root = selected_path(&app, root)?;
-        let entry = selected_path(&app, path)?;
-        let path = tokio::task::spawn_blocking(move || {
-            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
-            if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
-                return Err("请先打开此工作区".into());
-            }
-            let path = workspace_path(&root, &real_root, &entry)?;
-            let extension = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or_default();
-            if !path.is_file()
-                || !matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                )
-            {
-                return Err("请选择 Word、Excel 或 PowerPoint 文件".into());
-            }
-            Ok::<_, String>(path)
-        })
-        .await
-        .map_err(|err| err.to_string())??;
-        crate::office_preview::show(window, path).await
-    }
+) -> Result<Response, String> {
+    let settings = workspace_preference(&app)?;
+    let root = selected_path(&app, root)?;
+    let entry = selected_path(&app, path)?;
+    let permit = crate::office_preview::CONVERTERS
+        .try_acquire()
+        .map_err(|_| "正在生成其他 Office 预览，请稍后重试")?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+        if remembered_root(&settings)?.as_deref() != Some(real_root.as_path()) {
+            return Err("请先打开此工作区".into());
+        }
+        let path = workspace_path(&root, &real_root, &entry)?;
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
+        ) {
+            return Err("请选择 Word、Excel 或 PowerPoint 文件".into());
+        }
+        crate::office_preview::render(&path, &extension).map(Response::new)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]

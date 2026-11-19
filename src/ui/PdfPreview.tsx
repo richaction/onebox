@@ -31,6 +31,7 @@ function PdfPage(props: {
   pdf: PDFDocumentProxy
   number: number
   width: number
+  zoom: number
   aspect: number
   observe: (element: HTMLElement, update: (visible: boolean) => void) => () => void
 }) {
@@ -39,7 +40,7 @@ function PdfPage(props: {
   const [near, setNear] = createSignal(false)
   const [aspect, setAspect] = createSignal<number>()
   const [failed, setFailed] = createSignal(false)
-  const pageWidth = () => Math.max(1, Math.min(props.width - 32, 1100))
+  const pageWidth = () => Math.max(1, Math.min(props.width - 32, 1100) * props.zoom)
 
   onMount(() => onCleanup(props.observe(element, setNear)))
   createEffect(() => {
@@ -93,10 +94,16 @@ export default function PdfPreview(props: {
   onOutline: (available: boolean) => void
 }) {
   let stage!: HTMLDivElement
+  let pages!: HTMLDivElement
+  let scrollFrame = 0
+  let navigationFrame = 0
+  let navigationTop: number | undefined
   const [pdf, setPdf] = createSignal<PDFDocumentProxy>()
   const [width, setWidth] = createSignal(0)
   const [aspect, setAspect] = createSignal(1 / Math.sqrt(2))
   const [outline, setOutline] = createSignal<OutlineItem[]>([])
+  const [zoom, setZoom] = createSignal(1)
+  const [page, setPage] = createSignal(1)
   const visibility = new Map<Element, (visible: boolean) => void>()
   let observer: IntersectionObserver | undefined
 
@@ -129,12 +136,61 @@ export default function PdfPreview(props: {
     })
     onCleanup(() => {
       disposed = true
+      cancelAnimationFrame(scrollFrame)
+      cancelAnimationFrame(navigationFrame)
       resize.disconnect()
       observer?.disconnect()
       props.onOutline(false)
       void loading.destroy().catch(() => {})
     })
   })
+
+  const goToPage = (number: number) => {
+    const target = pages?.children[number - 1] as HTMLElement | undefined
+    if (!target) return
+    setPage(number)
+    // The outline may have just opened and changed the available page width.
+    setWidth(stage.clientWidth)
+    cancelAnimationFrame(navigationFrame)
+    navigationFrame = requestAnimationFrame(() => {
+      stage.scrollTop = target.offsetTop
+      navigationTop = stage.scrollTop
+      setPage(number)
+    })
+  }
+
+  const trackPage = () => {
+    if (scrollFrame) return
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0
+      if (!pages) return
+      if (navigationTop === stage.scrollTop) return
+      navigationTop = undefined
+      const position = stage.scrollTop + Math.min(100, stage.clientHeight / 3)
+      let low = 0
+      let high = pages.children.length
+      while (low < high) {
+        const middle = (low + high) >>> 1
+        if ((pages.children[middle] as HTMLElement).offsetTop <= position) low = middle + 1
+        else high = middle
+      }
+      setPage(stage.scrollTop > 0 && stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2
+        ? pages.children.length : Math.max(1, low))
+    })
+  }
+
+  const changeZoom = (value: number) => {
+    const target = pages?.children[page() - 1] as HTMLElement | undefined
+    const fraction = target ? (stage.scrollTop - target.offsetTop) / Math.max(1, target.offsetHeight) : 0
+    setZoom(Math.max(0.5, Math.min(4, value)))
+    if (target) {
+      // Solid batches event handlers. Read the new page layout after the zoom style is applied.
+      queueMicrotask(() => {
+        stage.scrollTop = target.offsetTop + target.offsetHeight * fraction
+        navigationTop = stage.scrollTop
+      })
+    }
+  }
 
   const jump = async (item: OutlineItem) => {
     const document = pdf()
@@ -143,20 +199,35 @@ export default function PdfPreview(props: {
     const reference = destination?.[0]
     if (reference == null) return
     const index = typeof reference === 'number' ? reference : await document.getPageIndex(reference)
-    stage.querySelector(`[data-pdf-page="${index + 1}"]`)?.scrollIntoView({ block: 'start' })
+    goToPage(index + 1)
   }
 
   return (
-    <div class="pdf-preview-layout">
-      <Show when={props.outlineVisible && outline().length > 0}>
-        <nav class="pdf-outline" aria-label="PDF 目录"><OutlineList items={outline()} jump={(item) => void jump(item).catch(() => {})} /></nav>
+    <div class="pdf-viewer">
+      <Show when={pdf()}>
+        {(document) => <div class="preview-controls" role="group" aria-label="分页预览控制">
+          <button type="button" aria-label="上一页" disabled={page() <= 1} onClick={() => goToPage(page() - 1)}>‹</button>
+          <output aria-label="页码">{page()} / {document().numPages}</output>
+          <button type="button" aria-label="下一页" disabled={page() >= document().numPages} onClick={() => goToPage(page() + 1)}>›</button>
+          <span class="preview-control-separator" aria-hidden="true" />
+          <button type="button" aria-label="缩小" disabled={zoom() <= 0.5} onClick={() => changeZoom(zoom() / 1.25)}>−</button>
+          <button type="button" aria-label="放大" disabled={zoom() >= 4} onClick={() => changeZoom(zoom() * 1.25)}>+</button>
+          <button type="button" title="恢复适合宽度" onClick={() => changeZoom(1)}>{zoom() === 1 ? '适合宽度' : `${Math.round(zoom() * 100)}%`}</button>
+        </div>}
       </Show>
-      <div class="pdf-preview-stage" ref={stage} aria-label="PDF 页面" tabindex="0">
-        <Show when={pdf()} keyed fallback={<p class="file-preview-message" role="status">正在载入 PDF…</p>}>
-          {(document) => <For each={Array.from({ length: document.numPages }, (_, index) => index + 1)}>{(number) => (
-            <PdfPage pdf={document} number={number} width={width()} aspect={aspect()} observe={observe} />
-          )}</For>}
+      <div class="pdf-preview-layout">
+        <Show when={props.outlineVisible && outline().length > 0}>
+          <nav class="pdf-outline" aria-label="文档目录"><OutlineList items={outline()} jump={(item) => void jump(item).catch(() => {})} /></nav>
         </Show>
+        <div class="pdf-preview-stage" ref={stage} aria-label="文档页面" tabindex="0" onScroll={trackPage}>
+          <Show when={pdf()} keyed fallback={<p class="file-preview-message" role="status">正在载入 PDF…</p>}>
+            {(document) => <div class="pdf-preview-pages" ref={pages}>
+              <For each={Array.from({ length: document.numPages }, (_, index) => index + 1)}>{(number) => (
+                <PdfPage pdf={document} number={number} width={width()} zoom={zoom()} aspect={aspect()} observe={observe} />
+              )}</For>
+            </div>}
+          </Show>
+        </div>
       </div>
     </div>
   )

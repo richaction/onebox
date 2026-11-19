@@ -47,6 +47,7 @@ export interface WorkspaceRoot {
 }
 
 export const desktopWorkspace = {
+  openDemo: () => invoke<WorkspaceRoot>('open_demo_workspace'),
   selectRoot: (path: string) => invoke<WorkspaceRoot>('select_workspace_root', { path }),
   restoreRoot: () => invoke<WorkspaceRoot | null>('restore_workspace_root'),
   clearRoot: () => invoke<void>('clear_workspace_root'),
@@ -57,7 +58,7 @@ export const desktopWorkspace = {
   fileApplicationIcons: (root: string, path: string, applications: string[]) =>
     invoke<Record<string, number[]>>('workspace_file_application_icons', { root, path, applications }),
   preparePreview: (root: string, path: string) => invoke<ArrayBuffer>('workspace_preview', { root, path }),
-  officePreview: (root: string, path: string) => invoke<void>('workspace_office_preview', { root, path }),
+  officePreview: (root: string, path: string) => invoke<ArrayBuffer>('workspace_office_preview', { root, path }),
   videoPoster: (root: string, path: string) => invoke<ArrayBuffer>('workspace_video_poster', { root, path }),
   entries: (root: string, folder: string) =>
     invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),

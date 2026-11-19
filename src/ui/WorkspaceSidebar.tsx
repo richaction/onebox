@@ -104,6 +104,7 @@ export default function WorkspaceSidebar(props: {
   onOpen: (entry: WorkspaceEntry) => void
   onOpenFile: () => void
   onOpenWorkspace: () => void
+  onOpenDemo?: () => void
   onCreate: (folder: string, name: string, directory: boolean) => Promise<void>
   onMove: (entry: WorkspaceEntry, target: string) => Promise<void>
   onCopy: () => void
@@ -260,6 +261,7 @@ export default function WorkspaceSidebar(props: {
       { label: '打开 Markdown…', run: props.onOpenFile },
     )
     if (root && !entry) actions.push({ label: '刷新文件夹', run: refresh }, { label: '关闭文件夹', run: props.onClose })
+    if (!entry && props.onOpenDemo) actions.push({ label: '打开调试样例', run: props.onOpenDemo })
     return actions
   }
 
@@ -604,6 +606,9 @@ export default function WorkspaceSidebar(props: {
             打开文件夹…
           </button>
           <button type="button" disabled={props.restoring} onClick={props.onOpenFile}>打开 Markdown…</button>
+          <Show when={props.onOpenDemo}>
+            <button type="button" disabled={props.restoring} onClick={props.onOpenDemo}>打开调试样例</button>
+          </Show>
         </div>
       }>
         <nav class="workspace-tree" aria-label="文件目录"><Rows path={root} /></nav>

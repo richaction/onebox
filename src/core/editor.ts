@@ -7,6 +7,7 @@ import { isRelativeResource } from './attachmentLinks'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
 import { createCodeHighlight } from './codeHighlight'
+import { developmentSession } from './developmentSession'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import type { ViewportMetrics } from './metrics'
 import { MarkdownImage } from './markdownNodes'
@@ -128,6 +129,16 @@ export function createEditor(opts: {
       viewport,
     ],
     content: parseMarkdown(opts.markdown, schema).toJSON(),
+    onBeforeCreate: ({ editor }) => {
+      if (!import.meta.env.DEV) return
+      const snapshot = developmentSession.snapshot
+      // A new Tiptap instance normally creates new node types. Reuse the schema
+      // when its source is unchanged so document and undo history stay in memory.
+      if (snapshot?.editorState && snapshot.schemaSource === schema) {
+        editor.schema = snapshot.editorState.schema
+        editor.extensionManager.schema = editor.schema
+      }
+    },
     editorProps: {
       attributes: {
         'aria-label': 'Markdown 编辑器', 'aria-multiline': 'true', role: 'textbox',

@@ -33,3 +33,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSBitmapImageRep", "NSGraphics", "NSImage", "NSImageRep", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSBundle", "NSData", "NSDictionary", "NSFileManager", "NSString", "NSURL"] }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2.5.5"

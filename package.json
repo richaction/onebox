@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:app": "node scripts/dev.mjs",
+    "dev:status": "node scripts/dev.mjs status",
+    "dev:restart": "node scripts/dev.mjs restart",
+    "dev:stop": "node scripts/dev.mjs stop",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",

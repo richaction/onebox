@@ -1,11 +1,14 @@
-import { isTauri } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { JSONContent, Range } from '@tiptap/core'
 import type { Node } from '@tiptap/pm/model'
-import { createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { relativeReferences, rewriteAttachmentLinks } from './core/attachmentLinks'
 import type { EditorHandle } from './core/editor'
+import { developmentSession, type DevelopmentSnapshot } from './core/developmentSession'
+import { EditorState } from '@tiptap/pm/state'
+import { schema } from './core/schema'
 import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
@@ -35,26 +38,34 @@ function setEditable(handle: EditorHandle, editable: boolean) {
 }
 
 export default function App() {
+  const restored = import.meta.env.DEV ? developmentSession.snapshot : undefined
   const desktop = isTauri()
   const mac = desktop && /Mac OS X/u.test(navigator.userAgent)
   let handle: EditorHandle | undefined
   let sidebarToggle: HTMLButtonElement | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-  let savedDoc: Node | undefined
-  let writer: Promise<boolean> | undefined
+  let savedDoc: Node | undefined = restored?.savedDoc
+  let writer: Promise<boolean> | undefined = restored?.writer
   let busy = false
   let cancelLoad = false
   let openingFromSidebar = false
+  let disposed = false
+  let developmentPreparing: string | undefined
+  let loadBefore: { path: string | null; state: EditorState; readonly: boolean; scrollTop: number } | undefined
+  if (writer) {
+    const pending = writer
+    void pending.then(() => { if (writer === pending) writer = undefined })
+  }
 
-  const [path, setPath] = createSignal<string | null>(null)
-  const [readonly, setReadonly] = createSignal(false)
+  const [path, setPath] = createSignal<string | null>(restored?.path ?? null)
+  const [readonly, setReadonly] = createSignal(restored?.readonly ?? false)
   const [loading, setLoading] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
-  const [workspace, setWorkspace] = createSignal<WorkspaceRoot>()
-  const [preview, setPreview] = createSignal<WorkspaceEntry>()
+  const [workspace, setWorkspace] = createSignal<WorkspaceRoot | undefined>(restored?.workspace)
+  const [preview, setPreview] = createSignal<WorkspaceEntry | undefined>(restored?.preview)
   const [pendingOpen, setPendingOpen] = createSignal<{ entry: WorkspaceEntry; root: string }>()
-  const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop)
-  const [sidebarVisible, setSidebarVisible] = createSignal(true)
+  const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop && !restored)
+  const [sidebarVisible, setSidebarVisible] = createSignal(restored?.sidebarVisible ?? true)
   const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
   const [workspaceReveal, setWorkspaceReveal] = createSignal<string>()
   const [workspaceMoving, setWorkspaceMoving] = createSignal(false)
@@ -67,7 +78,7 @@ export default function App() {
     setSidebarVisible((visible) => !visible)
   }
 
-  const editorIsEditable = () => !desktop || (!!path() && !readonly())
+  const editorIsEditable = () => !developmentPreparing && (!desktop || (!!path() && !readonly()))
 
   const clearSaveTimer = () => {
     clearTimeout(timer)
@@ -117,7 +128,7 @@ export default function App() {
     action: (editor: EditorHandle) => Promise<boolean>,
     error: Failure,
   ) => {
-    if (busy || !handle) return false
+    if (busy || developmentPreparing || !handle) return false
     const editor = handle
     busy = true
     setEditable(editor, false)
@@ -141,11 +152,12 @@ export default function App() {
     const { view } = editor.editor
     const previous = view.state
     const previousPath = path()
+    loadBefore = { path: previousPath, state: previous, readonly: readonly(), scrollTop: view.dom.closest('.editor-scroll')?.scrollTop ?? 0 }
     let session: number | undefined
     try {
       const start = await desktopDocuments.open(picked)
       session = start.id
-      if (cancelLoad) return false
+      if (cancelLoad || disposed) return false
       setPath(picked)
       editor.loadBlocks(start.blocks, start.total >= 4_000)
       editor.refreshImages()
@@ -155,7 +167,8 @@ export default function App() {
         const blocks = await desktopDocuments.next(start.id, limit)
         if (!blocks.length) throw new Error('Incomplete Markdown document')
         await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
-        if (cancelLoad) {
+        if (cancelLoad || disposed) {
+          if (disposed) return false
           setPath(previousPath)
           view.updateState(previous)
           editor.refreshImages()
@@ -173,6 +186,7 @@ export default function App() {
       setFailure(undefined)
       return true
     } catch (error) {
+      if (disposed) return false
       setPath(previousPath)
       view.updateState(previous)
       editor.refreshImages()
@@ -180,6 +194,7 @@ export default function App() {
     } finally {
       if (session !== undefined) void desktopDocuments.release(session).catch(() => {})
       setLoading(false)
+      loadBefore = undefined
     }
   }
 
@@ -209,6 +224,18 @@ export default function App() {
     setWorkspaceReveal(undefined)
     setFailure(undefined)
     return true
+  }, '读取工作区失败')
+
+  const openDemoWorkspace = () => runFileAction(async (editor) => {
+    if (!await flush()) return false
+    const current = await desktopWorkspace.openDemo()
+    setWorkspace(current)
+    setWorkspaceReveal(undefined)
+    setSidebarVisible(true)
+    setPreview(undefined)
+    setFailure(undefined)
+    const guide = current.entries.find((entry) => entry.name === '00 开始测试.md')
+    return guide ? readDocument(editor, guide.path) : true
   }, '读取工作区失败')
 
   const createWorkspaceEntry = async (folder: string, name: string, directory: boolean) => {
@@ -250,7 +277,7 @@ export default function App() {
 
   function openPendingEntry() {
     const pending = pendingOpen()
-    if (!pending || busy || openingFromSidebar || !handle) return
+    if (!pending || busy || developmentPreparing || openingFromSidebar || !handle) return
     const { entry, root } = pending
     if (workspace()?.root !== root) {
       setPendingOpen(undefined)
@@ -440,9 +467,20 @@ export default function App() {
 
   onMount(() => {
     if (!desktop) return
-    void desktopWorkspace.restoreRoot().then((current) => {
-      if (current) setWorkspace(current)
-    }).catch(() => setFailure('读取工作区失败')).finally(() => setRestoringWorkspace(false))
+    if (!restored) {
+      void desktopWorkspace.restoreRoot().then(async (current) => {
+        if (disposed) return
+        if (current) setWorkspace(current)
+        if (import.meta.env.DEV) {
+          const document = await invoke<string | null>('restore_document')
+          if (!document || disposed) return
+          await runFileAction((editor) => readDocument(editor, document), '打开失败')
+          restoreDevelopmentPosition(document)
+        }
+      }).catch(() => { if (!disposed) setFailure('读取工作区失败') }).finally(() => {
+        if (!disposed) setRestoringWorkspace(false)
+      })
+    }
     window.addEventListener('keydown', onKeydown)
     const listener = getCurrentWindow().onCloseRequested(async (event) => {
       if (busy || !handle) {
@@ -467,8 +505,27 @@ export default function App() {
 
   const onReady = (editor: EditorHandle) => {
     handle = editor
+    if (import.meta.env.DEV) {
+      const snapshot = developmentSession.snapshot
+      if (snapshot?.editorState) {
+        const view = editor.editor.view
+        const old = snapshot.editorState
+        const plugins = view.state.plugins
+        view.updateState(old.schema === view.state.schema
+          ? old.reconfigure({ plugins })
+          : EditorState.fromJSON({ schema: view.state.schema, plugins }, old.toJSON()))
+        const scroller = view.dom.closest('.editor-scroll')
+        requestAnimationFrame(() => {
+          if (editor.editor.isDestroyed) return
+          if (scroller) scroller.scrollTop = snapshot.scrollTop
+          if (snapshot.focused && editorIsEditable()) view.focus()
+        })
+        developmentSession.snapshot = undefined
+      }
+    }
     setEditable(editor, editorIsEditable())
     if (!import.meta.env.DEV) return
+    if (path() && !readonly() && editor.editor.state.doc !== savedDoc) onUpdate()
 
     const dev = window as Window & {
       __oneboxLoad?: (text: string) => void
@@ -493,6 +550,81 @@ export default function App() {
   }
 
   onCleanup(clearSaveTimer)
+  onCleanup(() => { disposed = true; cancelLoad = true })
+
+  const restoreDevelopmentPosition = (document: string) => {
+    if (!import.meta.env.DEV) return
+    try {
+      const position = JSON.parse(localStorage.getItem('onebox:dev-position') ?? 'null')
+      if (!position || position.path !== document || path() !== document || !handle) return
+      const editor = handle.editor
+      const end = editor.state.doc.content.size
+      editor.commands.setTextSelection({
+        from: Math.min(end, Math.max(0, position.from)),
+        to: Math.min(end, Math.max(0, position.to)),
+      })
+      const scroller = editor.view.dom.closest('.editor-scroll')
+      setSidebarVisible(position.sidebarVisible !== false)
+      requestAnimationFrame(() => { if (scroller) scroller.scrollTop = position.scrollTop })
+    } catch { /* An older or removed development session can start at the document's beginning. */ }
+  }
+
+  if (import.meta.hot) {
+    const hot = import.meta.hot
+    const capture = () => {
+      const state = loadBefore?.state ?? handle?.editor.state
+      developmentSession.snapshot = {
+        path: loadBefore ? loadBefore.path : path(),
+        readonly: loadBefore?.readonly ?? readonly(),
+        workspace: workspace(), preview: preview(), sidebarVisible: sidebarVisible(),
+        savedDoc, writer, editorState: state, schemaSource: schema,
+        scrollTop: loadBefore?.scrollTop ?? handle?.editor.view.dom.closest('.editor-scroll')?.scrollTop ?? 0,
+        focused: handle?.editor.isFocused ?? false,
+      } satisfies DevelopmentSnapshot
+    }
+    const prepare = async ({ id }: { id: string }) => {
+      developmentPreparing = id
+      if (handle) setEditable(handle, false)
+      try {
+        while (busy && !disposed && developmentPreparing === id) await new Promise((resolve) => setTimeout(resolve, 25))
+        if (disposed) throw new Error('Wait for the current hot update to finish')
+        if (developmentPreparing !== id) throw new Error('Restart cancelled')
+        if (!await flush()) throw new Error('保存失败，已保留当前窗口')
+        if (developmentPreparing !== id) throw new Error('Restart cancelled')
+        await invoke('remember_document', { path: path() })
+        if (developmentPreparing !== id) throw new Error('Restart cancelled')
+        const selection = handle?.editor.state.selection
+        localStorage.setItem('onebox:dev-position', JSON.stringify({
+          path: path(), from: selection?.from ?? 0, to: selection?.to ?? 0,
+          scrollTop: handle?.editor.view.dom.closest('.editor-scroll')?.scrollTop ?? 0,
+          sidebarVisible: sidebarVisible(),
+        }))
+        hot.send('onebox:prepared', { id })
+      } catch (error) {
+        resume({ id })
+        hot.send('onebox:prepared', { id, error: String(error) })
+      }
+    }
+    const resume = ({ id }: { id?: string }) => {
+      if (id && developmentPreparing !== id) return
+      developmentPreparing = undefined
+      if (handle && !disposed) setEditable(handle, !busy && editorIsEditable())
+    }
+    const focus = () => { if (desktop) void invoke('focus_window') }
+    hot.on('vite:beforeUpdate', capture)
+    hot.on('onebox:prepare', prepare)
+    hot.on('onebox:resume', resume)
+    hot.on('onebox:focus', focus)
+    createEffect(() => {
+      if (!restoringWorkspace()) hot.send('onebox:ready', { native: desktop })
+    })
+    onCleanup(() => {
+      hot.off('vite:beforeUpdate', capture)
+      hot.off('onebox:prepare', prepare)
+      hot.off('onebox:resume', resume)
+      hot.off('onebox:focus', focus)
+    })
+  }
 
   const renderSidebar = (current?: WorkspaceRoot) => (
     <WorkspaceSidebar
@@ -500,6 +632,7 @@ export default function App() {
       active={preview()?.path ?? path()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
       pending={pendingOpen()?.entry.path}
       onOpen={openWorkspaceEntry} onOpenFile={() => void openFile()} onOpenWorkspace={() => void openWorkspace()}
+      onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry}
       onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
       onClose={() => void closeWorkspace()}

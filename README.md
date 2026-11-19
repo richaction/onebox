@@ -10,7 +10,7 @@ Onebox 是一款本地桌面 Markdown 编辑器。它以块为单位编辑标题
 - **编辑区块** · 在空段落输入 `/` 或在正文中右键打开菜单。可按方向键选择命令，按回车执行。输入 `###` 加空格可直接创建三级标题。
 - **管理工作区** · 点击「打开文件夹…」选择本地文件夹。侧栏显示文件夹的内容，包括点号开头的条目和 `assets/`。可拖动 Markdown 文档或文件夹，也可右键选择「移动到…」。在工作区内移动 Markdown 时，文档所在目录下直接引用的附件或文件夹会随行，工作区内的相关相对链接也会更新。
 - **插入图片和附件** · 从块菜单插入，也可粘贴或拖入本地文件。导入的文件位于文档旁的 `assets/` 目录。
-- **预览文件** · 从工作区打开 `.txt`、`.pdf`、常见图片和音视频文件可进入只读预览。TXT 展示前 4 MiB，PDF 支持连续滚动和内嵌目录，音视频可用系统 WebView 支持的编码播放和拖动进度条。macOS 通过系统快速查看窗口预览 Word、Excel 和 PowerPoint 文档，也可在「打开方式」里选择系统注册的应用。
+- **预览文件** · 从工作区打开 TXT、PDF、图片、音视频和 Office 文件，在 Onebox 窗口内只读预览。图片可按实际大小或适合窗口显示，放大后可拖动，支持触控板捏合与 Ctrl/⌘ 滚轮。PDF 和 Office 预览支持连续滚动、翻页和页面缩放，有目录时显示「目录」按钮。Office 使用本机 [LibreOffice](https://www.libreoffice.org/download/download-libreoffice/) 后台排版，需要安装 LibreOffice 或让 `soffice` 可从 PATH 找到。Excel 按原工作簿的打印布局分页。「打开方式」可用系统应用打开原文件。
 
 ## 界面截图
 
@@ -24,10 +24,14 @@ Onebox 是一款本地桌面 Markdown 编辑器。它以块为单位编辑标题
 git clone https://github.com/richaction/onebox.git
 cd onebox
 pnpm install --frozen-lockfile
-pnpm tauri dev
+pnpm dev:app
 ```
 
-`pnpm tauri dev` 会启动桌面窗口和前端热更新。只调试编辑器界面时可运行 `pnpm dev`，然后访问 `http://localhost:1420`。文件对话框、磁盘保存和工作区需要在桌面窗口中验证。
+`pnpm dev:app` 在后台维护一个桌面调试实例。重复运行会唤回已有窗口，界面与样式改动通过 Vite 热更新。组件更新时保留当前文档、光标、滚动位置和撤销记录。Rust 或原生配置变更后，开发进程先等待文件操作结束并保存文档，再重新编译和启动，恢复工作区、当前文件和编辑位置。保存失败时会保留当前窗口，日志记录失败原因。
+
+`pnpm dev:status` 查看运行状态及日志位置，`pnpm dev:restart` 请求保存后重启，`pnpm dev:stop` 保存并结束调试。文件操作和保存超过 30 秒时，本次重启会取消。只调试编辑器界面时可运行 `pnpm dev`，然后访问 `http://localhost:1420`。文件对话框、磁盘保存和工作区需要在桌面窗口中验证。
+
+开发版在侧边栏空状态和工作区「⋯」菜单提供「打开调试样例」。第一次打开时会从 `examples/manual-testing` 创建一份可编辑副本，之后保留该副本上的改动。样例包含操作清单、Markdown 区块、十万及百万字符、附件移动、Office、新旧编码文本、PDF、图片和音视频。
 
 | 命令 | 用途 |
 | --- | --- |
