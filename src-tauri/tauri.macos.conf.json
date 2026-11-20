@@ -2,7 +2,7 @@
   "app": {
     "windows": [{
       "label": "main",
-      "title": "",
+      "title": "Onebox",
       "width": 1100,
       "height": 760,
       "dragDropEnabled": false,

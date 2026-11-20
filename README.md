@@ -1,4 +1,4 @@
-# onebox
+# Onebox
 
 Onebox 是一款本地桌面 Markdown 编辑器。它以块为单位编辑标题、列表、引用、代码和表格，文档直接保存为 `.md` 或 `.markdown` 文件。
 
@@ -50,10 +50,10 @@ WPS 原生文档和模板（`.wps`、`.et`、`.dps`、`.wpt`、`.ett`、`.dpt`�
 
 ```sh
 pnpm tauri build --bundles app --config '{"bundle":{"active":true}}'
-open src-tauri/target/release/bundle/macos/onebox.app
+open src-tauri/target/release/bundle/macos/Onebox.app
 ```
 
-仓库默认关闭安装包生成，命令中的 `--config` 为本次构建开启打包。Tauri 会先构建前端，再编译正式版并生成 `onebox.app`。可将 `.app` 拖入 Finder 的「应用程序」，之后从那里启动。[Tauri macOS 应用打包](https://v2.tauri.app/distribute/macos-application-bundle/)
+仓库默认关闭安装包生成，命令中的 `--config` 为本次构建开启打包。Tauri 会先构建前端，再编译正式版并生成 `Onebox.app`。可将 `.app` 拖入 Finder 的「应用程序」，之后从那里启动。[Tauri macOS 应用打包](https://v2.tauri.app/distribute/macos-application-bundle/)
 
 如需在当前平台只构建正式版可执行文件，运行 `pnpm tauri build --no-bundle`。默认产物为 `src-tauri/target/release/onebox`，Windows 上为 `onebox.exe`。[Tauri CLI 构建参数](https://v2.tauri.app/reference/cli/#build)
 

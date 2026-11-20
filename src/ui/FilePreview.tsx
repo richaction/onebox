@@ -1,12 +1,12 @@
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
+import { desktopWorkspace, type FileApplications, type WorkspaceEntry } from '../io/tauri'
 import ViewerFrame from './ViewerFrame'
 
-function AppIcon(props: { bytes?: number[] }) {
+function AppIcon(props: { src?: string | null }) {
   return (
     <span class="file-open-with-icon" aria-hidden="true">
-      <Show when={props.bytes?.length ? props.bytes : undefined} fallback={<span class="file-open-with-generic" />}>
-        {(bytes) => <img src={`data:image/png;base64,${btoa(String.fromCharCode(...bytes()))}`} alt="" />}
+      <Show when={props.src} fallback={<span class="file-open-with-generic" />}>
+        {(src) => <img src={src()} alt="" />}
       </Show>
     </span>
   )
@@ -19,20 +19,19 @@ export default function FilePreview(props: {
   onClose: () => void
 }) {
   const [menuOpen, setMenuOpen] = createSignal(false)
-  const [applications, setApplications] = createSignal<Awaited<ReturnType<typeof desktopWorkspace.fileApplications>>>()
-  const [applicationIcons, setApplicationIcons] = createSignal<Record<string, number[]>>({})
+  const [applications, setApplications] = createSignal<FileApplications>()
+  const [applicationIcons, setApplicationIcons] = createSignal<Record<string, string>>({})
   let openWithButton!: HTMLButtonElement
   let openWithMenu!: HTMLDivElement
   let disposed = false
 
   onMount(() => {
-    void desktopWorkspace.fileApplications(props.root, props.entry.path).catch(() => []).then((items) => {
-      if (disposed) return
-      setApplications(items)
-      if (items.length) {
-        void desktopWorkspace.fileApplicationIcons(props.root, props.entry.path, items.map((app) => app.path))
-          .then((icons) => { if (!disposed) setApplicationIcons(icons) }).catch(() => {})
-      }
+    void desktopWorkspace.fileApplications(props.root, props.entry.path, (list) => {
+      if (!disposed) setApplications(list)
+    }).then((icons) => {
+      if (!disposed) setApplicationIcons(icons)
+    }).catch(() => {
+      if (!disposed) setApplications((list) => list ?? { items: [], defaultIcon: null })
     })
   })
   onCleanup(() => { disposed = true })
@@ -83,9 +82,8 @@ export default function FilePreview(props: {
     entries[next]?.focus()
   }
 
-  const defaultApp = () => applications()?.find((app) => app.default)
-  const alternatives = () => applications()?.filter((app) => !app.default) ?? []
-  const defaultIcon = () => applicationIcons()[defaultApp()?.path ?? '']
+  const defaultApp = () => applications()?.items.find((app) => app.default)
+  const alternatives = () => applications()?.items.filter((app) => !app.default) ?? []
 
   return (
     <section class="file-preview" aria-label="文件预览">
@@ -95,7 +93,7 @@ export default function FilePreview(props: {
           <button type="button" class="file-open-with-default"
             aria-label={`用${defaultApp()?.name ?? '系统默认应用'}打开`}
             title={`用${defaultApp()?.name ?? '系统默认应用'}打开`} onClick={() => openWith()}>
-            <AppIcon bytes={defaultIcon()} />
+            <AppIcon src={applications()?.defaultIcon} />
           </button>
           <button type="button" class="file-open-with-toggle" ref={openWithButton} aria-label="打开方式"
             aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls="preview-open-with"
@@ -106,13 +104,13 @@ export default function FilePreview(props: {
         <div ref={openWithMenu} id="preview-open-with" class="file-open-with-menu" popover="auto" role="menu" aria-label="打开方式"
           onToggle={updateOpenWith} onKeyDown={onMenuKey}>
           <button type="button" role="menuitem" aria-label={`${defaultApp()?.name ?? '系统应用'}，默认`} onClick={() => openWith()}>
-            <AppIcon bytes={defaultIcon()} />
+            <AppIcon src={applications()?.defaultIcon} />
             <span class="file-open-with-name">{defaultApp()?.name ?? '系统应用'}</span>
             <span class="file-open-with-check" aria-hidden="true" />
           </button>
           <For each={alternatives()}>{(app) => (
             <button type="button" role="menuitem" onClick={() => openWith(app.path)}>
-              <AppIcon bytes={applicationIcons()[app.path]} />
+              <AppIcon src={applicationIcons()[app.path]} />
               <span class="file-open-with-name">{app.name}</span>
             </button>
           )}</For>

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "onebox",
+  "productName": "Onebox",
   "version": "0.1.0",
   "identifier": "com.onebox.editor",
   "plugins": { "fs": { "requireLiteralLeadingDot": false } },
@@ -13,7 +13,7 @@
   "app": {
     "windows": [{
       "label": "main",
-      "title": "",
+      "title": "Onebox",
       "width": 1100,
       "height": 760,
       "dragDropEnabled": true

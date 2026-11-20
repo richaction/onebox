@@ -112,7 +112,19 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   color: var(--ob-text);
 }
 
-#viewer .pdf-toolbar,
+@media screen {
+  #viewer :is(.pptx-viewer-shell, .ppt-binary-shell) {
+    max-inline-size: calc(var(--ob-content-width) + 2 * var(--ob-page-padding-inline));
+    margin-inline: auto;
+    padding-inline: var(--ob-page-padding-inline);
+  }
+}
+
+#viewer .pdf-shell {
+  --ob-pdf-top-inset: 18px;
+  --ob-pdf-toggle-height: 26px;
+}
+
 #viewer .pdf-nav-pane,
 #viewer .pdf-nav-head,
 #viewer .pdf-nav-tabs {
@@ -123,33 +135,71 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
 }
 
 #viewer .pdf-toolbar {
-  min-height: 40px;
-  gap: 6px;
-  padding: 5px 12px;
+  position: absolute;
+  z-index: 4;
+  inset-block-start: var(--ob-pdf-top-inset);
+  inset-inline-end: 12px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
-#viewer .pdf-toolbar-group {
-  height: 30px;
-  gap: 3px;
-  padding-inline: 4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
+#viewer .pdfViewer {
+  padding-block-start: var(--ob-pdf-top-inset);
+}
+
+#viewer .pdf-toolbar > .pdf-icon-button {
+  background: var(--ob-bg-overlay);
+}
+
+#viewer .pdf-toolbar > .pdf-icon-button:is(:hover, [aria-pressed='true']) {
+  background: var(--ob-bg-active);
+}
+
+#viewer .pdf-panel-icon::before {
+  left: auto;
+  right: 4px;
+}
+
+#viewer .pdf-nav-pane {
+  border-right: 0;
+  border-left: 1px solid var(--ob-border);
+}
+
+#viewer .pdf-nav-head {
+  height: calc(2 * var(--ob-pdf-top-inset) + var(--ob-pdf-toggle-height));
+  padding-inline-end: 52px;
+}
+
+@media (width > 720px) {
+  #viewer .pdf-shell:not(.pdf-shell--nav-hidden) .pdf-content {
+    grid-template-columns: minmax(0, 1fr) clamp(148px, 22%, 220px);
+  }
+
+  #viewer .pdf-viewport { grid-area: 1 / 1; }
+  #viewer .pdf-nav-pane { grid-area: 1 / 2; }
+}
+
+@media (max-width: 720px) {
+  #viewer .pdf-shell { --ob-pdf-top-inset: 12px; }
+
+  #viewer .pdf-nav-pane {
+    left: auto;
+    right: 0;
+  }
 }
 
 #viewer .pdf-icon-button,
-#viewer .pdf-scale-button,
-#viewer .pdf-page-meter,
-#viewer .pdf-page-meter strong,
 #viewer .pdf-nav-head strong,
 #viewer .pdf-nav-tabs button,
 #viewer .pdf-outline-button {
   color: var(--ob-text);
 }
 
-#viewer .pdf-icon-button,
-#viewer .pdf-scale-button {
-  height: 26px;
+#viewer .pdf-icon-button {
+  height: var(--ob-pdf-toggle-height);
   border-radius: 5px;
 }
 
@@ -163,7 +213,6 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
 }
 
 #viewer .pdf-icon-button:hover:not(:disabled),
-#viewer .pdf-scale-button:hover,
 #viewer .pdf-nav-tabs button:hover,
 #viewer .pdf-page-button:hover,
 #viewer .pdf-outline-button:hover {
@@ -196,7 +245,7 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   --code-accent-soft: var(--ob-bg-hover);
 }
 
-#viewer .pdf-toolbar-group--rotate,
+#viewer .pdf-toolbar-group,
 #viewer .pptx-slideshow-button,
 #viewer .code-format-status:empty {
   display: none;
@@ -234,7 +283,27 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   color: var(--ob-text);
 }
 
-#viewer :is(.image-rotation-meter, .tiff-rotation-meter, .tiff-page-meter) {
+.image-zoom-controls {
+  display: flex;
+  align-items: center;
+  border-inline-start: 1px solid var(--ob-border);
+  padding-inline-start: 4px;
+}
+
+#viewer :is(.image-toolbar, .tiff-toolbar) .image-zoom-meter {
+  inline-size: auto;
+  min-inline-size: 3.75em;
+  padding-inline: 6px;
+  font: 600 12px var(--ob-font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+#viewer :is(.image-toolbar, .tiff-toolbar) :is(.image-rotation-meter, .tiff-rotation-meter),
+#viewer :is(.image-toolbar, .tiff-toolbar) > button:has(+ :is(.image-rotation-meter, .tiff-rotation-meter)) {
+  display: none;
+}
+
+#viewer .tiff-page-meter {
   color: var(--ob-text-secondary);
 }
 
@@ -262,11 +331,15 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   box-shadow: none;
 }
 
-#viewer :is(.fv-audio-copy strong, .fv-video-heading strong) {
+#viewer .fv-video-heading {
+  display: none;
+}
+
+#viewer .fv-audio-copy strong {
   color: var(--ob-text);
 }
 
-#viewer :is(.fv-audio-kicker, .fv-audio-copy p, .fv-video-heading span, .fv-video-hint) {
+#viewer :is(.fv-audio-kicker, .fv-audio-copy p, .fv-video-hint) {
   color: var(--ob-text-secondary);
 }
 

@@ -28,11 +28,14 @@ tokio = { version = "1", features = ["fs", "rt", "macros", "sync"] }
 rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+base64 = "0.23"
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSBitmapImageRep", "NSGraphics", "NSImage", "NSImageRep", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSBundle", "NSData", "NSDictionary", "NSFileManager", "NSString", "NSURL"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.5.5"

@@ -474,6 +474,13 @@ pub(crate) struct FileApplication {
     default: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileApplications {
+    items: Vec<FileApplication>,
+    default_icon: Option<String>,
+}
+
 #[cfg(target_os = "macos")]
 fn file_applications(path: &Path) -> Vec<FileApplication> {
     use objc2_app_kit::NSWorkspace;
@@ -548,22 +555,54 @@ fn unique_file_applications(
 
 #[cfg(target_os = "macos")]
 fn file_application_icon(path: &str) -> Option<Vec<u8>> {
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
-    use objc2_foundation::{NSDictionary, NSString};
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace,
+        NSGraphicsContext, NSWorkspace,
+    };
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
 
+    const SIZE: isize = 36;
     let icon = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path));
-    let data = icon.TIFFRepresentation()?;
-    let bitmap = NSBitmapImageRep::imageRepWithData(&data)?;
+    // A null planes pointer asks AppKit to allocate the RGBA backing buffer.
+    let bitmap = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(), std::ptr::null_mut(), SIZE, SIZE, 8, 4, true, false,
+            NSDeviceRGBColorSpace, 0, 0,
+        )
+    }?;
+    let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&bitmap)?;
+    let previous_context = NSGraphicsContext::currentContext();
+    NSGraphicsContext::setCurrentContext(Some(&context));
+    icon.drawInRect_fromRect_operation_fraction(
+        NSRect::new(NSPoint::ZERO, NSSize::new(SIZE as f64, SIZE as f64)),
+        NSRect::ZERO,
+        NSCompositingOperation::Copy,
+        1.0,
+    );
+    NSGraphicsContext::setCurrentContext(previous_context.as_deref());
+
     // PNG encoding accepts an empty properties dictionary.
     let png = unsafe {
         bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
     }?;
-    let icon = image::load_from_memory(&png.to_vec())
-        .ok()?
-        .thumbnail_exact(36, 36);
-    let mut encoded = io::Cursor::new(Vec::new());
-    icon.write_to(&mut encoded, image::ImageFormat::Png).ok()?;
-    Some(encoded.into_inner())
+    Some(png.to_vec())
+}
+
+#[cfg(target_os = "macos")]
+fn cached_file_application_icon(path: &str) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use std::sync::Mutex;
+
+    static CACHE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+    if let Some(icon) = CACHE.lock().ok()?.get(path).cloned() {
+        return Some(icon);
+    }
+    // Drawing can be slow on a cold lookup. Keep the cache available to other requests.
+    let png = file_application_icon(path)?;
+    let icon = format!("data:image/png;base64,{}", STANDARD.encode(png));
+    CACHE.lock().ok()?.insert(path.into(), icon.clone());
+    Some(icon)
 }
 
 #[tauri::command]
@@ -571,57 +610,44 @@ pub(crate) async fn workspace_file_applications(
     app: AppHandle,
     root: Option<String>,
     path: String,
-) -> Result<Vec<FileApplication>, String> {
-    let root = root.map(|root| selected_path(&app, root)).transpose()?;
-    let entry = selected_path(&app, path)?;
-    tokio::task::spawn_blocking(move || {
-        let path = preview_file(root.as_deref(), &entry)?;
-        #[cfg(target_os = "macos")]
-        return Ok(objc2::rc::autoreleasepool(|_| file_applications(&path)));
-        #[cfg(not(target_os = "macos"))]
-        Ok(Vec::new())
-    })
-    .await
-    .map_err(|err| err.to_string())?
-}
-
-#[tauri::command]
-pub(crate) async fn workspace_file_application_icons(
-    app: AppHandle,
-    root: Option<String>,
-    path: String,
-    applications: Vec<String>,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    on_list: tauri::ipc::Channel<FileApplications>,
+) -> Result<BTreeMap<String, String>, String> {
     let root = root.map(|root| selected_path(&app, root)).transpose()?;
     let entry = selected_path(&app, path)?;
     tokio::task::spawn_blocking(move || {
         let path = preview_file(root.as_deref(), &entry)?;
         #[cfg(target_os = "macos")]
         return objc2::rc::autoreleasepool(|_| {
-            use std::sync::{Mutex, OnceLock};
-            static CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
-            let allowed = file_applications(&path);
-            let mut cache = CACHE
-                .get_or_init(Default::default)
-                .lock()
+            let items = file_applications(&path);
+            let default_icon = items
+                .iter()
+                .find(|app| app.default)
+                .and_then(|app| cached_file_application_icon(&app.path));
+            let alternatives: Vec<_> = items
+                .iter()
+                .filter(|app| !app.default)
+                .map(|app| app.path.clone())
+                .collect();
+            on_list
+                .send(FileApplications {
+                    items,
+                    default_icon,
+                })
                 .map_err(|err| err.to_string())?;
-            let mut icons = BTreeMap::new();
-            for application in allowed {
-                if !applications.contains(&application.path) {
-                    continue;
-                }
-                if let Some(icon) = cache.get(&application.path) {
-                    icons.insert(application.path, icon.clone());
-                } else if let Some(icon) = file_application_icon(&application.path) {
-                    cache.insert(application.path.clone(), icon.clone());
-                    icons.insert(application.path, icon);
-                }
-            }
-            Ok(icons)
+            Ok(alternatives
+                .into_iter()
+                .filter_map(|path| cached_file_application_icon(&path).map(|icon| (path, icon)))
+                .collect())
         });
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = applications;
+            let _ = path;
+            on_list
+                .send(FileApplications {
+                    items: Vec::new(),
+                    default_icon: None,
+                })
+                .map_err(|err| err.to_string())?;
             Ok(BTreeMap::new())
         }
     })

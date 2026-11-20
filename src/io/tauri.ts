@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import type { JSONContent } from '@tiptap/core'
 import type { RelativeReference } from '../core/attachmentLinks'
 import type { FileSystem } from './types'
@@ -48,6 +48,11 @@ export interface WorkspaceRoot {
 
 export type PreviewEntry = WorkspaceEntry & { workspaceRoot?: string }
 
+export interface FileApplications {
+  items: { path: string; name: string; default: boolean }[]
+  defaultIcon: string | null
+}
+
 export const desktopWorkspace = {
   openDemo: () => invoke<WorkspaceRoot>('open_demo_workspace'),
   selectRoot: (path: string) => invoke<WorkspaceRoot>('select_workspace_root', { path }),
@@ -58,9 +63,8 @@ export const desktopWorkspace = {
   importFiles: (root: string, folder: string, paths: string[]) =>
     invoke<{ paths: string[]; failed: number }>('import_workspace_files', { root, folder, paths }),
   openAttachment: (root: string | undefined, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
-  fileApplications: (root: string | undefined, path: string) => invoke<{ path: string; name: string; default: boolean }[]>('workspace_file_applications', { root, path }),
-  fileApplicationIcons: (root: string | undefined, path: string, applications: string[]) =>
-    invoke<Record<string, number[]>>('workspace_file_application_icons', { root, path, applications }),
+  fileApplications: (root: string | undefined, path: string, onList: (result: FileApplications) => void) =>
+    invoke<Record<string, string>>('workspace_file_applications', { root, path, onList: new Channel(onList) }),
   preparePreview: (root: string | undefined, path: string) =>
     invoke<string | { path: string; convertedName: string }>('workspace_preview', { root, path }),
   releasePreview: (path: string) => invoke<void>('release_workspace_preview', { path }),

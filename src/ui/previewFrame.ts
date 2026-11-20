@@ -94,6 +94,30 @@ window.addEventListener('message', (event: MessageEvent) => {
   const plainText = /\.txt$/iu.test(name)
   viewerHost.classList.toggle('preview-plain-text', plainText)
   const imagePreview = /\.(png|jpe?g|svg|gif|webp|avif|bmp|ico|heic|heif|tiff?)$/iu.test(name)
+  const zoomControls = imagePreview ? document.createElement('div') : undefined
+  const zoomButton = zoomControls ? document.createElement('button') : undefined
+  if (zoomControls && zoomButton) {
+    zoomControls.className = 'image-zoom-controls'
+    zoomButton.type = 'button'
+    zoomButton.className = 'image-zoom-meter'
+    zoomButton.title = '恢复到 100% 原始大小'
+    zoomButton.addEventListener('click', () => {
+      void viewer?.fitToView('actual').catch(() => {})
+    })
+    for (const [symbol, label, action] of [
+      ['−', '缩小图片', 'zoomOut'],
+      ['+', '放大图片', 'zoomIn'],
+    ] as const) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = symbol
+      button.title = label
+      button.setAttribute('aria-label', label)
+      button.addEventListener('click', () => { void viewer?.[action]().catch(() => {}) })
+      zoomControls.append(button)
+    }
+    zoomControls.children[0].after(zoomButton)
+  }
   if (imagePreview) {
     viewerHost.addEventListener('wheel', zoomImageWithWheel, { passive: false })
     viewerHost.addEventListener('click', blockImageLightbox, true)
@@ -116,7 +140,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       ai: false,
       zoomGestures: imagePreview,
       image: imagePreview ? { handTool: true } : undefined,
-      pdf: { darkMode: false, defaultNavigationVisible: false },
+      pdf: { darkMode: false, defaultNavigationVisible: false, zoomToolbar: false },
       fit: actualSize ? { mode: 'actual', resize: 'initial' }
         : spreadsheetPreview ? { mode: 'width', minScale: 1, maxScale: 1.25, resize: 'initial' }
           : undefined,
@@ -128,7 +152,19 @@ window.addEventListener('message', (event: MessageEvent) => {
       spreadsheet: { fillViewport: false },
       messages: { 'spreadsheet.state.rowsAndColumns': '共 {rows} 行 · {cols} 列' },
     },
-    onStateChange: ({ ready, error }) => {
+    onStateChange: ({ ready, error, zoom }) => {
+      if (ready && zoomControls && zoomButton && zoom) {
+        const label = `${zoom.label} · 恢复到 100% 原始大小`
+        if (zoomButton.textContent !== zoom.label) {
+          zoomButton.textContent = zoom.label
+          zoomButton.setAttribute('aria-label', label)
+        }
+        if (!zoomControls.isConnected) {
+          const toolbar = viewerHost.querySelector('.image-toolbar, .tiff-toolbar')
+          toolbar?.setAttribute('aria-label', '图片工具栏')
+          toolbar?.append(zoomControls)
+        }
+      }
       if (error) report('error')
       else if (ready && !reported && !initialContent) {
         if (imagePreview) viewerHost.querySelectorAll(imageContentSelector).forEach((image) => {
