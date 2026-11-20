@@ -1,6 +1,7 @@
 import { Extension, InputRule, type ChainedCommands } from '@tiptap/core'
 import { NodeSelection, type EditorState, type Selection } from '@tiptap/pm/state'
 import { canJoin } from '@tiptap/pm/transform'
+import { chartTemplates } from './chartTemplates'
 
 export interface MenuItem {
   label: string
@@ -59,7 +60,27 @@ export const blockCommands: readonly CommandItem[] = [
   },
 ]
 
+function insertFence(chain: ChainedCommands, language: string, source: string) {
+  return chain.insertContent({
+    type: 'codeBlock', attrs: { language }, content: [{ type: 'text', text: source }],
+  })
+}
+
 export const insertCommands: readonly CommandItem[] = [
+  ...chartTemplates.map(({ label, key, option }): CommandItem => ({
+    label, search: `图表 chart echarts ${key}`, icon: '▥',
+    run: (chain) => insertFence(chain, 'echarts', JSON.stringify(option, null, 2)),
+  })),
+  {
+    label: '流程图', search: '流程图 图表 时序 甘特 思维导图 mermaid diagram', icon: '◇',
+    run: (chain) => insertFence(chain, 'mermaid', 'flowchart LR\n  A[开始] --> B[处理] --> C[完成]'),
+  },
+  {
+    label: '公式', search: '公式 math latex katex', icon: '∑', shortcut: '$$',
+    run: (chain) => chain.insertContent({
+      type: 'math', attrs: { display: true, latex: '\\displaystyle \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}' },
+    }),
+  },
   {
     label: '分隔线', search: 'div divider rule', icon: '―', shortcut: '---',
     preview: { kind: 'divider', caption: '用细线分隔两段内容' },

@@ -8,6 +8,7 @@ import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
 import { createCodeHighlight } from './codeHighlight'
 import { developmentSession } from './developmentSession'
+import { placeCaretInGutter } from './editorCaret'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import type { ViewportMetrics } from './metrics'
 import { MarkdownImage } from './markdownNodes'
@@ -183,6 +184,8 @@ export function createEditor(opts: {
 
   observer = createViewportObserver(editor.view, opts.scrollRoot, 200, viewportMetrics)
   for (const child of editor.view.dom.children) observer.observe(child)
+  const focusGutter = (event: MouseEvent) => placeCaretInGutter(editor.view, event, opts.scrollRoot)
+  opts.scrollRoot.addEventListener('mousedown', focusGutter, true)
 
   const load = (doc: Node) => {
     editor.view.updateState(EditorState.create({ doc, plugins: editor.state.plugins }))
@@ -229,6 +232,7 @@ export function createEditor(opts: {
     },
     toMarkdown: () => serializeMarkdown(editor.state.doc),
     destroy() {
+      opts.scrollRoot.removeEventListener('mousedown', focusGutter, true)
       observer?.disconnect()
       observer = null
       editor.destroy()

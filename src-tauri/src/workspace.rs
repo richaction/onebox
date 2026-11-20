@@ -35,6 +35,7 @@ pub(crate) struct WorkspaceRoot {
 pub(crate) struct WorkspaceMove {
     destination: PathBuf,
     active_document: Option<PathBuf>,
+    active_document_changed: bool,
 }
 
 fn workspace_path(root: &Path, real_root: &Path, path: &Path) -> Result<PathBuf, String> {
@@ -159,35 +160,36 @@ fn seed_demo_workspace(path: &Path) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("Missing sample directory parent"))?;
-    let marker = parent.join("demo-excel-v1");
     if !path.exists() {
         fs::create_dir_all(parent)?;
         let staging = tempfile::tempdir_in(parent)?;
         copy_sample_files(&seed, staging.path())?;
         fs::rename(staging.path(), path)?;
-    } else if !marker.exists() {
-        // Add the new fixture once. Never overwrite a file in the editable copy.
-        let folder = path.join("04 文件预览");
+    }
+    for (version, directory, name) in [
+        ("demo-excel-v1", "04 文件预览", "Excel 冻结窗格与两万行.xlsx"),
+        ("demo-charts-v1", "01 编辑器", "图表数字与公式.md"),
+    ] {
+        let marker = parent.join(version);
+        if marker.exists() {
+            continue;
+        }
+        // Add new fixtures to existing editable workspaces without overwriting user edits.
+        let folder = path.join(directory);
         match fs::create_dir(&folder) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err),
         }
         if folder.symlink_metadata()?.is_dir() {
-            let name = "Excel 冻结窗格与两万行.xlsx";
             let mut staged = tempfile::NamedTempFile::new_in(&folder)?;
-            io::copy(
-                &mut File::open(seed.join("04 文件预览").join(name))?,
-                &mut staged,
-            )?;
+            io::copy(&mut File::open(seed.join(directory).join(name))?, &mut staged)?;
             match staged.persist_noclobber(folder.join(name)) {
                 Ok(_) => {}
                 Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(err.error),
             }
         }
-    }
-    if !marker.exists() {
         File::create(marker)?;
     }
     Ok(())
@@ -280,7 +282,7 @@ fn create_entry(
         return Err("工作区根目录已变化，请重新打开文件夹".into());
     }
     let parent = workspace_path(root, &real_root, folder)?;
-    let name = if directory || document_name(Path::new(name)) {
+    let name = if directory || name.starts_with('.') || Path::new(name).extension().is_some() {
         name.to_owned()
     } else {
         format!("{name}.md")
@@ -299,11 +301,12 @@ fn create_entry(
         io::ErrorKind::AlreadyExists => "这里已有同名文件或文件夹".into(),
         _ => format!("新建失败：{err}"),
     })?;
+    let markdown = !directory && document_name(&path);
     Ok(WorkspaceEntry {
         path,
         name,
         directory,
-        markdown: !directory,
+        markdown,
         accessible: true,
     })
 }
@@ -328,6 +331,41 @@ pub(crate) async fn create_workspace_entry(
             &name,
             directory,
         )
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn trash_workspace_entry(
+    app: AppHandle,
+    root: String,
+    path: String,
+) -> Result<(), String> {
+    let settings = workspace_preference(&app)?;
+    let root = selected_path(&app, root)?;
+    let path = selected_path(&app, path)?;
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+        if real_root != root || remembered_root(&settings)?.as_deref() != Some(root.as_path()) {
+            return Err("请先打开此工作区".into());
+        }
+        let entry = workspace_path(&root, &real_root, &path)?;
+        if entry == real_root {
+            return Err("不能删除工作区根目录".into());
+        }
+        let kind = entry
+            .symlink_metadata()
+            .map_err(|err| err.to_string())?
+            .file_type();
+        if !(kind.is_file() || kind.is_dir()) {
+            return Err("此项目不能移到废纸篓".into());
+        }
+        #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+        return trash::delete(entry).map_err(|err| format!("移到废纸篓失败：{err}"));
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        Err("此平台不支持移到废纸篓".into())
     })
     .await
     .map_err(|err| err.to_string())?
@@ -853,7 +891,55 @@ fn ensure_absent(path: &Path) -> io::Result<()> {
     }
 }
 
+fn case_only_rename(from: &Path, to: &Path) -> io::Result<bool> {
+    let (Some(parent), Some(from_name), Some(to_name)) =
+        (from.parent(), from.file_name(), to.file_name())
+    else {
+        return Ok(false);
+    };
+    if to.parent() != Some(parent)
+        || from_name == to_name
+        || from_name.to_string_lossy().to_lowercase() != to_name.to_string_lossy().to_lowercase()
+        || !fs::symlink_metadata(to).is_ok_and(|meta| !meta.file_type().is_symlink())
+    {
+        return Ok(false);
+    }
+    let mut actual_source = false;
+    for entry in fs::read_dir(parent)? {
+        let name = entry?.file_name();
+        if name == to_name {
+            return Ok(false);
+        }
+        actual_source |= name == from_name;
+    }
+    Ok(actual_source)
+}
+
 fn rename_noclobber(from: &Path, to: &Path) -> io::Result<()> {
+    match rename_exclusive(from, to) {
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && case_only_rename(from, to)? => {}
+        Err(error) => return Err(error),
+    }
+    // A case-insensitive volume sees both names as the same entry. Stage the
+    // move so a newly created destination can still never be overwritten.
+    let staging = tempfile::tempdir_in(from.parent().unwrap())?;
+    let staged = staging.path().join("entry");
+    rename_exclusive(from, &staged)?;
+    if let Err(error) = rename_exclusive(&staged, to) {
+        if let Err(rollback) = rename_exclusive(&staged, from) {
+            let retained = staging.keep();
+            return Err(io::Error::other(format!(
+                "{error}；无法恢复原文件名：{rollback}。文件保存在 {}",
+                retained.join("entry").display()
+            )));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use rustix::fs::{renameat_with, RenameFlags, CWD};
@@ -1101,12 +1187,59 @@ fn move_paths(
     })
 }
 
+enum DestinationName<'a> {
+    Original,
+    Markdown(&'a str),
+    Rename(&'a str),
+}
+
+fn rename_leaf(source: &Path, stem: &str, directory: bool) -> Result<PathBuf, String> {
+    if stem.is_empty()
+        || stem == "."
+        || stem == ".."
+        || stem.ends_with([' ', '.'])
+        || stem.contains(['/', '\\', '\0'])
+        || stem.chars().any(char::is_control)
+    {
+        return Err("请输入有效的文件名".into());
+    }
+    let mut leaf = std::ffi::OsString::from(stem);
+    if !directory {
+        if let Some(extension) = source.extension() {
+            leaf.push(".");
+            leaf.push(extension);
+        } else if Path::new(stem).extension().is_some() {
+            return Err("文件扩展名不能修改".into());
+        }
+    }
+    let path = PathBuf::from(leaf);
+    if path.file_name() != Some(path.as_os_str()) {
+        return Err("请输入有效的文件名".into());
+    }
+    Ok(path)
+}
+
 fn move_entry(
     root: &Path,
     real_root: &Path,
     source: &Path,
     target: &Path,
     name: Option<&str>,
+    active_document: Option<&Path>,
+) -> Result<WorkspaceMove, String> {
+    relocate_entry(
+        root, real_root, source, target,
+        name.map_or(DestinationName::Original, DestinationName::Markdown),
+        active_document,
+    )
+}
+
+fn relocate_entry(
+    root: &Path,
+    real_root: &Path,
+    source: &Path,
+    target: &Path,
+    name: DestinationName<'_>,
     active_document: Option<&Path>,
 ) -> Result<WorkspaceMove, String> {
     let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
@@ -1125,23 +1258,27 @@ fn move_entry(
         return Err("不能将文件夹移动到自身或其子目录".into());
     }
     let destination = match name {
-        None => target.join(source.file_name().unwrap()),
-        Some(name) => {
+        DestinationName::Original => target.join(source.file_name().unwrap()),
+        DestinationName::Markdown(name) => {
             let leaf = Path::new(name);
             if kind.is_dir() || leaf.file_name() != Some(leaf.as_os_str()) || !document_name(leaf) {
                 return Err("请选择有效的 Markdown 文件名".into());
             }
             target.join(leaf)
         }
+        DestinationName::Rename(stem) => target.join(rename_leaf(&source, stem, kind.is_dir())?),
     };
     let display = |path: &Path| root.join(path.strip_prefix(real_root).unwrap());
     if source == destination {
         return Ok(WorkspaceMove {
             destination: display(&destination),
             active_document: None,
+            active_document_changed: false,
         });
     }
-    ensure_absent(&destination).map_err(|err| err.to_string())?;
+    if !case_only_rename(&source, &destination).map_err(|err| err.to_string())? {
+        ensure_absent(&destination).map_err(|err| err.to_string())?;
+    }
     let active = active_document.and_then(|path| path.canonicalize().ok());
     let mut moves = BTreeMap::from([(source.clone(), destination.clone())]);
     let source_text = if kind.is_file() && document_name(&source) {
@@ -1158,6 +1295,9 @@ fn move_entry(
             return Err("源文档已被其他程序修改，请重试".into());
         }
     }
+    let active_document_changed = active.as_ref().is_some_and(|path| {
+        edits.iter().any(|edit| &edit.before_path == path)
+    });
     let active_document = active
         .as_deref()
         .and_then(|path| {
@@ -1175,6 +1315,7 @@ fn move_entry(
     Ok(WorkspaceMove {
         destination: display(&destination),
         active_document,
+        active_document_changed,
     })
 }
 
@@ -1206,9 +1347,84 @@ pub(crate) async fn move_workspace_entry(
     .map_err(|err| err.to_string())?
 }
 
+#[tauri::command]
+pub(crate) async fn rename_workspace_entry(
+    app: AppHandle,
+    root: Option<String>,
+    source: String,
+    stem: String,
+    active_document: Option<String>,
+) -> Result<WorkspaceMove, String> {
+    let root = root.map(|path| selected_path(&app, path)).transpose()?;
+    let source = selected_path(&app, source)?;
+    let active = active_document.and_then(|path| selected_path(&app, path).ok());
+    tokio::task::spawn_blocking(move || {
+        let parent = source.parent().ok_or("找不到上级目录")?;
+        if let Some(root) = root {
+            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+            return relocate_entry(
+                &root, &real_root, &source, parent, DestinationName::Rename(&stem), active.as_deref(),
+            );
+        }
+
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        if !fs::symlink_metadata(&source).is_ok_and(|meta| meta.is_file()) {
+            return Err("只能重命名普通文件".into());
+        }
+        let destination = parent.join(rename_leaf(&source, &stem, false)?);
+        if source != destination {
+            if !case_only_rename(&source, &destination).map_err(|err| err.to_string())? {
+                ensure_absent(&destination).map_err(|err| err.to_string())?;
+            }
+            rename_noclobber(&source, &destination).map_err(|err| err.to_string())?;
+            if let Err(error) = app.fs_scope().allow_file(&destination) {
+                return Err(report_rollback(error.to_string(), rename_noclobber(&destination, &source).map_err(|err| err.to_string())));
+            }
+        }
+        let active_document = (active.as_ref() == Some(&source)).then(|| destination.clone());
+        Ok(WorkspaceMove { destination, active_document, active_document_changed: false })
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn renaming_keeps_the_extension_and_rewrites_workspace_links() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().canonicalize().unwrap();
+        let attachment = root.join("table.XLSX");
+        let note = root.join("note.md");
+        fs::write(&attachment, "attachment").unwrap();
+        fs::write(&note, "[统计](table.XLSX)").unwrap();
+        let renamed = relocate_entry(
+            &root, &root, &attachment, &root, DestinationName::Rename("新统计.v2"), Some(&note),
+        ).unwrap();
+        assert_eq!(renamed.destination, root.join("新统计.v2.XLSX"));
+        assert_eq!(renamed.active_document, Some(note.clone()));
+        assert_eq!(fs::read_to_string(&renamed.destination).unwrap(), "attachment");
+        assert!(fs::read_to_string(note).unwrap().ends_with(".v2.XLSX)"));
+        assert!(!attachment.exists());
+        assert!(rename_leaf(Path::new("README"), "read.me", false).is_err());
+        assert!(rename_leaf(Path::new("file.md"), "../outside", false).is_err());
+
+        let conflict = root.join("existing.XLSX");
+        fs::write(&conflict, "existing").unwrap();
+        assert!(relocate_entry(
+            &root, &root, &renamed.destination, &root, DestinationName::Rename("existing"), None,
+        ).is_err());
+        assert_eq!(fs::read_to_string(conflict).unwrap(), "existing");
+
+        let renamed_case = relocate_entry(
+            &root, &root, &renamed.destination, &root, DestinationName::Rename("新统计.V2"), None,
+        ).unwrap();
+        assert_eq!(renamed_case.destination, root.join("新统计.V2.XLSX"));
+        assert!(fs::read_dir(root).unwrap().any(|entry| entry.unwrap().file_name() == "新统计.V2.XLSX"));
+    }
 
     #[test]
     fn importing_a_dropped_file_keeps_the_source_and_existing_copies() {
@@ -1381,6 +1597,9 @@ mod tests {
         fs::write(&note.path, "first edit").unwrap();
         assert!(create_entry(Some(&root), &root, &folder.path, "新笔记.md", false).is_err());
         assert_eq!(fs::read_to_string(note.path).unwrap(), "first edit");
+        let text = create_entry(Some(&root), &root, &folder.path, "notes.txt", false).unwrap();
+        assert!(!text.markdown);
+        assert_eq!(text.name, "notes.txt");
     }
 
     #[test]

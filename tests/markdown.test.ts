@@ -199,3 +199,33 @@ describe('read-only protection', () => {
     expect(parseMarkdown(out, schema).eq(once)).toBe(true)
   })
 })
+
+describe('renderable Markdown', () => {
+  it('round-trips inline formulas, matrices, chart fences, and literal currency', () => {
+    const source = [
+      String.raw`面积 $A=\pi r^2$，营收 \$1,234.50，增长 −0.25%。`,
+      '',
+      '$$',
+      String.raw`\begin{bmatrix}a & b \\ c & d\end{bmatrix}`,
+      '$$',
+      '',
+      '```echarts',
+      '{"series":[{"type":"pie","data":[2,5]}]}',
+      '```',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A --> B',
+      '```',
+    ].join('\n')
+    const doc = parseMarkdown(source, schema)
+    expect(doc.child(0).child(1).attrs.latex).toBe(String.raw`A=\pi r^2`)
+    expect(doc.child(1).firstChild?.attrs).toMatchObject({
+      latex: '\n' + String.raw`\begin{bmatrix}a & b \\ c & d\end{bmatrix}` + '\n',
+      display: true,
+    })
+    expect(doc.child(2).attrs.language).toBe('echarts')
+    expect(doc.child(3).attrs.language).toBe('mermaid')
+    expect(serializeMarkdownForFile(doc)).toBe(source)
+  })
+})

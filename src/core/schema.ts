@@ -1,3 +1,4 @@
+import { MarkdownMath } from './mathNode'
 import { getSchema, type Extensions } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import type { Schema } from '@tiptap/pm/model'
@@ -14,6 +15,7 @@ export const extensions: Extensions = [
   ViewportGroup,
   MarkdownListItem,
   MarkdownImage,
+  MarkdownMath,
   FootnoteReference,
   FootnoteDefinition,
   ...markdownTableExtensions,

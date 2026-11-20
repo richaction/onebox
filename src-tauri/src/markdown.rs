@@ -91,6 +91,7 @@ fn markdown_options() -> Options {
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_MATH
 }
 
 fn url(url: &str) -> String {
@@ -291,6 +292,12 @@ fn parse_document(source: &str) -> (Vec<Node>, bool) {
                 node.inline_parent().push_text(&code, &marks);
                 marks.pop();
             }
+            Event::InlineMath(ref latex) | Event::DisplayMath(ref latex) => {
+                let display = matches!(event, Event::DisplayMath(_));
+                let mut math = Node::new("math", json!({ "latex": &**latex, "display": display }));
+                math.marks = marks.clone();
+                node.inline_parent().content.push(math);
+            }
             Event::SoftBreak => node.inline_parent().push_text("\n", &marks),
             Event::HardBreak => {
                 let mut br = Node::plain("hardBreak");
@@ -322,7 +329,6 @@ fn parse_document(source: &str) -> (Vec<Node>, bool) {
                 node.inline_parent()
                     .push_text(raw.trim_end_matches('\n'), &marks);
             }
-            _ => unreachable!("disabled Markdown event: {event:?}"),
         }
     }
 
@@ -426,6 +432,24 @@ mod tests {
         );
         assert_eq!(blocks[3]["content"][1]["attrs"]["label"], "note");
         assert_eq!(blocks[4]["attrs"]["label"], "note");
+    }
+
+    #[test]
+    fn preserves_formula_source_and_chart_fences() {
+        let source = r#"面积 $A=\pi r^2$，金额 \$1,234.50。
+
+$$
+\begin{bmatrix}a & b \\ c & d\end{bmatrix}
+$$
+
+```echarts
+{"series":[]}
+```"#;
+        let (blocks, readonly) = parse_document(source);
+        assert!(!readonly);
+        assert_eq!(blocks[0].content[1].attrs, json!({"latex": r"A=\pi r^2", "display": false}));
+        assert_eq!(blocks[1].content[0].attrs, json!({"latex": "\n\\begin{bmatrix}a & b \\\\ c & d\\end{bmatrix}\n", "display": true}));
+        assert_eq!(blocks[2].attrs["language"], "echarts");
     }
 
     #[test]

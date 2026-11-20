@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { blockEditCommands, slashTrigger } from '../src/core/blockCommands'
+import { blockEditCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
 import { createEditor, type EditorHandle } from '../src/core/editor'
 
 const SAMPLE = '# 标题\n\n段落 **粗体**\n\n- 甲\n- 乙\n'
@@ -44,6 +44,73 @@ describe('createEditor', () => {
     expect(element.querySelector('.onebox-block-content')?.tagName).toBe('H1')
   })
 
+  it('places the caret from the page gutter without changing document content', () => {
+    const { handle, onUpdate } = mount()
+    const view = handle.editor.view
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 200))
+    const posAtCoords = vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
+    scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 35, bubbles: true }))
+    expect(posAtCoords).toHaveBeenCalledWith({ left: 41, top: 35 })
+    expect(view.state.selection.head).toBe(2)
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('continues from the blank space under a final code block without adding a second paragraph on repeat', () => {
+    const { handle } = mount()
+    const view = handle.editor.view
+    handle.loadBlocks([{ type: 'codeBlock', content: [{ type: 'text', text: 'code' }] }], true)
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
+    const clickBelow = () => scrollRoot!.dispatchEvent(new MouseEvent('mousedown', {
+      clientX: 110, clientY: 175, bubbles: true, cancelable: true,
+    }))
+    handle.editor.setEditable(false, false)
+    clickBelow()
+    expect(view.state.doc.firstChild?.childCount).toBe(1)
+
+    handle.editor.setEditable(true, false)
+    clickBelow()
+    clickBelow()
+    expect(view.state.doc.firstChild?.childCount).toBe(2)
+    expect(view.state.selection.$head.parent.type.name).toBe('paragraph')
+    expect(view.state.doc.firstChild?.firstChild?.textContent).toBe('code')
+  })
+
+  it('picks the visually nearer text line when a gutter click lands between blocks', () => {
+    const { handle } = mount()
+    handle.loadMarkdown('first\n\nsecond')
+    const view = handle.editor.view
+    const gap = view.state.doc.firstChild!.nodeSize
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: gap, inside: -1 })
+    vi.spyOn(view, 'coordsAtPos').mockImplementation((pos) => pos < gap
+      ? { left: 50, right: 50, top: 20, bottom: 38 } : { left: 40, right: 40, top: 62, bottom: 80 })
+    scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 56, bubbles: true }))
+    expect(view.state.selection.$head.parent.textContent).toBe('second')
+  })
+
+  it('opens a new paragraph below an isolated display formula', () => {
+    const { handle } = mount()
+    handle.loadMarkdown('$$a+b$$')
+    const view = handle.editor.view
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
+    scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 110, clientY: 175, bubbles: true }))
+    expect(view.state.doc.childCount).toBe(2)
+    expect(view.state.selection.$head.parent.textContent).toBe('')
+  })
+
+  it('opens the line below a code block and reuses a following paragraph across viewport groups', () => {
+    const { handle, element, onUpdate } = mount()
+    handle.loadBlocks([{ type: 'codeBlock', content: [{ type: 'text', text: 'code' }] }], true)
+    handle.appendBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'next' }] }])
+    element.querySelector<HTMLButtonElement>('.code-continue')!.click()
+
+    const { selection, doc } = handle.editor.state
+    expect(selection.$head.parent.textContent).toBe('next')
+    expect(selection.$head.parentOffset).toBe(0)
+    expect(doc.firstChild?.childCount).toBe(1)
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
   it('keeps editor-only code and table controls outside exported content', () => {
     const { handle, element } = mount()
     handle.loadMarkdown('> ```python\n> print("hello")\n> ```')
@@ -53,10 +120,7 @@ describe('createEditor', () => {
     expect(code.querySelector('pre > code')?.textContent).toBe('print("hello")')
     expect(code.querySelector('pre > code')?.getAttribute('spellcheck')).toBe('false')
     expect(handle.editor.view.dom.getAttribute('autocorrect')).toBe('off')
-    const beforeWrap = handle.toMarkdown()
-    code.querySelector<HTMLButtonElement>('button')!.click()
-    expect(code.hasAttribute('data-wrap')).toBe(true)
-    expect(handle.toMarkdown()).toBe(beforeWrap)
+    expect(Array.from(code.querySelectorAll('.code-toolbar button'), (button) => button.textContent)).toEqual(['复制'])
     expect(handle.editor.getHTML()).not.toMatch(/code-frame|code-toolbar/)
 
     handle.loadMarkdown('| Name | Count |\n| --- | ---: |\n| A | 42 |')
@@ -86,10 +150,9 @@ describe('createEditor', () => {
     handle.editor.setEditable(true, false)
     expect(select().disabled).toBe(false)
 
-    element.querySelector<HTMLButtonElement>('.code-actions button')!.click()
     choose('rust')
     expect(select().value).toBe('rust')
-    expect(select().closest('.code-frame[data-wrap]')?.getAttribute('data-language')).toBe('rust')
+    expect(select().closest('.code-frame')?.getAttribute('data-language')).toBe('rust')
     expect(handle.toMarkdown()).toBe('> ```rust title=demo\n> fn main() {}\n> ```')
     expect(onUpdate).toHaveBeenCalledOnce()
     expect(handle.editor.commands.undo()).toBe(true)
@@ -124,6 +187,22 @@ describe('createEditor', () => {
     expect(remove.run(handle.editor.chain()).run()).toBe(true)
     expect(handle.editor.state.doc.childCount).toBeGreaterThan(0)
     expect(handle.toMarkdown()).toBe('')
+  })
+
+  it('inserts editable chart and LaTeX templates from slash commands', () => {
+    const { handle } = mount()
+    handle.loadMarkdown('')
+    const { editor } = handle
+    const line = insertCommands.find((item) => item.label === '折线图')!
+    const formula = insertCommands.find((item) => item.label === '公式')!
+    expect(line.run(editor.chain()).run()).toBe(true)
+    editor.commands.insertContentAt(editor.state.doc.content.size, { type: 'paragraph' })
+    editor.commands.setTextSelection(editor.state.doc.content.size - 1)
+    expect(formula.run(editor.chain()).run()).toBe(true)
+    expect(handle.toMarkdown()).toContain('```echarts')
+    expect(handle.toMarkdown()).toContain(String.raw`$$\displaystyle \sum_{k=1}^{n} k`)
+    expect(editor.state.doc.firstChild?.attrs.language).toBe('echarts')
+    expect(editor.state.doc.lastChild?.firstChild?.type.name).toBe('math')
   })
 
   it('matches a slash command after a delimiter in a long paragraph', () => {

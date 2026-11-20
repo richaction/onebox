@@ -1,3 +1,4 @@
+import { mathMarkdown, mathSource } from './mathMarkdown'
 import MarkdownIt from 'markdown-it'
 import footnote from 'markdown-it-footnote'
 import {
@@ -14,6 +15,7 @@ function createTokenizer(html: boolean) {
   const md = MarkdownIt('commonmark', { html, linkify: false, typographer: false })
     .enable(['table', 'strikethrough'])
     .use(footnote)
+    .use(mathMarkdown)
   // Preserve definition positions and definitions that happen to have no references.
   md.core.ruler.disable('footnote_tail')
   md.inline.ruler.disable('footnote_inline')
@@ -95,6 +97,7 @@ function buildParser(schema: Schema): MarkdownParser {
     },
     hr: { node: 'horizontalRule' },
     hardbreak: { node: 'hardBreak' },
+    onebox_math: { node: 'math', getAttrs: (tok) => ({ latex: tok.content, display: tok.meta.display }) },
     text: { node: 'text' },
     image: {
       node: 'image',
@@ -140,6 +143,9 @@ const serializer = new MarkdownSerializer(
       const text = node.text!
       // Preserve existing single-line comments. Escape literal angle brackets in normal text.
       state.text(text, !singleLineComment.test(text))
+    },
+    math(state, node) {
+      state.text(mathSource(node.attrs.latex, node.attrs.display), false)
     },
     bulletList: base.bullet_list,
     listItem(state, node) {
@@ -224,11 +230,11 @@ const serializer = new MarkdownSerializer(
     link: defaultMarkdownSerializer.marks.link,
     strike: { open: '~~', close: '~~', mixable: true, expelEnclosingWhitespace: true },
   },
-  { escapeExtraCharacters: /[<&|]/g, hardBreakNodeName: 'hardBreak' },
+  { escapeExtraCharacters: /[<&|$]/g, hardBreakNodeName: 'hardBreak' },
 )
 
 const tableCellSerializer = new MarkdownSerializer(
-  serializer.nodes, serializer.marks, { escapeExtraCharacters: /[<&]/g, hardBreakNodeName: 'hardBreak' },
+  serializer.nodes, serializer.marks, { escapeExtraCharacters: /[<&$]/g, hardBreakNodeName: 'hardBreak' },
 )
 
 export function parseMarkdown(text: string, schema: Schema): Node {

@@ -1,6 +1,7 @@
-import { createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
 import { desktopWorkspace, type FileApplications, type WorkspaceEntry } from '../io/tauri'
 import ViewerFrame from './ViewerFrame'
+import FileName, { type TitleEdit } from './FileName'
 
 function AppIcon(props: { src?: string | null }) {
   return (
@@ -14,19 +15,22 @@ function AppIcon(props: { src?: string | null }) {
 
 export default function FilePreview(props: {
   root?: string
-  entry: WorkspaceEntry
+  entry?: WorkspaceEntry
   onOpenExternal: (application?: string) => void
   onClose: () => void
+  titleEdit?: TitleEdit
 }) {
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [applications, setApplications] = createSignal<FileApplications>()
   const [applicationIcons, setApplicationIcons] = createSignal<Record<string, string>>({})
   let openWithButton!: HTMLButtonElement
   let openWithMenu!: HTMLDivElement
-  let disposed = false
-
-  onMount(() => {
-    void desktopWorkspace.fileApplications(props.root, props.entry.path, (list) => {
+  createEffect(() => {
+    let disposed = false
+    onCleanup(() => { disposed = true })
+    const path = props.entry?.path
+    if (!path) return
+    void desktopWorkspace.fileApplications(props.root, path, (list) => {
       if (!disposed) setApplications(list)
     }).then((icons) => {
       if (!disposed) setApplicationIcons(icons)
@@ -34,7 +38,6 @@ export default function FilePreview(props: {
       if (!disposed) setApplications((list) => list ?? { items: [], defaultIcon: null })
     })
   })
-  onCleanup(() => { disposed = true })
 
   const positionOpenWith = () => {
     const bounds = openWithButton.getBoundingClientRect()
@@ -88,7 +91,7 @@ export default function FilePreview(props: {
   return (
     <section class="file-preview" aria-label="文件预览">
       <header class="file-preview-toolbar">
-        <strong title={props.entry.name}>{props.entry.name}</strong>
+        <FileName name={props.entry?.name ?? ''} edit={props.titleEdit} />
         <div class="file-open-with" role="group" aria-label="打开方式">
           <button type="button" class="file-open-with-default"
             aria-label={`用${defaultApp()?.name ?? '系统默认应用'}打开`}
@@ -117,7 +120,9 @@ export default function FilePreview(props: {
           <Show when={!applications()}><span class="file-open-with-loading" role="status">正在查找其他应用…</span></Show>
         </div>
       </header>
-      <ViewerFrame root={props.root} entry={props.entry} onClose={props.onClose} />
+      <Show when={props.entry} keyed>
+        {(entry) => <ViewerFrame root={props.root} entry={entry} onClose={props.onClose} />}
+      </Show>
     </section>
   )
 }

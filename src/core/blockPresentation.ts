@@ -1,14 +1,20 @@
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import type { EditorView } from '@tiptap/pm/view'
 import { codeLanguage, codeLanguageIds } from './codeLanguages'
 import type { createCodeHighlight } from './codeHighlight'
+import { richLanguage, watchRichBlock } from './richBlock'
+import { continueAfterBlock } from './editorCaret'
 import type { PresentBlock } from './viewport/blockNodeView'
 
 const selectableLanguages = [...codeLanguageIds, 'html', 'c']
   .map((id) => ({ id, label: codeLanguage(id).label }))
   .sort((a, b) => a.label.localeCompare(b.label, 'en'))
-const languageChoices = [{ id: '', label: '纯文本' }, ...selectableLanguages]
-const selectableIds = new Set(selectableLanguages.map(({ id }) => id))
+const languageChoices = [
+  { id: '', label: '纯文本' }, { id: 'echarts', label: 'ECharts' }, { id: 'mermaid', label: 'Mermaid' },
+  ...selectableLanguages,
+]
+const selectableIds = new Set(languageChoices.map(({ id }) => id))
+
+let nextRichBlock = 0
 
 export function keepTableCaretVisible(view: EditorView) {
   const { $head } = view.state.selection
@@ -33,7 +39,6 @@ export function keepTableCaretVisible(view: EditorView) {
 }
 
 export function createBlockPresentation(highlight: ReturnType<typeof createCodeHighlight>) {
-  const wraps = new WeakMap<ProseMirrorNode, boolean>()
   const languageSelects = new Set<HTMLSelectElement>()
   const present: PresentBlock = (node, rendered, view, getPos) => {
     const { dom, contentDOM } = rendered
@@ -104,6 +109,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     frame.className = 'code-frame'
     const info: string = node.attrs.language?.trim() ?? ''
     const language = codeLanguage(info)
+    const rich = richLanguage(info)
     frame.dataset.language = language.id ?? 'plain'
     contentDOM.setAttribute('spellcheck', 'false')
 
@@ -138,20 +144,50 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
 
     const actions = document.createElement('div')
     actions.className = 'code-actions'
-    const wrap = document.createElement('button')
-    wrap.type = 'button'
-    wrap.textContent = '换行'
-    wrap.setAttribute('aria-label', '自动换行')
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.textContent = '复制'
     copy.hidden = !document.defaultView?.navigator.clipboard?.writeText
-    actions.append(wrap, copy)
+    actions.append(copy)
     toolbar.append(picker, actions)
-    frame.append(toolbar, dom)
+    const continueButton = document.createElement('button')
+    continueButton.type = 'button'
+    continueButton.className = 'code-continue'
+    continueButton.contentEditable = 'false'
+    continueButton.title = '在代码块后继续写正文'
+    continueButton.setAttribute('aria-label', continueButton.title)
+    continueButton.onclick = () => {
+      const pos = getPos()
+      if (pos !== undefined) continueAfterBlock(view, pos)
+    }
+    frame.append(toolbar)
+    let richPreview: ReturnType<typeof watchRichBlock> | undefined
+    if (rich) {
+      frame.dataset.rich = rich
+      const preview = document.createElement('div')
+      preview.className = 'rich-preview'
+      preview.dataset.engine = rich
+      preview.id = `onebox-chart-${++nextRichBlock}`
+      preview.contentEditable = 'false'
+      preview.setAttribute('aria-label', rich === 'mermaid' ? 'Mermaid 图' : 'ECharts 图表')
+      preview.textContent = '正在载入预览…'
+      frame.append(preview)
+      richPreview = watchRichBlock(preview, rich, node.textContent)
+
+      const source = document.createElement('button')
+      source.type = 'button'
+      source.textContent = '源码'
+      source.setAttribute('aria-expanded', 'false')
+      dom.hidden = true
+      source.onclick = () => {
+        dom.hidden = !dom.hidden
+        source.setAttribute('aria-expanded', String(!dom.hidden))
+      }
+      actions.prepend(source)
+    }
+    frame.append(dom, continueButton)
 
     let current = node
-    let wrapped = wraps.get(node) ?? false
     let copyStatus: ReturnType<typeof setTimeout> | undefined
     let disposed = false
     select.onchange = () => {
@@ -166,22 +202,11 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       const nextInfo = (select.value || (suffix ? 'text' : '')) + suffix
       const focused = document.activeElement === select
       const tr = view.state.tr.setNodeAttribute(pos, 'language', nextInfo || null)
-      if (wrapped) wraps.set(tr.doc.nodeAt(pos)!, wrapped)
       view.dispatch(tr)
       if (focused) {
         const block = view.nodeDOM(pos) as HTMLElement | null
         block?.querySelector<HTMLSelectElement>('.code-language')?.focus({ preventScroll: true })
       }
-    }
-    const showWrap = () => {
-      frame.toggleAttribute('data-wrap', wrapped)
-      wrap.setAttribute('aria-pressed', String(wrapped))
-    }
-    showWrap()
-    wrap.onclick = () => {
-      wrapped = !wrapped
-      wraps.set(current, wrapped)
-      showWrap()
     }
     actions.onmousedown = (event) => event.preventDefault()
     copy.onclick = async () => {
@@ -197,21 +222,23 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       copyStatus = setTimeout(() => { copy.textContent = '复制' }, 1_200)
     }
 
-    const syntax = highlight?.watch(frame, contentDOM, node)
+    const syntax = rich ? undefined : highlight?.watch(frame, contentDOM, node)
     return {
       dom: frame,
       contentDOM,
       updateContent(next) {
         current = next
-        if (wrapped || wraps.has(node)) wraps.set(current, wrapped)
         syntax?.update(next)
+        richPreview?.update(next.textContent)
       },
-      stopEvent: (event) => toolbar.contains(event.target as Node | null),
+      stopEvent: (event) => event.target === continueButton || toolbar.contains(event.target as Node | null)
+        || (event.target as Element)?.closest?.('.rich-preview') != null,
       destroy() {
         disposed = true
         languageSelects.delete(select)
         clearTimeout(copyStatus)
         syntax?.destroy()
+        richPreview?.destroy()
       },
     }
   }

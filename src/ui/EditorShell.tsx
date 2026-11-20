@@ -37,6 +37,7 @@ const attachmentItems: readonly Action[] = [
 export default function EditorShell(props: {
   markdown: string
   onReady: (handle: EditorHandle) => void
+  onDispose?: (handle: EditorHandle) => void
   onUpdate: (doc: Node) => void
   onInsertAttachment?: (kind: AttachmentKind, range?: Range) => void
   onInsertFiles?: (files: File[]) => void
@@ -205,7 +206,11 @@ export default function EditorShell(props: {
     })
     props.onReady(handle)
   })
-  onCleanup(() => handle?.destroy())
+  onCleanup(() => {
+    if (!handle) return
+    props.onDispose?.(handle)
+    handle.destroy()
+  })
 
   createEffect(() => {
     const current = popup()

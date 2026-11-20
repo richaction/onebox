@@ -60,6 +60,7 @@ export const desktopWorkspace = {
   clearRoot: () => invoke<void>('clear_workspace_root'),
   create: (root: string, folder: string, name: string, directory: boolean) =>
     invoke<WorkspaceEntry>('create_workspace_entry', { root, folder, name, directory }),
+  trash: (root: string, path: string) => invoke<void>('trash_workspace_entry', { root, path }),
   importFiles: (root: string, folder: string, paths: string[]) =>
     invoke<{ paths: string[]; failed: number }>('import_workspace_files', { root, folder, paths }),
   openAttachment: (root: string | undefined, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
@@ -70,6 +71,10 @@ export const desktopWorkspace = {
   releasePreview: (path: string) => invoke<void>('release_workspace_preview', { path }),
   entries: (root: string, folder: string) =>
     invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),
+  rename: (root: string | undefined, source: string, stem: string, activeDocument: string | null) =>
+    invoke<{ destination: string; activeDocument: string | null; activeDocumentChanged: boolean }>('rename_workspace_entry', {
+      root, source, stem, activeDocument,
+    }),
   move: (root: string, source: string, target: string, activeDocument: string | null, name?: string) =>
     invoke<{ destination: string; activeDocument: string | null }>('move_workspace_entry', {
       root, source, target, activeDocument, name,

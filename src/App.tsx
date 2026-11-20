@@ -4,25 +4,27 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { JSONContent, Range } from '@tiptap/core'
 import type { Node } from '@tiptap/pm/model'
-import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { batch, createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { relativeReferences, rewriteAttachmentLinks } from './core/attachmentLinks'
 import type { EditorHandle } from './core/editor'
 import { developmentSession, type DevelopmentSnapshot } from './core/developmentSession'
-import { EditorState } from '@tiptap/pm/state'
+import { EditorState, Selection } from '@tiptap/pm/state'
 import { schema } from './core/schema'
 import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type PreviewEntry, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
+import FileName, { splitName, type TitleEdit } from './ui/FileName'
 import WorkspaceSidebar from './ui/WorkspaceSidebar'
 import WorkspaceResizeHandle, { initialWorkspaceWidth } from './ui/WorkspaceResizeHandle'
 
 const SAVE_DEBOUNCE_MS = 800
+const TITLE_SAVE_DELAY_MS = 700
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
 
-type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '移动失败' | '移动已完成，请重新打开文档' | '导入失败'
+type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '移动失败' | '移动已完成，请重新打开文档' | '导入失败' | '删除失败' | '重命名失败' | '重命名已完成，请重新打开文档'
 type Transfer = 'saveAs' | 'copy' | 'move'
 
 function nameOf(path: string) {
@@ -48,9 +50,12 @@ export default function App() {
   let timer: ReturnType<typeof setTimeout> | undefined
   let savedDoc: Node | undefined = restored?.savedDoc
   let writer: Promise<boolean> | undefined = restored?.writer
+  let titleTimer: ReturnType<typeof setTimeout> | undefined
+  let titleWrite: Promise<boolean> | undefined
+  let titleDue = false
   let busy = false
   let cancelLoad = false
-  let openingFromSidebar = false
+  let openingPath: string | undefined
   let disposed = false
   let developmentPreparing: string | undefined
   let loadBefore: { path: string | null; state: EditorState; readonly: boolean; scrollTop: number } | undefined
@@ -77,7 +82,13 @@ export default function App() {
   const [workspaceImporting, setWorkspaceImporting] = createSignal(false)
   const [importMessage, setImportMessage] = createSignal<string>()
   const [failure, setFailure] = createSignal<Failure>()
+  const [titleDraft, setTitleDraft] = createSignal<{ entry: WorkspaceEntry; stem: string; error?: string }>()
+  const [workspaceRename, setWorkspaceRename] = createSignal<{ source: string; destination: string; name: string }>()
   const activeFile = () => preview()?.path ?? path()
+  createEffect(() => {
+    const draft = titleDraft()
+    if (draft?.error && draft.entry.path !== activeFile()) setTitleDraft(undefined)
+  })
   const sidebarLabel = () => sidebarVisible() ? '关闭侧栏' : '打开侧栏'
   const toggleSidebar = () => {
     if (sidebarVisible() && document.getElementById('workspace-sidebar')?.contains(document.activeElement)) {
@@ -147,19 +158,19 @@ export default function App() {
       return false
     } finally {
       busy = false
-      setEditable(editor, editorIsEditable())
-      queueMicrotask(openPendingEntry)
+      if (handle && !disposed && !handle.editor.isDestroyed) setEditable(handle, editorIsEditable())
+      queueMicrotask(resumeFileActions)
     }
   }
 
-  const readDocument = async (editor: EditorHandle, picked: string) => {
-    if (!await flush()) return false
-
-    cancelLoad = false
+  const readDocument = async (editor: EditorHandle, picked: string, reveal = true) => {
+    if (!openingPath || !reveal) cancelLoad = false
+    if (!await flush() || cancelLoad) return false
     setLoading(true)
     const { view } = editor.editor
     const previous = view.state
     const previousPath = path()
+    const previousPreview = preview()
     loadBefore = { path: previousPath, state: previous, readonly: readonly(), scrollTop: view.dom.closest('.editor-scroll')?.scrollTop ?? 0 }
     let session: number | undefined
     try {
@@ -169,6 +180,7 @@ export default function App() {
       setPath(picked)
       editor.loadBlocks(start.blocks, start.total >= 4_000)
       editor.refreshImages()
+      if (reveal) setPreview(undefined)
       let count = start.blocks.length
       let limit = 192
       while (count < start.total) {
@@ -178,6 +190,7 @@ export default function App() {
         if (cancelLoad || disposed) {
           if (disposed) return false
           setPath(previousPath)
+          if (reveal) setPreview(previousPreview)
           view.updateState(previous)
           editor.refreshImages()
           return false
@@ -189,13 +202,13 @@ export default function App() {
         limit = Math.round(Math.min(512, Math.max(48, limit * Math.min(1.33, 7 / duration))))
       }
       savedDoc = editor.editor.state.doc
-      setPreview(undefined)
       setReadonly(start.readonly)
       setFailure(undefined)
       return true
     } catch (error) {
       if (disposed) return false
       setPath(previousPath)
+      if (reveal) setPreview(previousPreview)
       view.updateState(previous)
       editor.refreshImages()
       throw error
@@ -283,7 +296,7 @@ export default function App() {
         setWorkspaceReveal(entry.path)
         refreshWorkspace()
         setFailure(undefined)
-        if (!entry.directory) {
+        if (entry.markdown) {
           try {
             opened = await readDocument(editor, entry.path)
           } catch {
@@ -300,32 +313,63 @@ export default function App() {
     if (opened) requestAnimationFrame(() => handle?.editor.view.focus())
   }
 
+  const trashWorkspaceEntry = async (entry: WorkspaceEntry) => {
+    const current = workspace()
+    if (!current || busy) throw new Error('请等待当前文件操作完成')
+    const contains = (target?: string | null) =>
+      !!target && (target === entry.path || (entry.directory && inWorkspace(target, entry.path)))
+    let cause: unknown
+    const deleted = await runFileAction(async (editor) => {
+      try {
+        if (contains(path()) && !await flush()) throw new Error('当前文档保存失败')
+        await desktopWorkspace.trash(current.root, entry.path)
+        if (contains(path())) {
+          setPath(null)
+          setReadonly(false)
+          editor.loadMarkdown('')
+          savedDoc = editor.editor.state.doc
+        }
+        if (contains(preview()?.path)) setPreview(undefined)
+        if (contains(pendingOpen()?.entry.path)) setPendingOpen(undefined)
+        if (contains(workspaceReveal())) setWorkspaceReveal(undefined)
+        refreshWorkspace()
+        setFailure(undefined)
+        return true
+      } catch (err) {
+        cause = err
+        return false
+      }
+    }, '删除失败')
+    if (!deleted) throw cause ?? new Error('删除失败')
+  }
+
   const openWorkspaceEntry = (entry: WorkspaceEntry) => {
     const current = workspace()
     if (!current) return
     if (workspaceReveal() !== entry.path) setWorkspaceReveal(undefined)
     setPendingOpen({ entry, root: current.root })
-    if (openingFromSidebar && loading() && path() !== entry.path) cancelLoad = true
+    if (openingPath && openingPath !== entry.path) cancelLoad = true
     openPendingEntry()
   }
 
   function openPendingEntry() {
     const pending = pendingOpen()
-    if (!pending || busy || developmentPreparing || openingFromSidebar || !handle) return
+    if (!pending || busy || titleWrite || titleDue || developmentPreparing || openingPath || !handle) return
     const { entry, root } = pending
     if (workspace()?.root !== root) {
       setPendingOpen(undefined)
       return
     }
     if (entry.markdown) {
-      openingFromSidebar = true
+      openingPath = entry.path
+      cancelLoad = false
       void runFileAction(async (editor) => {
         if (path() !== entry.path) return readDocument(editor, entry.path)
         setPreview(undefined)
         setFailure(undefined)
         return true
       }, '打开失败').finally(() => {
-        openingFromSidebar = false
+        openingPath = undefined
         if (pendingOpen() === pending) setPendingOpen(undefined)
         openPendingEntry()
       })
@@ -334,6 +378,153 @@ export default function App() {
       setPreview({ ...entry, workspaceRoot: root })
       setFailure(undefined)
     }
+  }
+
+  const renameEntry = async (entry: WorkspaceEntry, stem: string) => {
+    const current = workspace()?.root
+    const root = current && inWorkspace(entry.path, current) ? current : undefined
+    let result: Awaited<ReturnType<typeof desktopWorkspace.rename>> | undefined
+    let cause: unknown
+    await runFileAction(async (editor) => {
+      try {
+        if (!await flush()) throw new Error('当前文档保存失败')
+        result = await desktopWorkspace.rename(root, entry.path, stem, path())
+      } catch (error) {
+        cause = error
+        return false
+      }
+      const { destination, activeDocument, activeDocumentChanged } = result
+      if (destination !== entry.path) {
+        const relocate = (path: string) => (path === entry.path || (entry.directory && inWorkspace(path, entry.path)))
+          ? destination + path.slice(entry.path.length) : path
+        batch(() => {
+          if (root) setWorkspaceRename({ source: entry.path, destination, name: nameOf(destination) })
+          setTitleDraft((draft) => {
+            if (!draft) return draft
+            const target = relocate(draft.entry.path)
+            return target === draft.entry.path ? draft
+              : { ...draft, entry: { ...draft.entry, path: target, name: nameOf(target) } }
+          })
+          if (activeDocument) setPath(activeDocument)
+          setPreview((currentPreview) => {
+            if (!currentPreview) return currentPreview
+            const target = relocate(currentPreview.path)
+            return target === currentPreview.path ? currentPreview
+              : { ...currentPreview, path: target, name: nameOf(target) }
+          })
+        })
+        setPendingOpen((pending) => {
+          if (!pending) return pending
+          const target = relocate(pending.entry.path)
+          return target === pending.entry.path ? pending
+            : { ...pending, entry: { ...pending.entry, path: target, name: nameOf(target) } }
+        })
+        if (root) {
+          setWorkspaceReveal(destination)
+          refreshWorkspace()
+        }
+      }
+      setFailure(undefined)
+      if (activeDocument && activeDocumentChanged) {
+        const scroller = editor.editor.view.dom.closest('.editor-scroll')
+        const scrollTop = scroller?.scrollTop ?? 0
+        const selection = editor.editor.state.selection.toJSON()
+        try {
+          if (!await readDocument(editor, activeDocument, false)) throw new Error('Load cancelled')
+          // Preserve the caret if the parsed blocks still support the old position.
+          try {
+            const view = editor.editor.view
+            const restored = Selection.fromJSON(view.state.doc, selection)
+            view.dispatch(view.state.tr.setSelection(restored))
+          } catch { /* Link updates can remove or shift the old position. */ }
+          if (scroller) scroller.scrollTop = scrollTop
+        } catch {
+          setReadonly(true)
+          setFailure('重命名已完成，请重新打开文档')
+        }
+      }
+      return true
+    }, '重命名失败')
+    if (!result) throw cause ?? new Error('请等待当前文件操作完成')
+    return result.destination
+  }
+
+  const pauseTitle = () => {
+    clearTimeout(titleTimer)
+    titleDue = false
+  }
+
+  function resumeFileActions() {
+    if (disposed || titleWrite) return
+    if (titleDue) void saveTitle()
+    else openPendingEntry()
+  }
+
+  function saveTitle(): Promise<boolean> {
+    clearTimeout(titleTimer)
+    const draft = titleDraft()
+    if (!draft) {
+      titleDue = false
+      return Promise.resolve(true)
+    }
+    if (draft.error) return Promise.resolve(false)
+    titleDue = true
+    if (titleWrite) return titleWrite
+    if (busy || !handle || developmentPreparing) return Promise.resolve(false)
+    titleDue = false
+    if (draft.stem === splitName(draft.entry.name).stem) {
+      setTitleDraft(undefined)
+      queueMicrotask(openPendingEntry)
+      return Promise.resolve(true)
+    }
+    if (!draft.stem.trim()) {
+      setTitleDraft({ ...draft, error: '请输入文件名' })
+      queueMicrotask(openPendingEntry)
+      return Promise.resolve(false)
+    }
+    titleWrite = renameEntry(draft.entry, draft.stem).then((destination) => {
+      setTitleDraft((current) => current?.entry.path === destination && current.stem === draft.stem
+        ? undefined : current)
+      return true
+    }, (failure) => {
+      if (titleDraft() === draft) {
+        titleDue = false
+        setTitleDraft({ ...draft, error: failure instanceof Error ? failure.message : String(failure) })
+      }
+      return false
+    }).finally(() => {
+      titleWrite = undefined
+      resumeFileActions()
+    })
+    return titleWrite
+  }
+
+  const titleEdit = (entry: WorkspaceEntry): TitleEdit => {
+    const draft = () => titleDraft()?.entry.path === entry.path ? titleDraft() : undefined
+    return {
+      get stem() { return draft()?.stem ?? splitName(entry.name).stem },
+      get error() { return draft()?.error },
+      onInput(stem) {
+        if (activeFile() !== entry.path) return
+        pauseTitle()
+        setTitleDraft({ entry, stem })
+        titleTimer = setTimeout(() => void saveTitle(), TITLE_SAVE_DELAY_MS)
+      },
+      onPause: pauseTitle,
+      onSave() { if (draft()) void saveTitle() },
+      onCancel() {
+        if (!draft() || titleWrite) return
+        pauseTitle()
+        setTitleDraft(undefined)
+        resumeFileActions()
+      },
+    }
+  }
+
+  const displayedName = (entry: WorkspaceEntry) => {
+    const draft = titleDraft()
+    return draft?.entry.path === entry.path && draft.stem.trim() && !draft.error
+      ? draft.stem + splitName(entry.name).suffix : entry.name
   }
 
   const openWorkspaceAttachment = (entry: PreviewEntry, application?: string) => {
@@ -572,6 +763,10 @@ export default function App() {
         event.preventDefault()
         return
       }
+      if (!await saveTitle()) {
+        event.preventDefault()
+        return
+      }
       busy = true
       setEditable(handle, false)
       if (await flush()) return
@@ -589,29 +784,52 @@ export default function App() {
     })
   })
 
+  let previousEditor: Pick<DevelopmentSnapshot, 'path' | 'editorState' | 'scrollTop' | 'focused'> | undefined
+  const onEditorDispose = (editor: EditorHandle) => {
+    if (!import.meta.env.DEV || disposed || handle !== editor) return
+    const { view, state, isFocused } = editor.editor
+    previousEditor = {
+      path: loadBefore ? loadBefore.path : path(),
+      editorState: loadBefore?.state ?? state,
+      scrollTop: loadBefore?.scrollTop ?? view.dom.closest('.editor-scroll')?.scrollTop ?? 0,
+      focused: isFocused,
+    }
+  }
+
   const onReady = (editor: EditorHandle) => {
     handle = editor
     if (import.meta.env.DEV) {
-      const snapshot = developmentSession.snapshot
-      if (snapshot?.editorState) {
+      const snapshot = previousEditor ?? developmentSession.snapshot
+      previousEditor = undefined
+      developmentSession.snapshot = undefined
+      if (snapshot?.editorState && snapshot.path === path()) {
         const view = editor.editor.view
         const old = snapshot.editorState
         const plugins = view.state.plugins
+        const clean = old.doc === savedDoc
         view.updateState(old.schema === view.state.schema
           ? old.reconfigure({ plugins })
           : EditorState.fromJSON({ schema: view.state.schema, plugins }, old.toJSON()))
+        if (clean) savedDoc = view.state.doc
+        else if (path() && !readonly()) onUpdate()
         const scroller = view.dom.closest('.editor-scroll')
         requestAnimationFrame(() => {
           if (editor.editor.isDestroyed) return
           if (scroller) scroller.scrollTop = snapshot.scrollTop
           if (snapshot.focused && editorIsEditable()) view.focus()
         })
-        developmentSession.snapshot = undefined
+      } else {
+        // A freshly mounted editor contains a placeholder. Never save it over the open file.
+        const target = path()
+        if (target) {
+          savedDoc = editor.editor.state.doc
+          void runFileAction((handle) => readDocument(handle, target, false), '打开失败')
+        }
       }
     }
-    setEditable(editor, editorIsEditable())
+    setEditable(editor, !busy && editorIsEditable())
+    openPendingEntry()
     if (!import.meta.env.DEV) return
-    if (path() && !readonly() && editor.editor.state.doc !== savedDoc) onUpdate()
 
     const dev = window as Window & {
       __oneboxLoad?: (text: string) => void
@@ -636,6 +854,7 @@ export default function App() {
   }
 
   onCleanup(clearSaveTimer)
+  onCleanup(pauseTitle)
   onCleanup(() => { disposed = true; cancelLoad = true })
 
   const restoreDevelopmentPosition = (document: string) => {
@@ -694,7 +913,10 @@ export default function App() {
     const resume = ({ id }: { id?: string }) => {
       if (id && developmentPreparing !== id) return
       developmentPreparing = undefined
-      if (handle && !disposed) setEditable(handle, !busy && editorIsEditable())
+      if (handle && !disposed) {
+        setEditable(handle, !busy && editorIsEditable())
+        resumeFileActions()
+      }
     }
     const focus = () => { if (desktop) void invoke('focus_window') }
     hot.on('vite:beforeUpdate', capture)
@@ -717,9 +939,10 @@ export default function App() {
       workspace={current} visible={sidebarVisible()} restoring={restoringWorkspace()}
       active={activeFile()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
       pending={pendingOpen()?.entry.path} importTarget={importTarget()}
+      displayName={displayedName} renamed={workspaceRename()}
       onOpen={openWorkspaceEntry} onOpenFile={(folder) => void openFile(folder)} onOpenWorkspace={() => void openWorkspace()}
       onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
-      onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry}
+      onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry} onTrash={trashWorkspaceEntry} onRename={renameEntry}
       onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
       onClose={() => void closeWorkspace()}
     />
@@ -751,9 +974,15 @@ export default function App() {
         </Show>
         <div class="editor-content">
           <div class="editor-document" inert={!!preview()} hidden={!!preview()}>
+            <Show when={path()}>
+              <header class="file-preview-toolbar">
+                <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
+              </header>
+            </Show>
             <EditorShell
               markdown=""
               onReady={onReady}
+              onDispose={onEditorDispose}
               onUpdate={onUpdate}
               onInsertAttachment={desktop ? pickAttachment : undefined}
               onInsertFiles={desktop ? insertFiles : undefined}
@@ -768,10 +997,14 @@ export default function App() {
               } : undefined}
             />
           </div>
-          <Show when={preview()} keyed>
-            {(entry) => <FilePreview root={entry.workspaceRoot} entry={entry}
-              onOpenExternal={(application) => openWorkspaceAttachment(entry, application)}
-              onClose={() => setPreview(undefined)} />}
+          <Show when={preview()}>
+            <FilePreview root={preview()?.workspaceRoot} entry={preview()}
+              titleEdit={preview() && preview()?.accessible !== false ? titleEdit(preview()!) : undefined}
+              onOpenExternal={(application) => {
+                const entry = preview()
+                if (entry) openWorkspaceAttachment(entry, application)
+              }}
+              onClose={() => setPreview(undefined)} />
           </Show>
         </div>
       </div>

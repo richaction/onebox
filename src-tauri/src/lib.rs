@@ -79,12 +79,14 @@ pub fn run() {
             workspace::restore_workspace_root,
             workspace::clear_workspace_root,
             workspace::create_workspace_entry,
+            workspace::trash_workspace_entry,
             workspace::open_workspace_attachment,
             workspace::workspace_file_applications,
             workspace::import_workspace_files,
             workspace::workspace_preview,
             workspace::release_workspace_preview,
             workspace::workspace_entries,
+            workspace::rename_workspace_entry,
             workspace::move_workspace_entry
         ]);
 
