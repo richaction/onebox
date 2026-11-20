@@ -1785,6 +1785,7 @@ img.ProseMirror-selectednode {
 }
 
 .code-frame[data-rich] > pre[hidden],
+.mermaid-panes > pre[hidden],
 .markdown-math > button[hidden] {
   display: none;
 }
@@ -1801,6 +1802,11 @@ img.ProseMirror-selectednode {
   height: clamp(220px, 45vh, 400px);
 }
 
+.rich-preview[data-engine='mermaid'] {
+  background: var(--ob-bg);
+  min-block-size: var(--mermaid-height, 180px);
+}
+
 .rich-preview > svg {
   display: block;
   margin-inline: auto;
@@ -1808,7 +1814,79 @@ img.ProseMirror-selectednode {
   height: auto;
 }
 
+.mermaid-workspace {
+  container-type: inline-size;
+  border-radius: 0 0 var(--ob-code-radius) var(--ob-code-radius);
+  overflow: clip;
+}
+
+.mermaid-tabs {
+  display: none;
+  gap: 0.2rem;
+  padding: 0.24rem 0.55rem;
+  border-block-end: 1px solid var(--ob-table-border);
+}
+
+.mermaid-tabs button[aria-pressed='true'] {
+  background: var(--ob-bg-active);
+}
+
+.mermaid-workspace[data-editing] .mermaid-panes {
+  display: grid;
+  grid-template: minmax(0, 1fr) 1.9rem / minmax(0, 2fr) minmax(0, 3fr);
+  block-size: clamp(16rem, 44dvh, 30rem);
+}
+
+.ProseMirror .mermaid-panes > pre {
+  grid-area: 1 / 1;
+  min-inline-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.mermaid-workspace[data-editing] .rich-preview {
+  grid-area: 1 / 2 / -1;
+  min-inline-size: 0;
+  min-block-size: 0;
+  overscroll-behavior: contain;
+}
+
+.mermaid-diagnostic {
+  grid-area: 2 / 1;
+  overflow: hidden;
+  padding: 0.3rem 0.75rem;
+  color: light-dark(#a4332b, #f6a29a);
+  font: 500 0.75rem/1.4 var(--ob-font-sans);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@container (width < 36rem) {
+  .mermaid-workspace[data-editing] .mermaid-tabs {
+    display: flex;
+  }
+
+  .mermaid-workspace[data-editing] .mermaid-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mermaid-workspace[data-editing] .rich-preview {
+    grid-area: 1 / 1 / -1;
+  }
+
+  .mermaid-workspace[data-editing] .mermaid-diagnostic {
+    z-index: 1;
+    background: var(--ob-bg-code);
+  }
+
+  .mermaid-workspace[data-editing][data-pane='source'] .rich-preview,
+  .mermaid-workspace[data-editing][data-pane='preview'] pre {
+    visibility: hidden;
+  }
+}
+
 .markdown-math {
+  position: relative;
   display: inline-block;
   max-width: 100%;
   vertical-align: baseline;
@@ -1854,7 +1932,9 @@ img.ProseMirror-selectednode {
 
 .markdown-math > math-field {
   display: inline-block;
+  box-sizing: border-box;
   max-inline-size: 100%;
+  overflow: hidden;
   border: 0;
   outline: 0;
   padding: 0 2px;
@@ -1862,6 +1942,7 @@ img.ProseMirror-selectednode {
   background: transparent;
   font-size: 1.21em;
   vertical-align: baseline;
+  cursor: text;
   --caret-color: var(--ob-text);
   --selection-color: var(--ob-text);
   --selection-background-color: var(--ob-selection);
@@ -1872,9 +1953,34 @@ img.ProseMirror-selectednode {
   margin-block: 0.826em;
 }
 
+.markdown-math:not([data-display]) > math-field {
+  vertical-align: -0.42em;
+}
+
+.markdown-math[data-math-edit='visual'] > math-field::part(container) {
+  block-size: 100%;
+}
+
+.markdown-math[data-math-edit='source'] > textarea {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  box-sizing: border-box;
+  inline-size: min(32ch, 70vw);
+  max-inline-size: none;
+  background: var(--ob-bg);
+}
+
 .markdown-math > math-field::part(container) {
   min-block-size: 0;
   padding: 0;
+}
+
+.markdown-math > math-field::part(content) {
+  box-sizing: border-box;
+  min-inline-size: 0;
+  padding-inline: 0;
 }
 
 .markdown-math > math-field::part(menu-toggle),

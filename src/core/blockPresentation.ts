@@ -3,6 +3,7 @@ import { codeLanguage, codeLanguageIds } from './codeLanguages'
 import type { createCodeHighlight } from './codeHighlight'
 import { richLanguage, watchRichBlock } from './richBlock'
 import { continueAfterBlock } from './editorCaret'
+import { mountMermaidEditor } from './mermaidEditor'
 import type { PresentBlock } from './viewport/blockNodeView'
 
 const selectableLanguages = [...codeLanguageIds, 'html', 'c']
@@ -40,6 +41,7 @@ export function keepTableCaretVisible(view: EditorView) {
 
 export function createBlockPresentation(highlight: ReturnType<typeof createCodeHighlight>) {
   const languageSelects = new Set<HTMLSelectElement>()
+  const mermaidEditors = new Set<ReturnType<typeof mountMermaidEditor>>()
   const present: PresentBlock = (node, rendered, view, getPos) => {
     const { dom, contentDOM } = rendered
     const document = dom.ownerDocument
@@ -162,6 +164,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     }
     frame.append(toolbar)
     let richPreview: ReturnType<typeof watchRichBlock> | undefined
+    let mermaidEditor: ReturnType<typeof mountMermaidEditor> | undefined
     if (rich) {
       frame.dataset.rich = rich
       const preview = document.createElement('div')
@@ -171,21 +174,31 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       preview.contentEditable = 'false'
       preview.setAttribute('aria-label', rich === 'mermaid' ? 'Mermaid 图' : 'ECharts 图表')
       preview.textContent = '正在载入预览…'
-      frame.append(preview)
-      richPreview = watchRichBlock(preview, rich, node.textContent)
-
-      const source = document.createElement('button')
-      source.type = 'button'
-      source.textContent = '源码'
-      source.setAttribute('aria-expanded', 'false')
-      dom.hidden = true
-      source.onclick = () => {
-        dom.hidden = !dom.hidden
-        source.setAttribute('aria-expanded', String(!dom.hidden))
+      if (rich === 'mermaid') {
+        mermaidEditor = mountMermaidEditor(frame, dom, preview, view, getPos)
+        mermaidEditors.add(mermaidEditor)
+        actions.prepend(mermaidEditor.button)
+        richPreview = watchRichBlock(preview, rich, node.textContent, {
+          visibilityTarget: mermaidEditor.workspace,
+          report: mermaidEditor.report,
+        })
+      } else {
+        frame.append(preview)
+        richPreview = watchRichBlock(preview, rich, node.textContent)
+        const source = document.createElement('button')
+        source.type = 'button'
+        source.textContent = '源码'
+        source.setAttribute('aria-expanded', 'false')
+        dom.hidden = true
+        source.onclick = () => {
+          dom.hidden = !dom.hidden
+          source.setAttribute('aria-expanded', String(!dom.hidden))
+        }
+        actions.prepend(source)
       }
-      actions.prepend(source)
     }
-    frame.append(dom, continueButton)
+    if (!mermaidEditor) frame.append(dom)
+    frame.append(continueButton)
 
     let current = node
     let copyStatus: ReturnType<typeof setTimeout> | undefined
@@ -232,10 +245,11 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
         richPreview?.update(next.textContent)
       },
       stopEvent: (event) => event.target === continueButton || toolbar.contains(event.target as Node | null)
-        || (event.target as Element)?.closest?.('.rich-preview') != null,
+        || (event.target as Element)?.closest?.('.rich-preview') != null || mermaidEditor?.stopEvent(event) === true,
       destroy() {
         disposed = true
         languageSelects.delete(select)
+        if (mermaidEditor) mermaidEditors.delete(mermaidEditor)
         clearTimeout(copyStatus)
         syntax?.destroy()
         richPreview?.destroy()
@@ -246,6 +260,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     present,
     setEditable(editable: boolean) {
       for (const select of languageSelects) select.disabled = !editable
+      for (const editor of mermaidEditors) editor.refreshButton()
     },
   }
 }

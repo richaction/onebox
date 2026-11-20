@@ -16,7 +16,7 @@ export default defineConfig({
   worker: { format: 'es' },
   optimizeDeps: {
     entries: ['index.html'],
-    include: ['lowlight', 'mathlive', ...codeLanguageIds.map((id) => `highlight.js/lib/languages/${id}`)],
+    include: ['lowlight', 'mathlive', 'yaml', ...codeLanguageIds.map((id) => `highlight.js/lib/languages/${id}`)],
   },
   test: { environment: 'happy-dom', globals: false, include: ['tests/**/*.test.ts'] },
 })

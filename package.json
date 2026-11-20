@@ -35,7 +35,8 @@
     "mathlive": "0.111.4",
     "mermaid": "12.3.0",
     "prosemirror-markdown": "1.13.9",
-    "solid-js": "1.9.19"
+    "solid-js": "1.9.19",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",

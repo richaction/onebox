@@ -45,33 +45,21 @@ let nextDiagram = 0
 let mermaidQueue = Promise.resolve()
 let mermaidDark: boolean | undefined
 const diagramCache = new Map<string, { svg: string; id: string }>()
+// Keep ordinary flowchart and state nodes in the same palette as Redux sequence participants.
+const reduxPalette = [
+  ['#E879F9', '#FDF4FF'], ['#2DD4BF', '#F0FDFA'], ['#FB923C', '#FFF7ED'], ['#22D3EE', '#ECFEFF'],
+]
+const flowchartNode = '.node[id*="-flowchart-"][data-look="neo"]'
+const stateNode = '.node.statediagram-state[data-look="neo"]'
 
 async function loadMermaid() {
   const [{ default: mermaid }, { default: DOMPurify }] = await Promise.all([import('mermaid'), import('dompurify')])
   return { mermaid, DOMPurify }
 }
 
-function mermaidTheme(dark: boolean) {
-  const surface = dark ? '#25282d' : '#f6f7f9'
-  const border = dark ? '#6e7a8d' : '#78869a'
-  const label = dark ? '#e6eaf0' : '#252c39'
-  const accent = dark ? '#273950' : '#eaf1fa'
-  return {
-    darkMode: dark, fontFamily: 'system-ui, sans-serif', fontSize: '14px',
-    background: dark ? '#191919' : '#ffffff',
-    primaryColor: surface, primaryBorderColor: border, primaryTextColor: label,
-    secondaryColor: accent, secondaryBorderColor: border, secondaryTextColor: label,
-    tertiaryColor: surface, tertiaryBorderColor: border, tertiaryTextColor: label,
-    lineColor: border, textColor: label, edgeLabelBackground: surface,
-    actorBkg: accent, actorBorder: border, actorTextColor: label,
-    signalColor: border, signalTextColor: label,
-    clusterBkg: surface, clusterBorder: border,
-  }
-}
-
-async function diagram(source: string) {
+async function diagram(source: string, isCurrent: () => boolean) {
   if (source.length > 32_000) throw new Error('Mermaid 源码超过 32 KB')
-  if (/^\s*---|%%\s*\{/u.test(source)) throw new Error('Mermaid 预览不支持覆盖渲染配置')
+  if (/%%\s*\{/u.test(source)) throw new Error('请用代码块开头的 YAML 指定 Mermaid 标题或布局')
   if (/@import|url\s*\(/iu.test(source)) throw new Error('Mermaid 预览只支持本地绘制')
   const id = `onebox-diagram-${++nextDiagram}`
   const theme = document.documentElement.dataset.theme
@@ -80,25 +68,36 @@ async function diagram(source: string) {
   const cached = diagramCache.get(key)
   if (cached) return cached.svg.replaceAll(cached.id, id)
   const { mermaid, DOMPurify } = await (mermaidEngine ??= loadMermaid())
+  const prepared = /^---[ \t]*(?:\r?\n|$)/u.test(source)
+    ? (await import('./mermaidSource')).prepareMermaidSource(source) : source
+  if (!isCurrent()) return
   // Pass an attached scratch container so Mermaid removes its error output with the container.
   const scratch = document.createElement('div')
   scratch.style.cssText = 'position:fixed;inset-inline-start:-10000px;visibility:hidden'
   document.body.append(scratch)
   try {
     const task = mermaidQueue.then(() => {
+      if (!isCurrent()) return
       if (mermaidDark !== dark) {
         mermaid.initialize({
           startOnLoad: false, securityLevel: 'strict', htmlLabels: false, suppressErrorRendering: true,
-          maxTextSize: 32_000, maxEdges: 400, theme: 'base', look: 'classic',
-          flowchart: { curve: 'rounded', nodeSpacing: 34, rankSpacing: 48 },
-          themeVariables: mermaidTheme(dark),
+          maxTextSize: 32_000, maxEdges: 400,
+          theme: dark ? 'redux-dark-color' : 'redux-color', look: 'neo',
+          themeCSS: reduxPalette.map(([stroke, lightFill], index) => {
+            const fill = dark ? `color-mix(in srgb, ${stroke} 16%, #111113)` : lightFill
+            const slot = `:nth-of-type(4n+${index + 1})`
+            return `.nodes > ${flowchartNode}${slot} > .label-container,
+              .nodes > ${stateNode}${slot} rect:is(.basic, .title-state) { fill: ${fill}; stroke: ${stroke}; }`
+          }).join('\n') + `\n.nodes > ${flowchartNode} > rect.label-container:is(:not([rx]), [rx="0"]) { rx: 5px; ry: 5px; }`,
         })
         mermaidDark = dark
       }
-      return mermaid.render(id, source, scratch)
+      return mermaid.render(id, prepared, scratch)
     })
     mermaidQueue = task.then(() => {}, () => {})
-    const { svg } = await task
+    const result = await task
+    if (!result || !isCurrent()) return
+    const { svg } = result
     const safe = DOMPurify.sanitize(svg, {
       USE_PROFILES: { svg: true, svgFilters: true },
       FORBID_TAGS: ['foreignObject', 'image', 'a'],
@@ -114,12 +113,16 @@ async function diagram(source: string) {
   }
 }
 
-export function watchRichBlock(target: HTMLElement, language: RichLanguage, initial: string) {
+export function watchRichBlock(target: HTMLElement, language: RichLanguage, initial: string, mermaid?: {
+  visibilityTarget: HTMLElement
+  report: (message: string) => void
+}) {
   let source = initial
   let visible = false
   let revision = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let disposeChart: (() => void) | undefined
+  let lastDiagram: string | undefined
   const stop = () => {
     revision++
     clearTimeout(timer)
@@ -129,19 +132,39 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
     disposeChart = undefined
     target.replaceChildren()
   }
-  const render = async (expected: number) => {
-    const value = source.trim()
-    if (!value) {
-      clear()
+  const showDiagram = (svg?: string) => {
+    target.style.removeProperty('--mermaid-height')
+    if (!svg) {
       target.textContent = '暂无预览'
+    } else if (svg !== lastDiagram || !target.firstElementChild) {
+      const { scrollTop, scrollLeft } = target
+      target.innerHTML = svg
+      target.scrollTop = scrollTop
+      target.scrollLeft = scrollLeft
+    }
+    lastDiagram = svg
+  }
+  const render = async (expected: number) => {
+    const input = source
+    const value = input.trim()
+    const isCurrent = () => expected === revision
+    if (!value) {
+      if (mermaid && lastDiagram) {
+        showDiagram(lastDiagram)
+        mermaid.report('请输入 Mermaid 源码 · 保留上次预览')
+        return
+      }
+      clear()
+      showDiagram()
+      mermaid?.report('')
       return
     }
     try {
       if (language === 'mermaid') {
-        const svg = await diagram(value)
-        if (expected === revision) {
-          target.style.minBlockSize = ''
-          target.innerHTML = svg
+        const svg = await diagram(value, isCurrent)
+        if (svg && isCurrent()) {
+          showDiagram(svg)
+          mermaid?.report('')
         }
       } else {
         if (value.length > 4_000_000) throw new Error('ECharts 数据超过 4 MB')
@@ -152,7 +175,15 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
         disposeChart = drawChart(target, option, target.id)
       }
     } catch (error) {
-      if (expected !== revision) return
+      if (!isCurrent()) return
+      if (mermaid) {
+        const { mermaidErrorMessage } = await import('./mermaidSource')
+        if (!isCurrent()) return
+        showDiagram(lastDiagram)
+        const message = mermaidErrorMessage(error, input)
+        mermaid.report(lastDiagram ? `${message} · 保留上次预览` : message)
+        return
+      }
       clear()
       target.textContent = '预览失败 · ' + (error instanceof Error ? error.message : String(error))
     }
@@ -167,20 +198,20 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
   const observer = new IntersectionObserver(([entry]) => {
     if (visible === entry.isIntersecting) return
     visible = entry.isIntersecting
-    if (!visible) {
+    if (!visible && !mermaid?.visibilityTarget.hasAttribute('data-editing')) {
       if (language === 'mermaid' && target.firstElementChild) {
-        target.style.minBlockSize = `${target.offsetHeight}px`
+        target.style.setProperty('--mermaid-height', `${target.offsetHeight}px`)
       }
       clear()
     }
     schedule(0)
   }, { rootMargin: '160px' })
-  observer.observe(target)
+  observer.observe(mermaid?.visibilityTarget ?? target)
   return {
     update(next: string) {
       if (source === next) return
       source = next
-      schedule(350)
+      schedule(mermaid ? 300 : 350)
     },
     destroy() {
       observer.disconnect()

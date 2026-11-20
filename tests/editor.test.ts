@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blockEditCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
 import { createEditor, type EditorHandle } from '../src/core/editor'
+import { visibilityKey } from '../src/core/viewport/visibility'
 
 const SAMPLE = '# 标题\n\n段落 **粗体**\n\n- 甲\n- 乙\n'
 let scrollRoot: HTMLElement | undefined
@@ -98,6 +99,22 @@ describe('createEditor', () => {
     expect(view.state.selection.$head.parent.textContent).toBe('')
   })
 
+  it('keeps the inline formula preview mounted while editing its LaTeX and committing a change', () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('before $r^2$ after')
+    const formula = element.querySelector<HTMLElement>('.markdown-math')!
+    const preview = formula.querySelector('button')!
+    preview.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true }))
+    const source = formula.querySelector('textarea')!
+    expect(formula.dataset.mathEdit).toBe('source')
+    expect(preview.hidden).toBe(false)
+    source.value = 'r^3'
+    source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(element.querySelector('.markdown-math > button')).toBe(preview)
+    expect(formula.dataset.mathEdit).toBeUndefined()
+    expect(handle.toMarkdown()).toBe('before $r^3$ after')
+  })
+
   it('opens the line below a code block and reuses a following paragraph across viewport groups', () => {
     const { handle, element, onUpdate } = mount()
     handle.loadBlocks([{ type: 'codeBlock', content: [{ type: 'text', text: 'code' }] }], true)
@@ -129,6 +146,44 @@ describe('createEditor', () => {
     expect(table!.querySelector('th')?.getAttribute('scope')).toBe('col')
     expect(table!.querySelector<HTMLElement>('td:last-child')?.style.textAlign).toBe('right')
     expect(handle.editor.getHTML()).not.toContain('table-scroll')
+  })
+
+  it('edits Mermaid in its existing Markdown fence and remembers the caret when switching panes', () => {
+    const { handle, element, onUpdate } = mount()
+    handle.loadMarkdown('# Other\n\n```mermaid\nflowchart LR\nA --> B\n```')
+    const { editor } = handle
+    editor.view.dispatch(editor.state.tr.setMeta(visibilityKey, {
+      visible: new Set([0, editor.state.doc.firstChild!.nodeSize]),
+    }))
+    const frame = element.querySelector<HTMLElement>('[data-rich="mermaid"]')!
+    const edit = frame.querySelector<HTMLButtonElement>('.code-toolbar button')!
+    const source = frame.querySelector<HTMLPreElement>('pre')!
+    const preview = frame.querySelector('.rich-preview')!
+    const [sourceTab, previewTab] = frame.querySelectorAll<HTMLButtonElement>('.mermaid-tabs button')
+    expect(edit.textContent).toBe('编辑')
+    expect(source.hidden).toBe(true)
+
+    edit.click()
+    expect(edit.textContent).toBe('完成')
+    expect(source.hidden).toBe(false)
+    expect(handle.editor.state.selection.$head.parent.type.name).toBe('codeBlock')
+    expect(handle.editor.state.selection.$head.parentOffset).toBe(0)
+    expect(preview.parentElement).toBe(source.parentElement)
+
+    editor.commands.setTextSelection(editor.state.selection.head + 'flowchart LR\nA --> B'.length)
+    previewTab.click()
+    expect(previewTab.getAttribute('aria-pressed')).toBe('true')
+    editor.commands.setTextSelection(1)
+    sourceTab.click()
+    expect(editor.state.selection.$head.parentOffset).toBe('flowchart LR\nA --> B'.length)
+    expect(onUpdate).not.toHaveBeenCalled()
+
+    editor.view.dispatch(editor.state.tr.insertText('[Ready]'))
+    edit.click()
+    expect(frame.querySelector('.rich-preview')).toBe(preview)
+    expect(source.hidden).toBe(true)
+    expect(handle.toMarkdown()).toBe('# Other\n\n```mermaid\nflowchart LR\nA --> B[Ready]\n```')
+    expect(onUpdate).toHaveBeenCalledOnce()
   })
 
   it('changes the fence language through the dropdown and preserves its contents and metadata', () => {

@@ -1,28 +1,16 @@
 import { InputRule, Node } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
 import type { MathfieldElement } from 'mathlive'
+import { bindMathPointer } from './mathPointer'
 import { mathSource } from './mathMarkdown'
 
 let visual: typeof import('./mathliveEngine') | undefined
 let preparing: Promise<typeof import('./mathliveEngine')> | undefined
-let warmScheduled = false
-
 function prepareVisualMath() {
   return preparing ??= import('./mathliveEngine').then((engine) => (visual = engine), (error: unknown) => {
     preparing = undefined
     throw error
   })
-}
-
-function preloadVisualMath() {
-  if (preparing || warmScheduled) return
-  warmScheduled = true
-  const load = () => {
-    warmScheduled = false
-    void prepareVisualMath().catch(() => {})
-  }
-  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(load, { timeout: 500 })
-  else setTimeout(load, 100)
 }
 
 const richCommands = /\\(?:href|url|includegraphics|html\w*|class|cssId|style)\b/u
@@ -70,52 +58,81 @@ export const MarkdownMath = Node.create({
       dom.append(preview)
       let disposed = false
       let rendering = false
-      const canEditVisually = () => editor.isEditable && node.attrs.latex.length < 4_000
-        && !richCommands.test(node.attrs.latex)
-      const render = async () => {
-        if (rendering || disposed || node.attrs.latex.length > 20_000) return
+      let typesetter: typeof import('./katexEngine').default | undefined
+      let field: MathfieldElement | undefined
+      let readValue: string | undefined
+      let active: MathfieldElement | HTMLTextAreaElement | undefined
+
+      const canRenderVisually = () => node.attrs.latex.length < 4_000 && !richCommands.test(node.attrs.latex)
+
+      function paint() {
+        if (typesetter && node.attrs.latex.length <= 20_000) {
+          try {
+            typesetter.render(node.attrs.latex, preview, {
+              displayMode: node.attrs.display, throwOnError: false, trust: false, maxExpand: 100, maxSize: 25,
+            })
+            return
+          } catch { /* Show the original source if typesetting fails. */ }
+        }
+        preview.textContent = mathSource(node.attrs.latex, node.attrs.display)
+      }
+
+      async function render() {
+        if (rendering || disposed) return
         rendering = true
-        observer?.disconnect()
         try {
-          const { default: katex } = await import('./katexEngine')
-          if (disposed) return
-          katex.render(node.attrs.latex, preview, {
-            displayMode: node.attrs.display, throwOnError: false, trust: false, maxExpand: 100, maxSize: 25,
-          })
-          if (canEditVisually()) preloadVisualMath()
-        } catch {
-          preview.title = '公式预览加载失败，可点击编辑源码'
+          if (canRenderVisually()) {
+            try {
+              const engine = visual ?? await prepareVisualMath()
+              if (disposed) return
+              if (!active && installField(engine)) return
+            } catch { /* KaTeX also handles formulas unsupported in the editor. */ }
+          }
+          if (node.attrs.latex.length <= 20_000) {
+            const { default: katex } = await import('./katexEngine')
+            if (!disposed) {
+              typesetter = katex
+              paint()
+            }
+          }
+        } finally {
+          rendering = false
         }
       }
+
       const observer = typeof IntersectionObserver === 'undefined' ? undefined
         : new IntersectionObserver((entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) void render()
-        })
+          if (!entries.some((entry) => entry.isIntersecting)) return
+          observer?.disconnect()
+          void render().catch(() => {})
+        }, { rootMargin: '100px' })
       if (observer) observer.observe(dom)
-      else void render()
+      else void render().catch(() => {})
 
-      let active: MathfieldElement | HTMLTextAreaElement | undefined
-      let opening = false
-
-      const warm = () => {
-        if (canEditVisually()) {
-          void prepareVisualMath().catch(() => {})
-        }
-      }
-      preview.onpointerenter = warm
-      preview.onfocus = warm
-      preview.title = '点击编辑公式 · Option / Alt + 点击编辑 LaTeX'
-
-      function finish(save: boolean, latex: string, direction?: 'backward' | 'forward') {
+      function stopEditing() {
         const input = active
         active = undefined
-        input?.remove()
-        preview.hidden = false
+        if (input && input === field) {
+          input.readOnly = true
+          input.style.removeProperty('inline-size')
+          input.style.removeProperty('block-size')
+        } else {
+          input?.remove()
+        }
+        delete dom.dataset.mathEdit
+        preview.hidden = !!field
+      }
+
+      function finish(save: boolean, latex: string, direction?: 'backward' | 'forward') {
         const pos = getPos()
-        if (disposed || !editor.isEditable || pos === undefined) return
+        const editable = !disposed && editor.isEditable && pos !== undefined
+        const changed = editable && save && latex !== node.attrs.latex
+        if (!changed && active === field && field && field.value !== readValue) field.setValue(node.attrs.latex)
+        stopEditing()
+        if (!editable) return
         const { view } = editor
         const tr = view.state.tr
-        if (save && latex !== node.attrs.latex) {
+        if (changed) {
           if (latex.trim()) tr.setNodeAttribute(pos, 'latex', latex)
           else tr.delete(pos, pos + node.nodeSize)
         }
@@ -134,8 +151,10 @@ export const MarkdownMath = Node.create({
         input.setAttribute('aria-label', 'LaTeX 源码')
         input.value = node.attrs.latex
         active = input
-        preview.hidden = true
+        dom.dataset.mathEdit = 'source'
         dom.append(input)
+        const overflow = input.getBoundingClientRect().right - document.documentElement.clientWidth + 12
+        if (overflow > 0) input.style.insetInlineStart = `-${Math.ceil(overflow)}px`
         input.onblur = () => { if (active === input) finish(true, input.value) }
         input.onkeydown = (event) => {
           if (event.isComposing) return
@@ -149,105 +168,111 @@ export const MarkdownMath = Node.create({
         input.setSelectionRange(input.value.length, input.value.length)
       }
 
-      function editVisual(engine: typeof import('./mathliveEngine'), event: MouseEvent) {
+      function pinFormula() {
+        const pos = getPos()
+        if (!editor.isEditable || pos === undefined) return false
+        const { view } = editor
+        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)))
+        return !disposed
+      }
+
+      function installField(engine: typeof import('./mathliveEngine')) {
+        if (field) return field
         const input = engine.createMathfield(node.attrs.display)
-        active = input
-        preview.hidden = true
-        dom.append(input)
-        input.setValue(node.attrs.latex)
-        if (input.errors.length) {
-          active = undefined
-          input.remove()
-          editSource()
-          return
+        input.readOnly = true
+        // The mathfield can scroll its contents to the caret, but it must not
+        // scroll the document as a side effect of editing.
+        input.onScrollIntoView = () => {}
+
+        const currentLatex = () => input.value === readValue ? node.attrs.latex : input.value
+        const activate = (source: boolean) => {
+          if (active && active !== input) return false
+          if (!editor.isEditable) return false
+          if (source) {
+            if (active === input) finish(true, currentLatex())
+            if (!disposed && pinFormula()) editSource()
+            return false
+          }
+          if (active === input) return true
+          if (!pinFormula()) return false
+          const { width, height } = input.getBoundingClientRect()
+          input.style.inlineSize = `${width}px`
+          input.style.blockSize = `${height}px`
+          active = input
+          dom.dataset.mathEdit = 'visual'
+          input.readOnly = false
+          input.shadowRoot?.querySelector<HTMLElement>('[part="keyboard-sink"]')?.focus({ preventScroll: true })
+          return true
         }
 
-        const initialValue = input.value
-        const latex = () => input.value === initialValue ? node.attrs.latex : input.value
-        input.addEventListener('blur', () => { if (active === input) finish(true, latex()) })
+        bindMathPointer(input, activate)
+        input.addEventListener('blur', () => { if (active === input) finish(true, currentLatex()) })
         input.addEventListener('keydown', (event) => {
-          if (event.isComposing || (event.key !== 'Escape' && event.key !== 'Enter')) return
+          if (event.isComposing) return
+          if (active !== input) {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            event.stopPropagation()
+            if (activate(event.altKey)) input.position = input.lastOffset
+            return
+          }
+          if (event.key !== 'Escape' && event.key !== 'Enter') return
           event.preventDefault()
           event.stopPropagation()
-          finish(event.key === 'Enter', latex(), 'forward')
+          finish(event.key === 'Enter', currentLatex(), 'forward')
         }, true)
         input.addEventListener('move-out', (event) => {
           const { direction } = event.detail
-          if (direction !== 'forward' && direction !== 'backward') return
+          if (active !== input || (direction !== 'forward' && direction !== 'backward')) return
           event.preventDefault()
-          finish(true, latex(), direction)
+          finish(true, currentLatex(), direction)
         })
 
-        let press: { id: number; x: number; y: number; dragged: boolean } | undefined
-        input.addEventListener('pointerdown', (event) => {
-          if (event.isPrimary && event.button === 0 && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
-            press = { id: event.pointerId, x: event.clientX, y: event.clientY, dragged: false }
-          } else {
-            press = undefined
-          }
-        }, true)
-        const trackDrag = (event: PointerEvent) => {
-          if (!press || press.id !== event.pointerId) return
-          const threshold = event.pointerType === 'touch' ? 20 : 5
-          press.dragged ||= Math.abs(press.x - event.clientX) >= threshold || Math.abs(press.y - event.clientY) >= threshold
+        input.setValue(node.attrs.latex)
+        dom.append(input)
+        if (input.errors.length) {
+          input.remove()
+          return undefined
         }
-        input.addEventListener('pointermove', trackDrag, true)
-        input.addEventListener('pointerup', (event) => {
-          if (!press || press.id !== event.pointerId) return
-          trackDrag(event)
-          const dragged = press.dragged
-          press = undefined
-          // MathLive groups nearby taps. Collapse that selection unless the user dragged or held Shift.
-          if (!dragged && !event.shiftKey && !input.selectionIsCollapsed) {
-            const offset = input.getOffsetFromPoint(event.clientX, event.clientY)
-            input.position = offset < 0 ? input.position : offset
-          }
-        }, true)
-        input.addEventListener('pointercancel', () => { press = undefined }, true)
-
-        input.focus()
-        if (event.detail) {
-          const offset = input.getOffsetFromPoint(event.clientX, event.clientY)
-          input.position = offset < 0 ? input.lastOffset : offset
-        } else {
-          input.position = input.lastOffset
-        }
+        field = input
+        readValue = input.value
+        preview.hidden = true
+        return field
       }
 
       preview.onmousedown = (event) => {
-        // Keep the native editor selection until the math field is ready to take focus.
         if (event.button === 0 && editor.isEditable) event.preventDefault()
       }
-      preview.onclick = async (event) => {
-        if (!editor.isEditable || active || opening) return
-        const pos = getPos()
-        if (pos === undefined) return
-        const { view } = editor
-        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)))
-        if (event.altKey || !canEditVisually()) {
-          editSource()
-          return
-        }
-        opening = true
-        const previouslyFocused = document.activeElement
-        const canFocus = () => !disposed && editor.isEditable && document.activeElement === previouslyFocused
-          && view.state.selection.empty && view.state.selection.head === getPos()
-        try {
-          const engine = visual ?? await prepareVisualMath()
-          if (canFocus()) editVisual(engine, event)
-        } catch {
-          if (canFocus()) {
-            dom.querySelector('math-field')?.remove()
-            editSource()
-          }
-        } finally {
-          opening = false
-        }
+      preview.onclick = () => {
+        if (active || !pinFormula()) return
+        editSource()
       }
       return {
         dom,
         stopEvent: () => true,
         ignoreMutation: () => true,
+        update(next) {
+          if (next.type !== node.type || next.attrs.display !== node.attrs.display) return false
+          if (next.attrs.latex === node.attrs.latex) {
+            node = next
+            return true
+          }
+          if (active) return false
+          node = next
+          if (field && canRenderVisually()) {
+            if (field.value !== node.attrs.latex) field.setValue(node.attrs.latex)
+            if (!field.errors.length) {
+              readValue = field.value
+              return true
+            }
+          }
+          field?.remove()
+          field = undefined
+          preview.hidden = false
+          paint()
+          if (!typesetter) void render().catch(() => {})
+          return true
+        },
         destroy() {
           disposed = true
           observer?.disconnect()
