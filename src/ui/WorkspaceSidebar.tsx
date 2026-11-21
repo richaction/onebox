@@ -106,7 +106,6 @@ export default function WorkspaceSidebar(props: {
   restoring: boolean
   active: string | null
   pending?: string
-  readonly: boolean
   reveal?: string
   revision: number
   importTarget?: string
@@ -120,8 +119,7 @@ export default function WorkspaceSidebar(props: {
   displayName?: (entry: WorkspaceEntry) => string
   renamed?: { source: string; destination: string; name: string }
   onMove: (entry: WorkspaceEntry, target: string) => Promise<void>
-  onCopy: () => void
-  onMoveDocument: () => void
+  onPaste: (entry: WorkspaceEntry, target: string, cut: boolean) => Promise<void>
   onClose: () => void
 }) {
   const root = props.workspace?.root ?? ''
@@ -138,12 +136,12 @@ export default function WorkspaceSidebar(props: {
   })())
   const [moving, setMoving] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const [moveEntry, setMoveEntry] = createSignal<WorkspaceEntry>()
+  const [clipboard, setClipboard] = createSignal<{ entry: WorkspaceEntry; parent: string; cut: boolean }>()
+  const [pasting, setPasting] = createSignal(false)
   const [context, setContext] = createSignal<SidebarContext>()
   const [creation, setCreation] = createSignal<Creation>()
   const [renaming, setRenaming] = createSignal<string>()
   const [trashEntry, setTrashEntry] = createSignal<WorkspaceEntry>()
-  const [targetFolder, setTargetFolder] = createSignal(root)
   let tree!: HTMLElement
   let disposed = false
   onCleanup(() => { disposed = true })
@@ -177,6 +175,7 @@ export default function WorkspaceSidebar(props: {
 
   createEffect(on(() => props.renamed, (rename) => {
     if (!rename) return
+    discardClipboard(rename.source)
     const parent = ancestors(root, rename.source).at(-1) ?? root
     const entries = directories[parent]?.entries
     if (!entries?.some((entry) => entry.path === rename.source)) return
@@ -257,13 +256,6 @@ export default function WorkspaceSidebar(props: {
     setCreation({ folder, directory, trigger, after })
   }
 
-  const beginMove = (entry: WorkspaceEntry) => {
-    if (moving()) return
-    setError(undefined)
-    setTargetFolder(root)
-    setMoveEntry(entry)
-  }
-
   const closeContext = (restoreFocus: boolean) => {
     const trigger = context()?.trigger
     setContext(undefined)
@@ -274,7 +266,7 @@ export default function WorkspaceSidebar(props: {
   const showContext = (event: MouseEvent | KeyboardEvent, entry?: WorkspaceEntry) => {
     event.preventDefault()
     event.stopPropagation()
-    if (moving() || props.restoring) return
+    if (moving() || pasting() || props.restoring) return
     const target = event.target as HTMLElement
     const trigger = target.closest('button') ?? (event.currentTarget as HTMLElement)
     const bounds = trigger.getBoundingClientRect()
@@ -295,14 +287,46 @@ export default function WorkspaceSidebar(props: {
     }
   }
 
+  const paste = async (item: NonNullable<ReturnType<typeof clipboard>>, folder: string) => {
+    setPasting(true)
+    setError(undefined)
+    try {
+      await props.onPaste(item.entry, folder, item.cut && item.parent !== folder)
+      if (item.cut && clipboard() === item) setClipboard(undefined)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setPasting(false)
+    }
+  }
+
+  const clipboardShortcut = (event: KeyboardEvent, entry?: WorkspaceEntry, parent = root) => {
+    if (!root || !props.visible || event.defaultPrevented || event.isComposing
+      || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+    const key = event.key.toLowerCase()
+    if (key !== 'c' && key !== 'x' && key !== 'v') return
+    const target = event.target as HTMLElement
+    if (target.closest('input, textarea, select, [contenteditable], dialog, [role="menu"]')) return
+    if (key === 'v') {
+      const item = clipboard()
+      if (!item) return
+      event.preventDefault()
+      if (!event.repeat && !pasting() && !moving() && entry?.accessible !== false) {
+        void paste(item, entry?.directory ? entry.path : parent)
+      }
+    } else if (entry && !entry.directory && entry.accessible !== false) {
+      event.preventDefault()
+      if (!event.repeat) {
+        setError(undefined)
+        setClipboard({ entry: { ...entry }, parent, cut: key === 'x' })
+      }
+    }
+  }
+
   const actionsFor = ({ entry, trigger }: SidebarContext) => {
     const actions: SidebarAction[] = []
     const after = entry && !entry.directory ? entry.path : undefined
     const folder = entry?.directory ? entry.path : after ? ancestors(root, after).at(-1) ?? root : root
-    if (entry && !entry.directory && entry.accessible !== false) {
-      const label = entry.markdown ? '打开此文档' : '预览'
-      actions.push({ label, run: () => props.onOpen(entry) })
-    }
     if (folder) {
       actions.push(
         { label: '新建文件…', run: () => beginCreation(folder, false, trigger, after) },
@@ -312,16 +336,8 @@ export default function WorkspaceSidebar(props: {
     if (entry && entry.accessible !== false) {
       actions.push(
         { label: '重命名…', run: () => setRenaming(entry.path) },
-        { label: '移动到…', run: () => beginMove(entry) },
+        { label: '删除…', run: () => setTrashEntry(entry) },
       )
-    }
-    const activeFileActions = props.active && !props.readonly
-    if (activeFileActions && ((!entry && (!root || !childOf(props.active!, root))) || entry?.path === props.active)) {
-      if (!entry) actions.push({ label: '移动当前文档…', run: props.onMoveDocument })
-      actions.push({ label: entry ? '复制到…' : '复制当前文档…', run: props.onCopy })
-    }
-    if (entry && entry.accessible !== false) {
-      actions.push({ label: '删除…', run: () => setTrashEntry(entry) })
     }
     const copyPath = entry?.path ?? (root || props.active)
     if (copyPath) actions.push({ label: '复制路径', run: async () => {
@@ -344,7 +360,12 @@ export default function WorkspaceSidebar(props: {
     return actions
   }
 
+  function discardClipboard(path: string) {
+    setClipboard((current) => current && childOf(current.entry.path, path, true) ? undefined : current)
+  }
+
   const forgetFolder = (entry: WorkspaceEntry) => {
+    discardClipboard(entry.path)
     if (!entry.directory) return
     setExpanded((open) => new Set([...open].filter((path) => !childOf(path, entry.path, true))))
     for (const path of Object.keys(directories)) {
@@ -364,13 +385,12 @@ export default function WorkspaceSidebar(props: {
   }
 
   const move = async (entry: WorkspaceEntry, target: string) => {
-    if (moving() || !canMoveTo(entry, target)) return false
+    if (moving() || pasting() || !canMoveTo(entry, target)) return false
     setMoving(true)
     setError(undefined)
     try {
       await props.onMove(entry, target)
       forgetFolder(entry)
-      setMoveEntry(undefined)
       return true
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
@@ -416,7 +436,7 @@ export default function WorkspaceSidebar(props: {
       event.preventDefault()
       return
     }
-    if (moving() || event.button !== 0 || event.pointerType === 'touch') return
+    if (moving() || pasting() || event.button !== 0 || event.pointerType === 'touch') return
     if (entry.accessible === false) return
     if (renaming() === entry.path || (event.target as Element).closest('.workspace-row-action')) return
     press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, row: event.currentTarget as HTMLElement, entry }
@@ -562,12 +582,16 @@ export default function WorkspaceSidebar(props: {
                 'workspace-drop-target': props.importTarget === entry.path || (dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'inside'),
                 'workspace-dragged': dragged()?.path === entry.path,
                 'workspace-row-menu-open': context()?.entry?.path === entry.path,
+                'workspace-row-cut': clipboard()?.cut === true && clipboard()?.entry.path === entry.path,
               }}
               data-workspace-folder={entry.directory ? entry.path : undefined}
               data-workspace-entry={entry.path} data-workspace-parent={rows.path}
               onPointerDown={(event) => pressRow(event, entry)}
               onContextMenu={(event) => showContext(event, entry)}
-              onKeyDown={(event) => contextShortcut(event, entry)}
+              onKeyDown={(event) => {
+                clipboardShortcut(event, entry, rows.path)
+                contextShortcut(event, entry)
+              }}
             >
               <Show when={renaming() !== entry.path} fallback={
                 <div class="workspace-row-rename">
@@ -586,6 +610,7 @@ export default function WorkspaceSidebar(props: {
                   aria-busy={props.pending === entry.path || undefined}
                   onClick={(event) => {
                     if (event.detail > 1) return
+                    event.currentTarget.focus({ preventScroll: true })
                     if (entry.directory) toggle(entry.path)
                     else props.onOpen(entry)
                   }}
@@ -612,56 +637,6 @@ export default function WorkspaceSidebar(props: {
         </>)}
       </For>
     </ul>
-  }
-
-  const MoveDialog = (dialogProps: { entry: WorkspaceEntry }) => {
-    let dialog!: HTMLDialogElement
-    onMount(() => dialog.showModal())
-    const navigate = (path: string) => {
-      setTargetFolder(path)
-      void load(path)
-    }
-    const breadcrumbs = () => {
-      const target = targetFolder()
-      return target === root ? [root] : [root, ...ancestors(root, target), target]
-    }
-    return (
-      <dialog
-        class="workspace-move-dialog" ref={dialog} aria-label="移动到文件夹"
-        onCancel={(event) => { event.preventDefault(); if (!moving()) setMoveEntry(undefined) }}
-      >
-        <header>
-          <strong>移动到</strong>
-          <span title={dialogProps.entry.name}>{dialogProps.entry.name}</span>
-        </header>
-        <nav class="workspace-breadcrumbs" aria-label="目标路径">
-          <For each={breadcrumbs()}>{(folder) => (
-            <button type="button" disabled={moving()} aria-current={folder === targetFolder() ? 'location' : undefined}
-              onClick={() => navigate(folder)}>{nameOf(folder)}</button>
-          )}</For>
-        </nav>
-        <div class="workspace-destinations">
-          <For each={directories[targetFolder()]?.entries?.filter((entry) =>
-            entry.directory && (!dialogProps.entry.directory || !childOf(entry.path, dialogProps.entry.path, true)))}
-            fallback={<DirectoryStatus path={targetFolder()} empty="没有子文件夹" />}>
-            {(folder) => (
-              <button type="button" disabled={moving()} onClick={() => navigate(folder.path)}>
-                <span class="workspace-entry-icon is-folder" aria-hidden="true" />
-                {folder.name}
-                <span aria-hidden="true">›</span>
-              </button>
-            )}
-          </For>
-        </div>
-        <Show when={error()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
-        <footer>
-          <button type="button" disabled={moving()} onClick={() => setMoveEntry(undefined)}>取消</button>
-          <button type="button" class="workspace-confirm"
-            disabled={moving() || !directories[targetFolder()]?.entries || !canMoveTo(dialogProps.entry, targetFolder())}
-            onClick={() => void move(dialogProps.entry, targetFolder())}>{moving() ? '正在移动…' : '移到此处'}</button>
-        </footer>
-      </dialog>
-    )
   }
 
   const CreateRow = ({ draft }: { draft: Creation }) => {
@@ -741,7 +716,7 @@ export default function WorkspaceSidebar(props: {
       }
     }
     return (
-      <dialog class="workspace-move-dialog" ref={dialog} aria-label="确认删除"
+      <dialog class="workspace-trash-dialog" ref={dialog} aria-label="确认删除"
         onCancel={(event) => { event.preventDefault(); if (!pending()) setTrashEntry(undefined) }}>
         <header><strong>移到废纸篓？</strong></header>
         <p class="workspace-trash-description">「{entry.name}」{entry.directory ? '及其内容将移到废纸篓。' : '将移到废纸篓。'}</p>
@@ -758,10 +733,16 @@ export default function WorkspaceSidebar(props: {
   return (
     <aside class="workspace" id="workspace-sidebar" aria-label="工作区文件" ref={tree}
       inert={!props.visible} onContextMenu={(event) => showContext(event)}
-      onKeyDown={(event) => contextShortcut(event)}>
+      onKeyDown={(event) => {
+        if (!(event.target as HTMLElement).closest('[data-workspace-entry]')) clipboardShortcut(event)
+        contextShortcut(event)
+      }}>
       <div
         class="workspace-title" classList={{ 'workspace-drop-target': props.importTarget === root || dropTarget()?.anchor === root }}
-        data-workspace-folder={root || undefined}
+        data-workspace-folder={root || undefined} tabIndex={root ? 0 : undefined}
+        onClick={(event) => {
+          if (root && !(event.target as HTMLElement).closest('button')) event.currentTarget.focus({ preventScroll: true })
+        }}
       >
         <Show when={root}><span class="workspace-entry-icon is-folder is-folder-open" aria-hidden="true" /></Show>
         <strong title={root || undefined}>{root ? nameOf(root) : '工作区'}</strong>
@@ -780,13 +761,16 @@ export default function WorkspaceSidebar(props: {
           </Show>
         </div>
       }>
-        <nav class="workspace-tree" aria-label="文件目录"><Rows path={root} /></nav>
+        <nav class="workspace-tree" aria-label="文件目录" tabIndex={0} onClick={(event) => {
+          if (!(event.target as HTMLElement).closest('[data-workspace-entry], button, input')) {
+            event.currentTarget.focus({ preventScroll: true })
+          }
+        }}><Rows path={root} /></nav>
       </Show>
-      <Show when={error() && !moveEntry()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
+      <Show when={error()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
       <Show when={context()} keyed>
         {(current) => <ContextMenu at={current} actions={actionsFor(current)} close={closeContext} />}
       </Show>
-      <Show when={moveEntry()} keyed>{(entry) => <MoveDialog entry={entry} />}</Show>
       <Show when={trashEntry()} keyed>{(entry) => <TrashDialog entry={entry} />}</Show>
     </aside>
   )

@@ -25,8 +25,7 @@ const TITLE_SAVE_DELAY_MS = 700
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
 
-type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '移动失败' | '移动已完成，请重新打开文档' | '导入失败' | '删除失败' | '重命名失败' | '重命名已完成，请重新打开文档'
-type Transfer = 'saveAs' | 'copy' | 'move'
+type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '复制失败' | '移动失败' | '移动已完成，请重新打开文档' | '导入失败' | '删除失败' | '重命名失败' | '重命名已完成，请重新打开文档'
 
 function nameOf(path: string) {
   return path.split(path.startsWith('/') ? '/' : '\\').at(-1) ?? path
@@ -57,6 +56,7 @@ export default function App() {
   let busy = false
   let cancelLoad = false
   let openingPath: string | undefined
+  let openingTask: Promise<boolean> | undefined
   let disposed = false
   let developmentPreparing: string | undefined
   let loadBefore: { path: string | null; state: EditorState; readonly: boolean; emptyAfterDeletion: boolean; scrollTop: number } | undefined
@@ -401,7 +401,7 @@ export default function App() {
     if (entry.markdown) {
       openingPath = entry.path
       cancelLoad = false
-      void runFileAction(async (editor) => {
+      openingTask = runFileAction(async (editor) => {
         if (path() !== entry.path) return readDocument(editor, entry.path)
         batch(() => {
           setPreview(undefined)
@@ -410,6 +410,7 @@ export default function App() {
         setFailure(undefined)
         return true
       }, '打开失败').finally(() => {
+        openingTask = undefined
         openingPath = undefined
         if (pendingOpen() === pending) setPendingOpen(undefined)
         openPendingEntry()
@@ -575,17 +576,22 @@ export default function App() {
     void desktopWorkspace.openAttachment(entry.workspaceRoot, entry.path, application).catch(() => setFailure('打开失败'))
   }
 
-  const relocateWorkspaceEntry = async (editor: EditorHandle, root: string, source: string, target: string, name?: string) => {
+  const relocateWorkspaceEntry = async (editor: EditorHandle, root: string, entry: WorkspaceEntry, target: string) => {
     setWorkspaceMoving(true)
     try {
       if (!await flush()) throw new Error('当前文档保存失败')
-      const result = await desktopWorkspace.move(root, source, target, path(), name)
+      const result = await desktopWorkspace.move(root, entry.path, target, path())
+      setPreview((current) => {
+        if (!current || (current.path !== entry.path && !(entry.directory && inWorkspace(current.path, entry.path)))) return current
+        const destination = result.destination + current.path.slice(entry.path.length)
+        return { ...current, path: destination, name: nameOf(destination) }
+      })
       setWorkspaceReveal(result.destination)
       refreshWorkspace()
       if (result.activeDocument) {
         setPath(result.activeDocument)
         try {
-          if (!await readDocument(editor, result.activeDocument)) throw new Error('Load cancelled')
+          if (!await readDocument(editor, result.activeDocument, false)) throw new Error('Load cancelled')
         } catch {
           setReadonly(true)
           setFailure('移动已完成，请重新打开文档')
@@ -604,7 +610,7 @@ export default function App() {
     let cause: unknown
     const moved = await runFileAction(async (editor) => {
       try {
-        await relocateWorkspaceEntry(editor, current.root, entry.path, target)
+        await relocateWorkspaceEntry(editor, current.root, entry, target)
         return true
       } catch (err) {
         cause = err
@@ -614,47 +620,49 @@ export default function App() {
     if (!moved) throw cause ?? new Error('移动失败')
   }
 
-  const transferDocument = (mode: Transfer) => runFileAction(async (editor) => {
+  const pasteWorkspaceFile = async (entry: WorkspaceEntry, target: string, move: boolean) => {
+    const current = workspace()
+    while (openingTask) await openingTask
+    if (!current || workspace() !== current || busy) throw new Error('请等待当前文件操作完成')
+    if (move) return moveWorkspaceEntry(entry, target)
+    let cause: unknown
+    const copied = await runFileAction(async () => {
+      try {
+        if (path() === entry.path && !await flush()) throw new Error('当前文档保存失败')
+        const destination = await desktopWorkspace.copy(current.root, entry.path, target)
+        setWorkspaceReveal(destination)
+        refreshWorkspace()
+        setFailure(undefined)
+        return true
+      } catch (err) {
+        cause = err
+        return false
+      }
+    }, '复制失败')
+    if (!copied) throw cause ?? new Error('复制失败')
+  }
+
+  const saveAs = () => runFileAction(async (editor) => {
     if (readonly()) return true
     const source = path()
     if (!source) return false
-    const name = nameOf(source)
-    const picked = await save({
-      defaultPath: mode === 'copy' ? name.replace(/\.(md|markdown)$/i, '-copy.$1') : name,
-      filters: MARKDOWN_FILTERS,
-    })
+    const picked = await save({ defaultPath: nameOf(source), filters: MARKDOWN_FILTERS })
     if (typeof picked !== 'string') return true
 
-    const root = workspace()?.root
-    if (mode === 'move' && source && root && inWorkspace(source, root) && inWorkspace(picked, root)) {
-      if (source === picked) return true
-      const name = nameOf(picked)
-      const folder = picked.slice(0, -name.length)
-      await relocateWorkspaceEntry(editor, root, source, folder, name)
-      return true
-    }
-
-    if (mode === 'move' && !await flush()) return false
+    clearSaveTimer()
+    while (writer) await writer
     if (source === picked) {
-      if (mode !== 'saveAs') return true
-      clearSaveTimer()
-      while (writer) await writer
       if (!await writeDocument(picked, editor.editor.state.doc)) return false
       setPath(picked)
     } else {
-      if (mode === 'saveAs') clearSaveTimer()
-      while (writer) await writer
       const state = editor.editor.state
       const plan = await desktopAttachments.plan(source, picked, relativeReferences(state.doc))
       const relocated = rewriteAttachmentLinks(state, plan.rewrites).doc
-      await desktopAttachments.transfer(source, picked, await serializeDocument(relocated), plan, mode === 'move')
-      if (mode !== 'copy') {
-        clearSaveTimer()
-        setPath(picked)
-        editor.resetDocument(relocated)
-        editor.refreshImages()
-        savedDoc = editor.editor.state.doc
-      }
+      await desktopAttachments.transfer(source, picked, await serializeDocument(relocated), plan, false)
+      setPath(picked)
+      editor.resetDocument(relocated)
+      editor.refreshImages()
+      savedDoc = editor.editor.state.doc
       setFailure(undefined)
     }
     refreshWorkspace()
@@ -779,7 +787,7 @@ export default function App() {
       case 's':
         event.preventDefault()
         if (emptyAfterDeletion() && !preview()) break
-        if (event.shiftKey && path()) void transferDocument('saveAs')
+        if (event.shiftKey && path()) void saveAs()
         else if (!busy) void flush()
         break
     }
@@ -983,13 +991,13 @@ export default function App() {
   const renderSidebar = (current?: WorkspaceRoot) => (
     <WorkspaceSidebar
       workspace={current} visible={sidebarVisible()} restoring={restoringWorkspace()}
-      active={activeFile()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
+      active={activeFile()} reveal={workspaceReveal()} revision={workspaceRevision()}
       pending={pendingOpen()?.entry.path} importTarget={importTarget()}
       displayName={displayedName} renamed={workspaceRename()}
       onOpen={openWorkspaceEntry} onOpenFile={openFile} onOpenWorkspace={() => void openWorkspace()}
       onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry} onTrash={trashWorkspaceEntry} onRename={renameEntry}
-      onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
+      onPaste={pasteWorkspaceFile}
       onClose={() => void closeWorkspace()}
     />
   )

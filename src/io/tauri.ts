@@ -75,9 +75,11 @@ export const desktopWorkspace = {
     invoke<{ destination: string; activeDocument: string | null; activeDocumentChanged: boolean }>('rename_workspace_entry', {
       root, source, stem, activeDocument,
     }),
-  move: (root: string, source: string, target: string, activeDocument: string | null, name?: string) =>
+  copy: (root: string, source: string, target: string) =>
+    invoke<string>('copy_workspace_file', { root, source, target }),
+  move: (root: string, source: string, target: string, activeDocument: string | null) =>
     invoke<{ destination: string; activeDocument: string | null }>('move_workspace_entry', {
-      root, source, target, activeDocument, name,
+      root, source, target, activeDocument,
     }),
 }
 
