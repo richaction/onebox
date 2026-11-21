@@ -1,4 +1,5 @@
 import type { ViewerController, ViewerOptions, mountViewer } from '@file-viewer/web-full'
+import { customizeArchivePreview } from './archivePreview'
 import { imageFit, isImagePreview, type ImagePreviewState } from './previewImage'
 import './previewFrame.css'
 
@@ -10,6 +11,7 @@ let viewer: ViewerController | undefined
 let initialContent: MutationObserver | undefined
 let previewLayout: ResizeObserver | undefined
 let tiffPageLabel: MutationObserver | undefined
+let stopArchiveLayout: (() => void) | undefined
 let stopTextLayout: (() => void) | undefined
 let reported = false
 
@@ -225,27 +227,57 @@ const watchInitialContent = (root: Element, check: () => void) => {
   check()
 }
 
+const showArchiveSaveError = () => {
+  const toolbar = viewerHost.querySelector('.ob-archive > .archive-preview > .archive-preview-toolbar')
+  if (!toolbar || toolbar.querySelector('.ob-archive-save-error')) return
+  const error = document.createElement('span')
+  error.className = 'ob-archive-save-error'
+  error.setAttribute('role', 'alert')
+  error.textContent = '保存失败'
+  toolbar.append(error)
+  setTimeout(() => error.remove(), 4000)
+}
+
 // Document links stay inside the preview. Opening the original is a separate Onebox action.
 const blockNavigation = (event: MouseEvent) => {
   const link = event.composedPath().find((target): target is Element =>
     target instanceof Element && target.matches('a[href], area[href]'))
-  if (link && !link.getAttribute('href')?.startsWith('#')) event.preventDefault()
+  if (!link || link.getAttribute('href')?.startsWith('#')) return
+  event.preventDefault()
+  // The archive renderer appends its own export link directly to the frame body.
+  if (event.type !== 'click' || !(link instanceof HTMLAnchorElement) ||
+    link.parentElement !== document.body || !link.download ||
+    !link.href.startsWith('blob:') || !viewerHost.querySelector('.ob-archive')) return
+  const name = link.download
+  void fetch(link.href).then((response) => response.arrayBuffer()).then((bytes) => {
+    parent.postMessage({ type: 'onebox-preview-save-archive-entry', name, bytes }, '*', [bytes])
+  }).catch(() => showArchiveSaveError())
 }
 document.addEventListener('click', blockNavigation, true)
 document.addEventListener('auxclick', blockNavigation, true)
 window.addEventListener('keydown', (event) => {
-  if (!event.defaultPrevented && event.key === 'Escape') parent.postMessage('onebox-preview-close', '*')
+  if (event.defaultPrevented) return
+  if (event.key === 'Escape') parent.postMessage('onebox-preview-close', '*')
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && !event.isComposing && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    parent.postMessage('onebox-preview-save-hint', '*')
+  }
 })
 window.addEventListener('pagehide', () => {
   initialContent?.disconnect()
   previewLayout?.disconnect()
   tiffPageLabel?.disconnect()
   stopTextLayout?.()
+  stopArchiveLayout?.()
   viewer?.destroy()
 })
 
 window.addEventListener('message', (event: MessageEvent) => {
   if (event.source !== parent) return
+  if (event.data?.type === 'onebox-preview-archive-save-error') {
+    showArchiveSaveError()
+    return
+  }
   if (event.data?.type === 'onebox-preview-image-command' && viewerHost.classList.contains('preview-image')) {
     handleImageCommand(event.data.action)
     return
@@ -316,7 +348,12 @@ window.addEventListener('message', (event: MessageEvent) => {
         : { fallbackEncoding: 'gb18030' },
       // In read-only previews the used range determines when scrolling is needed.
       spreadsheet: { fillViewport: false },
-      messages: { 'spreadsheet.state.rowsAndColumns': '共 {rows} 行 · {cols} 列' },
+      messages: {
+        'spreadsheet.state.rowsAndColumns': '共 {rows} 行 · {cols} 列',
+        'archive.stats.summary': '{count} 个文件 · {size}',
+        'archive.warning.encrypted': '此压缩包包含加密文件',
+        'archive.preview.downloadFile': '另存为…',
+      },
     },
     onStateChange: ({ ready, error, zoom }) => {
       if (ready && imagePreview && zoom) {
@@ -344,6 +381,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         })
         const sheet = viewerHost.querySelector('.excel-wrapper')
         const pdf = viewerHost.querySelector<HTMLElement>('.pdf-shell')
+        const archive = viewerHost.querySelector<HTMLElement>('.archive-shell, .archive-viewer')
         // Shell readiness can arrive before the first rows or the first PDF page.
         if (sheet) watchInitialContent(sheet, () => {
           if (sheet.querySelector('.error:not(.hidden)')) report('error')
@@ -360,7 +398,9 @@ window.addEventListener('message', (event: MessageEvent) => {
           })
         }
         else {
-          if (plainText) spacePlainTextParagraphs()
+          if (archive && !/\.(epub|cbz|cbr|cb7|cbt)$/iu.test(name)) {
+            stopArchiveLayout = customizeArchivePreview(archive)
+          } else if (plainText) spacePlainTextParagraphs()
           else fitSlideSpacing()
           report('rendered')
         }

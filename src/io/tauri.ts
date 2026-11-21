@@ -64,6 +64,7 @@ export const desktopWorkspace = {
   importFiles: (root: string, folder: string, paths: string[]) =>
     invoke<{ paths: string[]; failed: number }>('import_workspace_files', { root, folder, paths }),
   openAttachment: (root: string | undefined, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
+  revealLocation: (root: string | undefined, path: string) => invoke<void>('reveal_workspace_location', { root, path }),
   fileApplications: (root: string | undefined, path: string, onList: (result: FileApplications) => void) =>
     invoke<Record<string, string>>('workspace_file_applications', { root, path, onList: new Channel(onList) }),
   preparePreview: (root: string | undefined, path: string) =>
@@ -75,9 +76,11 @@ export const desktopWorkspace = {
     invoke<{ destination: string; activeDocument: string | null; activeDocumentChanged: boolean }>('rename_workspace_entry', {
       root, source, stem, activeDocument,
     }),
-  move: (root: string, source: string, target: string, activeDocument: string | null, name?: string) =>
+  copy: (root: string, source: string, target: string) =>
+    invoke<string>('copy_workspace_file', { root, source, target }),
+  move: (root: string, source: string, target: string, activeDocument: string | null) =>
     invoke<{ destination: string; activeDocument: string | null }>('move_workspace_entry', {
-      root, source, target, activeDocument, name,
+      root, source, target, activeDocument,
     }),
 }
 
