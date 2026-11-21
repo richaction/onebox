@@ -1,4 +1,4 @@
-import type { ViewerController, mountViewer } from '@file-viewer/web-full'
+import type { ViewerController, ViewerOptions, mountViewer } from '@file-viewer/web-full'
 import { imageFit, isImagePreview, type ImagePreviewState } from './previewImage'
 import './previewFrame.css'
 
@@ -10,7 +10,7 @@ let viewer: ViewerController | undefined
 let initialContent: MutationObserver | undefined
 let previewLayout: ResizeObserver | undefined
 let tiffPageLabel: MutationObserver | undefined
-let stopPlainTextLayout: (() => void) | undefined
+let stopTextLayout: (() => void) | undefined
 let reported = false
 
 let imageWheelDelta = 0
@@ -87,7 +87,8 @@ const fitSlideSpacing = () => {
   previewLayout.observe(scaleBox)
 }
 
-const alignPlainTextLayout = () => {
+const alignTextLayout = () => {
+  if (stopTextLayout) return
   // Use the window's text gutters even when the sidebar narrows the iframe.
   const update = () => {
     const theme = parent.getComputedStyle(parent.document.documentElement)
@@ -98,7 +99,47 @@ const alignPlainTextLayout = () => {
   }
   update()
   parent.addEventListener('resize', update)
-  stopPlainTextLayout = () => parent.removeEventListener('resize', update)
+  stopTextLayout = () => parent.removeEventListener('resize', update)
+}
+
+const markdownRenderer: ViewerOptions['renderers'] = {
+  id: 'onebox-markdown',
+  handlers: [{
+    rendererId: 'markdown',
+    async handler(buffer, target, _type, context) {
+      const { createEditor } = await import('../core/editor')
+      context?.signal?.throwIfAborted()
+      alignTextLayout()
+
+      const [firstByte, secondByte] = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 2))
+      const encoding = firstByte === 0xff && secondByte === 0xfe ? 'utf-16le'
+        : firstByte === 0xfe && secondByte === 0xff ? 'utf-16be' : 'utf-8'
+      let markdown: string
+      try {
+        markdown = new TextDecoder(encoding, { fatal: true }).decode(buffer)
+      } catch {
+        markdown = new TextDecoder(context?.options?.text?.fallbackEncoding ?? encoding).decode(buffer)
+      }
+
+      const shell = document.createElement('div')
+      shell.className = 'editor-shell onebox-markdown-preview'
+      const scrollRoot = document.createElement('div')
+      scrollRoot.className = 'editor-scroll'
+      const element = document.createElement('div')
+      element.className = 'editor-mount'
+      scrollRoot.append(element)
+      shell.append(scrollRoot)
+      target.append(shell)
+      const editor = createEditor({ element, scrollRoot, markdown, editable: false, onUpdate() {} })
+      return {
+        $el: shell,
+        destroy() {
+          editor.destroy()
+          shell.remove()
+        },
+      }
+    },
+  }],
 }
 
 const spacePlainTextParagraphs = () => {
@@ -199,7 +240,7 @@ window.addEventListener('pagehide', () => {
   initialContent?.disconnect()
   previewLayout?.disconnect()
   tiffPageLabel?.disconnect()
-  stopPlainTextLayout?.()
+  stopTextLayout?.()
   viewer?.destroy()
 })
 
@@ -223,7 +264,7 @@ window.addEventListener('message', (event: MessageEvent) => {
   }
   const plainText = /\.txt$/iu.test(name)
   viewerHost.classList.toggle('preview-plain-text', plainText)
-  if (plainText) alignPlainTextLayout()
+  if (plainText) alignTextLayout()
   const imagePreview = isImagePreview(name)
   viewerHost.classList.toggle('preview-image', imagePreview)
   if (imagePreview) {
@@ -252,6 +293,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     filename: name,
     options: {
       autoRenderers: false,
+      renderers: markdownRenderer,
       styleIsolation: 'none',
       locale: 'zh-CN',
       toolbar: false,
