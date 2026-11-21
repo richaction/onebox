@@ -22,6 +22,8 @@ export default function FilePreview(props: {
   root?: string
   entry?: WorkspaceEntry
   onOpenExternal: (application?: string) => void
+  onSaveHint: () => void
+  saveHint: string
   onClose: () => void
   titleEdit?: TitleEdit
 }) {
@@ -117,41 +119,44 @@ export default function FilePreview(props: {
     <section class="file-preview" aria-label="文件预览">
       <header class="file-preview-toolbar">
         <FileName name={props.entry?.name ?? ''} edit={props.titleEdit} />
-        <Show when={imagePreview()}>
-          <div class="file-preview-image-tools" role="group" aria-label="图片工具栏">
-            <Show when={imageState()?.pages}>{(pages) => <span class="file-preview-image-pages">{pages()}</span>}</Show>
-            <button type="button" class="file-preview-image-rotate" title="顺时针旋转" aria-label="顺时针旋转"
-              disabled={!imageState()} onClick={() => setImageCommand({ action: 'rotate' })}>↻</button>
-            <button type="button" title="缩小图片" aria-label="缩小图片" disabled={!imageState()?.canZoomOut}
-              onClick={() => setImageCommand({ action: 'zoom-out' })}>−</button>
-            <button type="button" class="file-preview-image-fit" title="适合窗口" aria-label={`适合窗口，当前缩放 ${imageState()?.label ?? '未知'}`}
-              disabled={!imageState()} onClick={() => setImageCommand({ action: 'fit' })}>{imageState()?.label ?? '适合'}</button>
-            <button type="button" title="放大图片" aria-label="放大图片" disabled={!imageState()?.canZoomIn}
-              onClick={() => setImageCommand({ action: 'zoom-in' })}>+</button>
+        <div class="file-save-hint" role="status">{props.saveHint}</div>
+        <div class="file-preview-actions">
+          <Show when={imagePreview()}>
+            <div class="file-preview-image-tools" role="group" aria-label="图片工具栏">
+              <Show when={imageState()?.pages}>{(pages) => <span class="file-preview-image-pages">{pages()}</span>}</Show>
+              <button type="button" class="file-preview-image-rotate" title="顺时针旋转" aria-label="顺时针旋转"
+                disabled={!imageState()} onClick={() => setImageCommand({ action: 'rotate' })}>↻</button>
+              <button type="button" title="缩小图片" aria-label="缩小图片" disabled={!imageState()?.canZoomOut}
+                onClick={() => setImageCommand({ action: 'zoom-out' })}>−</button>
+              <button type="button" class="file-preview-image-fit" title="适合窗口" aria-label={`适合窗口，当前缩放 ${imageState()?.label ?? '未知'}`}
+                disabled={!imageState()} onClick={() => setImageCommand({ action: 'fit' })}>{imageState()?.label ?? '适合'}</button>
+              <button type="button" title="放大图片" aria-label="放大图片" disabled={!imageState()?.canZoomIn}
+                onClick={() => setImageCommand({ action: 'zoom-in' })}>+</button>
+            </div>
+          </Show>
+          <Show when={pdfPreview()}>
+            <button type="button" ref={outlineButton} class="file-preview-outline-toggle" title="PDF 目录" aria-label="PDF 目录"
+              aria-expanded={pdfOutlineOpen()} disabled={!previewReady()} onClick={() => setPdfOutlineOpen(!pdfOutlineOpen())}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape' || !pdfOutlineOpen()) return
+                event.stopPropagation()
+                closePreview()
+              }}>
+              <span class="sidebar-toggle-symbol" aria-hidden="true" />
+            </button>
+          </Show>
+          <div class="file-open-with" role="group" aria-label="打开方式">
+            <button type="button" class="file-open-with-default"
+              aria-label={`用${defaultApp()?.name ?? '系统默认应用'}打开`}
+              title={`用${defaultApp()?.name ?? '系统默认应用'}打开`} onClick={() => openWith()}>
+              <AppIcon src={applications()?.defaultIcon} />
+            </button>
+            <button type="button" class="file-open-with-toggle" ref={openWithButton} aria-label="打开方式"
+              aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls="preview-open-with"
+              popovertarget="preview-open-with" onClick={positionOpenWith}>
+              <span aria-hidden="true" />
+            </button>
           </div>
-        </Show>
-        <Show when={pdfPreview()}>
-          <button type="button" ref={outlineButton} class="file-preview-outline-toggle" title="PDF 目录" aria-label="PDF 目录"
-            aria-expanded={pdfOutlineOpen()} disabled={!previewReady()} onClick={() => setPdfOutlineOpen(!pdfOutlineOpen())}
-            onKeyDown={(event) => {
-              if (event.key !== 'Escape' || !pdfOutlineOpen()) return
-              event.stopPropagation()
-              closePreview()
-            }}>
-            <span class="sidebar-toggle-symbol" aria-hidden="true" />
-          </button>
-        </Show>
-        <div class="file-open-with" role="group" aria-label="打开方式">
-          <button type="button" class="file-open-with-default"
-            aria-label={`用${defaultApp()?.name ?? '系统默认应用'}打开`}
-            title={`用${defaultApp()?.name ?? '系统默认应用'}打开`} onClick={() => openWith()}>
-            <AppIcon src={applications()?.defaultIcon} />
-          </button>
-          <button type="button" class="file-open-with-toggle" ref={openWithButton} aria-label="打开方式"
-            aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls="preview-open-with"
-            popovertarget="preview-open-with" onClick={positionOpenWith}>
-            <span aria-hidden="true" />
-          </button>
         </div>
         <div ref={openWithMenu} id="preview-open-with" class="file-open-with-menu" popover="auto" role="menu" aria-label="打开方式"
           onToggle={updateOpenWith} onKeyDown={onMenuKey}>
@@ -170,7 +175,7 @@ export default function FilePreview(props: {
         </div>
       </header>
       <Show when={requested()} keyed>{(frame) => (
-          <ViewerFrame root={frame.root} entry={frame.entry} onClose={closePreview}
+          <ViewerFrame root={frame.root} entry={frame.entry} onClose={closePreview} onSaveHint={props.onSaveHint}
             onSettled={(ready) => batch(() => {
               frame.ready[1](ready)
               if (!ready) frame.outline[1](false)

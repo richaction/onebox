@@ -81,6 +81,7 @@ pub fn run() {
             workspace::create_workspace_entry,
             workspace::trash_workspace_entry,
             workspace::open_workspace_attachment,
+            workspace::reveal_workspace_location,
             workspace::workspace_file_applications,
             workspace::import_workspace_files,
             workspace::workspace_preview,

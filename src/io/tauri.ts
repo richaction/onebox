@@ -64,6 +64,7 @@ export const desktopWorkspace = {
   importFiles: (root: string, folder: string, paths: string[]) =>
     invoke<{ paths: string[]; failed: number }>('import_workspace_files', { root, folder, paths }),
   openAttachment: (root: string | undefined, path: string, application?: string) => invoke<void>('open_workspace_attachment', { root, path, application }),
+  revealLocation: (root: string | undefined, path: string) => invoke<void>('reveal_workspace_location', { root, path }),
   fileApplications: (root: string | undefined, path: string, onList: (result: FileApplications) => void) =>
     invoke<Record<string, string>>('workspace_file_applications', { root, path, onList: new Channel(onList) }),
   preparePreview: (root: string | undefined, path: string) =>

@@ -112,6 +112,7 @@ export default function WorkspaceSidebar(props: {
   onOpen: (entry: WorkspaceEntry) => void
   onOpenFile: (folder?: string) => Promise<string | undefined>
   onOpenWorkspace: () => void
+  onRevealLocation: (path: string) => Promise<void>
   onOpenDemo?: () => void
   onCreate: (folder: string, name: string, directory: boolean, onCreated: (entry: WorkspaceEntry) => void) => Promise<void>
   onTrash: (entry: WorkspaceEntry) => Promise<void>
@@ -340,6 +341,14 @@ export default function WorkspaceSidebar(props: {
       )
     }
     const copyPath = entry?.path ?? (root || props.active)
+    if (copyPath && entry?.accessible !== false) actions.push({ label: '打开文件位置', run: async () => {
+      try {
+        await props.onRevealLocation(copyPath)
+        setError(undefined)
+      } catch {
+        setError('无法打开文件位置')
+      }
+    } })
     if (copyPath) actions.push({ label: '复制路径', run: async () => {
       try {
         await navigator.clipboard.writeText(copyPath)
@@ -673,7 +682,7 @@ export default function WorkspaceSidebar(props: {
           <input ref={field} aria-label={label} placeholder={draft.directory ? label : '文件名.md'}
             aria-invalid={!!issue()} readOnly={pending()} onInput={() => setIssue(undefined)}
             onBlur={() => {
-              if (!draft.directory && !pending() && !field.value.trim()) {
+              if (!pending() && !field.value.trim()) {
                 setCreation((current) => current === draft ? undefined : current)
               }
             }}
