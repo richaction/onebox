@@ -1,7 +1,106 @@
-import { createComponent } from 'solid-js'
+import { createComponent, createSignal } from 'solid-js'
 import { render } from 'solid-js/web'
 import { expect, it, vi } from 'vitest'
 import WorkspaceSidebar from '../src/ui/WorkspaceSidebar'
+import { desktopWorkspace } from '../src/io/tauri'
+
+it('keeps the sidebar steady on open and remembers contextual placement after remount', async () => {
+  const root = '/pin-test'
+  const folder = { path: `${root}/folder`, name: 'folder', directory: true, markdown: false }
+  const file = (name: string, parent = root) => ({ path: `${parent}/${name}`, name, directory: false, markdown: name.endsWith('.md') })
+  const first = file('first.md')
+  const second = file('second.pdf')
+  const nested = file('note.md', folder.path)
+  const dotfile = file('.gitignore', folder.path)
+  const subfolder = { path: `${folder.path}/child`, name: 'child', directory: true, markdown: false }
+  let children = [subfolder, file('.DS_Store', folder.path), dotfile, nested]
+  const load = vi.spyOn(desktopWorkspace, 'entries').mockImplementation(async (_root, parent) =>
+    parent === folder.path ? children : [file('.DS_Store'), folder, first, second])
+  const orderKey = `onebox:workspace-order:${root}`
+  const savedOrder = JSON.stringify({ [root]: [folder.path, first.path, second.path] })
+  localStorage.setItem(orderKey, savedOrder)
+  const [active, setActive] = createSignal<string | null>(first.path)
+  const [revision, setRevision] = createSignal(0)
+  const host = document.createElement('div')
+  document.body.append(host)
+  const noop = () => {}
+  vi.useFakeTimers()
+  const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  const mount = () => render(() => createComponent(WorkspaceSidebar, {
+    workspace: { root, entries: [file('.DS_Store'), folder, first, second] },
+    visible: true, restoring: false, get active() { return active() }, readonly: false, get revision() { return revision() },
+    onOpen: (entry) => setActive(entry.path), onOpenFile: async () => { setActive(nested.path); return nested.path }, onOpenWorkspace: noop,
+    onCreate: async (parent, name, _directory, onCreated) => {
+      const entry = file(name, parent)
+      children = [...children, entry]
+      onCreated(entry)
+      setRevision((value) => value + 1)
+      setActive(entry.path)
+    },
+    onTrash: async () => {}, onRename: async (entry) => entry.path,
+    onMove: async () => {}, onCopy: noop, onMoveDocument: noop, onClose: noop,
+  }), host)
+  let dispose = mount()
+  const names = (path: string) => [...host.querySelectorAll(`ul[data-workspace-folder="${path}"] > li > .workspace-row`)]
+    .map((row) => row.getAttribute('data-workspace-entry'))
+  const choose = (path: string, action: string) => {
+    host.querySelector(`[data-workspace-entry="${path}"]`)!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    buttons.find((button) => button.textContent === action)!.click()
+  }
+
+  try {
+    expect(names(root)).toEqual([folder.path, first.path, second.path])
+    const button = host.querySelector<HTMLButtonElement>(`[data-workspace-entry="${second.path}"] > button`)!
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    expect(names(root)).toEqual([folder.path, first.path, second.path])
+    expect(button.getAttribute('aria-current')).toBe('page')
+    expect(button.hasAttribute('aria-busy')).toBe(false)
+    const other = host.querySelector<HTMLButtonElement>(`[data-workspace-entry="${first.path}"] > button`)!
+    other.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
+    const input = host.querySelector<HTMLInputElement>('.filename-field input')!
+    expect(document.activeElement).toBe(input)
+    expect(input.value).toBe('first')
+    expect(active()).toBe(second.path)
+    expect(scroll).not.toHaveBeenCalled()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(names(root)).toEqual([folder.path, first.path, second.path])
+
+    setActive(nested.path)
+    await Promise.resolve()
+    expect(names(root)).toEqual([folder.path, first.path, second.path])
+    expect(names(folder.path)).toEqual([subfolder.path, dotfile.path, nested.path])
+    expect(localStorage.getItem(orderKey)).toBe(savedOrder)
+
+    choose(dotfile.path, '打开文件…')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(names(folder.path)).toEqual([subfolder.path, dotfile.path, nested.path])
+    choose(folder.path, '打开文件…')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(names(folder.path)).toEqual([nested.path, subfolder.path, dotfile.path])
+
+    choose(dotfile.path, '新建文件…')
+    const draft = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
+    expect(draft.closest('li')?.previousElementSibling?.firstElementChild?.getAttribute('data-workspace-entry')).toBe(dotfile.path)
+    draft.value = 'added.md'
+    draft.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    const saved = [nested.path, subfolder.path, dotfile.path, `${folder.path}/added.md`]
+    expect(names(folder.path)).toEqual(saved)
+    expect(JSON.parse(localStorage.getItem(orderKey)!)[folder.path]).toEqual(saved)
+    dispose()
+    dispose = mount()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(names(folder.path)).toEqual(saved)
+  } finally {
+    dispose()
+    vi.useRealTimers()
+    scroll.mockRestore()
+    load.mockRestore()
+    localStorage.removeItem(orderKey)
+    host.remove()
+  }
+})
 
 it('marks a valid drop folder before moving and clears the mark on release', () => {
   const folder = (name: string) => ({ path: `/work/${name}`, name, directory: true, markdown: false })
@@ -23,7 +122,7 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
     onTrash: async () => {},
     onRename: async (entry) => entry.path,
     onOpen: noop,
-    onOpenFile: noop,
+    onOpenFile: async () => undefined,
     onOpenWorkspace: noop,
     onCopy: noop,
     onMoveDocument: noop,
@@ -69,14 +168,18 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
 
 it('uses the same menu for right click and overflow, with inline creation and confirmed deletion', async () => {
   const entry = { path: '/work/note.md', name: 'note.md', directory: false, markdown: true }
+  const folder = { path: '/work/folder', name: 'folder', directory: true, markdown: false }
   const host = document.createElement('div')
   document.body.append(host)
-  const onCreate = vi.fn(async () => {})
+  const onCreate = vi.fn(async (_parent, _name, _directory, onCreated: (entry: typeof folder) => void) => {
+    onCreated(folder)
+  })
   const onTrash = vi.fn(async () => {})
   const onRename = vi.fn(async () => '/work/renamed.md')
+  const onOpen = vi.fn()
   const noop = () => {}
   const dispose = render(() => createComponent(WorkspaceSidebar, {
-    workspace: { root: '/work', entries: [entry] },
+    workspace: { root: '/work', entries: [entry, folder] },
     visible: true,
     restoring: false,
     active: null,
@@ -86,8 +189,8 @@ it('uses the same menu for right click and overflow, with inline creation and co
     onTrash,
     onRename,
     onMove: async () => {},
-    onOpen: noop,
-    onOpenFile: noop,
+    onOpen,
+    onOpenFile: async () => undefined,
     onOpenWorkspace: noop,
     onCopy: noop,
     onMoveDocument: noop,
@@ -98,6 +201,22 @@ it('uses the same menu for right click and overflow, with inline creation and co
   const menuItems = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
 
   try {
+    const rowButton = (path: string) => host.querySelector<HTMLButtonElement>(
+      `[data-workspace-entry="${path}"] > .workspace-row-button`,
+    )!
+    for (const [item, stem] of [[entry, 'note'], [folder, 'folder']] as const) {
+      const button = rowButton(item.path)
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }))
+      if (item.directory) expect(button.getAttribute('aria-expanded')).toBe('true')
+      button.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }))
+      const input = host.querySelector<HTMLInputElement>('.filename-field input')!
+      expect(document.activeElement).toBe(input)
+      expect(input.value).toBe(stem)
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    }
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(entry)
+
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))
     const rightClickLabels = menuItems().map((button) => button.textContent)
     more.click()
@@ -111,19 +230,38 @@ it('uses the same menu for right click and overflow, with inline creation and co
     menuItems().find((button) => button.textContent === '重命名…')!.click()
     const name = host.querySelector<HTMLInputElement>('.filename-field input')!
     expect(name.value).toBe('note')
-    expect(name.parentElement?.textContent).toBe('.md')
+    expect(name.closest('.filename-field')?.querySelector('.filename-field-suffix')?.textContent).toBe('.md')
     name.value = 'renamed'
     name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     expect(onRename).toHaveBeenCalledWith(entry, 'renamed')
     await Promise.resolve()
     await Promise.resolve()
+
+    more.click()
+    menuItems().find((button) => button.textContent === '新建文件…')!.click()
+    const unnamed = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
+    expect(document.activeElement).toBe(unnamed)
+    unnamed.value = '   '
+    more.focus()
+    expect(host.querySelector('input[aria-label="文件名称"]')).toBeNull()
+    expect(document.activeElement).toBe(more)
+    expect(onCreate).not.toHaveBeenCalled()
+
+    more.click()
+    menuItems().find((button) => button.textContent === '新建文件…')!.click()
+    const named = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
+    named.value = 'draft.md'
+    more.focus()
+    expect(host.contains(named)).toBe(true)
+    named.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
     more.click()
     menuItems().find((button) => button.textContent === '新建文件夹…')!.click()
     const field = host.querySelector<HTMLInputElement>('.workspace-rows input')!
     expect(host.querySelector('dialog')).toBeNull()
     field.value = 'alpha'
     field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(onCreate).toHaveBeenCalledWith('/work', 'alpha', true)
+    expect(onCreate).toHaveBeenCalledWith('/work', 'alpha', true, expect.any(Function))
     await Promise.resolve()
 
     more.click()

@@ -13,6 +13,7 @@ export function NameField(props: {
   onClose: () => void
 }) {
   const { stem, suffix } = splitName(props.name, props.directory)
+  const [draft, setDraft] = createSignal(stem)
   const [pending, setPending] = createSignal(false)
   const [error, setError] = createSignal<string>()
   let input!: HTMLInputElement
@@ -48,18 +49,24 @@ export function NameField(props: {
   return (
     <div class="filename-rename">
       <div class="filename-field">
-        <input ref={input} value={stem} type="text" autocomplete="off" spellcheck={false}
-          aria-label="新名称" aria-invalid={!!error()} readOnly={pending()}
-          onInput={() => setError(undefined)}
-          onBlur={() => { if (!pending() && !error()) void submit() }}
-          onKeyDown={(event) => {
-            if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
-            event.preventDefault()
-            event.stopPropagation()
-            if (event.key === 'Enter') void submit()
-            else if (!pending()) props.onClose()
-          }} />
-        <Show when={suffix}><span title="扩展名固定">{suffix}</span></Show>
+        <span class="filename-inline-stem">
+          <span aria-hidden="true">{draft()}</span>
+          <input ref={input} value={stem} type="text" autocomplete="off" spellcheck={false}
+            aria-label="新名称" aria-invalid={!!error()} readOnly={pending()}
+            onInput={(event) => {
+              setDraft(event.currentTarget.value)
+              setError(undefined)
+            }}
+            onBlur={() => { if (!pending() && !error()) void submit() }}
+            onKeyDown={(event) => {
+              if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
+              event.preventDefault()
+              event.stopPropagation()
+              if (event.key === 'Enter') void submit()
+              else if (!pending()) props.onClose()
+            }} />
+        </span>
+        <Show when={suffix}><span class="filename-field-suffix" title="扩展名固定">{suffix}</span></Show>
       </div>
       <Show when={error()}>{(issue) => <span class="filename-error" role="alert">{issue()}</span>}</Show>
     </div>

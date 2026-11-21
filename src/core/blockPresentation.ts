@@ -2,7 +2,7 @@ import type { EditorView } from '@tiptap/pm/view'
 import { codeLanguage, codeLanguageIds } from './codeLanguages'
 import type { createCodeHighlight } from './codeHighlight'
 import { richLanguage, watchRichBlock } from './richBlock'
-import { continueAfterBlock } from './editorCaret'
+import { continueAfterBlock, isDisplayMath } from './editorCaret'
 import { mountMermaidEditor } from './mermaidEditor'
 import type { PresentBlock } from './viewport/blockNodeView'
 
@@ -45,6 +45,14 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
   const present: PresentBlock = (node, rendered, view, getPos) => {
     const { dom, contentDOM } = rendered
     const document = dom.ownerDocument
+
+    if (node.type.name === 'paragraph') {
+      const updateContent = (paragraph: typeof node) => {
+        dom.toggleAttribute('data-display-math', isDisplayMath(paragraph))
+      }
+      updateContent(node)
+      return { ...rendered, updateContent }
+    }
 
     if (node.type.name === 'table') {
       const frame = document.createElement('div')

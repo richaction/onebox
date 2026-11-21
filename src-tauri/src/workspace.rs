@@ -166,9 +166,20 @@ fn seed_demo_workspace(path: &Path) -> io::Result<()> {
         copy_sample_files(&seed, staging.path())?;
         fs::rename(staging.path(), path)?;
     }
-    for (version, directory, name) in [
-        ("demo-excel-v1", "04 文件预览", "Excel 冻结窗格与两万行.xlsx"),
-        ("demo-charts-v1", "01 编辑器", "图表数字与公式.md"),
+    for (version, directory, names) in [
+        ("demo-excel-v1", "04 文件预览", &["Excel 冻结窗格与两万行.xlsx"][..]),
+        ("demo-charts-v1", "01 编辑器", &["图表数字与公式.md"][..]),
+        (
+            "demo-images-v1",
+            "04 文件预览",
+            &[
+                "AVIF 山雾.avif",
+                "BMP 网格.bmp",
+                "ICO 小图标.ico",
+                "TIFF 多页.tiff",
+                "WebP 透明图层.webp",
+            ][..],
+        ),
     ] {
         let marker = parent.join(version);
         if marker.exists() {
@@ -182,12 +193,14 @@ fn seed_demo_workspace(path: &Path) -> io::Result<()> {
             Err(err) => return Err(err),
         }
         if folder.symlink_metadata()?.is_dir() {
-            let mut staged = tempfile::NamedTempFile::new_in(&folder)?;
-            io::copy(&mut File::open(seed.join(directory).join(name))?, &mut staged)?;
-            match staged.persist_noclobber(folder.join(name)) {
-                Ok(_) => {}
-                Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(err.error),
+            for name in names {
+                let mut staged = tempfile::NamedTempFile::new_in(&folder)?;
+                io::copy(&mut File::open(seed.join(directory).join(name))?, &mut staged)?;
+                match staged.persist_noclobber(folder.join(name)) {
+                    Ok(_) => {}
+                    Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(err) => return Err(err.error),
+                }
             }
         }
         File::create(marker)?;

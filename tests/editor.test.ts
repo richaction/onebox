@@ -99,6 +99,20 @@ describe('createEditor', () => {
     expect(view.state.selection.$head.parent.textContent).toBe('')
   })
 
+  it('updates display formula paragraph layout when the surrounding text changes', () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('$$a+b$$\n\nInline $a+b$')
+    const { view } = handle.editor
+    const paragraph = element.querySelector('p')!
+    expect([...element.querySelectorAll('p[data-display-math]')]).toEqual([paragraph])
+
+    view.dispatch(view.state.tr.insertText('Before ', 1))
+    expect(paragraph.hasAttribute('data-display-math')).toBe(false)
+
+    view.dispatch(view.state.tr.delete(1, 8))
+    expect(paragraph.hasAttribute('data-display-math')).toBe(true)
+  })
+
   it('keeps the inline formula preview mounted while editing its LaTeX and committing a change', () => {
     const { handle, element } = mount()
     handle.loadMarkdown('before $r^2$ after')

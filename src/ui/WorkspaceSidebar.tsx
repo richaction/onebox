@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { NameField } from './FileName'
 import { createStore, reconcile } from 'solid-js/store'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
@@ -44,6 +44,7 @@ interface SidebarAction {
 
 interface Creation {
   folder: string
+  after?: string
   directory: boolean
   trigger: HTMLElement
 }
@@ -110,10 +111,10 @@ export default function WorkspaceSidebar(props: {
   revision: number
   importTarget?: string
   onOpen: (entry: WorkspaceEntry) => void
-  onOpenFile: (folder?: string) => void
+  onOpenFile: (folder?: string) => Promise<string | undefined>
   onOpenWorkspace: () => void
   onOpenDemo?: () => void
-  onCreate: (folder: string, name: string, directory: boolean) => Promise<void>
+  onCreate: (folder: string, name: string, directory: boolean, onCreated: (entry: WorkspaceEntry) => void) => Promise<void>
   onTrash: (entry: WorkspaceEntry) => Promise<void>
   onRename: (entry: WorkspaceEntry, stem: string) => Promise<string>
   displayName?: (entry: WorkspaceEntry) => string
@@ -197,7 +198,7 @@ export default function WorkspaceSidebar(props: {
   createEffect(on(() => props.revision, refresh, { defer: true }))
 
   createEffect(() => {
-    const file = props.reveal ?? props.active
+    const file = props.reveal
     if (!props.visible || !root || !file || !childOf(file, root)) return
     const folder = ancestors(root, file).at(-1) ?? root
     if (!directories[folder]?.entries?.some((entry) => entry.path === file)) return
@@ -228,13 +229,12 @@ export default function WorkspaceSidebar(props: {
   }
 
   const orderedEntries = (folder: string) => {
-    const entries = directories[folder]?.entries ?? []
+    const entries = (directories[folder]?.entries ?? []).filter((entry) => entry.name !== '.DS_Store')
     const order = orders()[folder]
     if (!Array.isArray(order)) return entries
     const ranks = new Map(order.map((path, index) => [path, index]))
-    return [...entries].sort((first, second) =>
-      Number(second.directory) - Number(first.directory)
-      || (ranks.get(first.path) ?? entries.length) - (ranks.get(second.path) ?? entries.length))
+    return entries.sort((first, second) =>
+      (ranks.get(first.path) ?? order.length) - (ranks.get(second.path) ?? order.length))
   }
 
   const saveOrders = (updated: Record<string, string[]>) => {
@@ -242,9 +242,19 @@ export default function WorkspaceSidebar(props: {
     try { localStorage.setItem(orderKey, JSON.stringify(updated)) } catch { /* Keep session order. */ }
   }
 
-  const beginCreation = (folder: string, directory: boolean, trigger: HTMLElement) => {
+  const placeFile = (folder: string, path: string, after?: string) => {
+    if (disposed || path === after || !childOf(path, root) || (ancestors(root, path).at(-1) ?? root) !== folder) return
+    const saved = orders()[folder]
+    const siblings = orderedEntries(folder).map((entry) => entry.path)
+    const paths = [...new Set([...(Array.isArray(saved) ? saved : []), ...siblings])].filter((item) => item !== path)
+    const index = after ? paths.indexOf(after) : -1
+    paths.splice(index + 1, 0, path)
+    saveOrders({ ...orders(), [folder]: paths })
+  }
+
+  const beginCreation = (folder: string, directory: boolean, trigger: HTMLElement, after?: string) => {
     if (folder !== root) expand(folder)
-    setCreation({ folder, directory, trigger })
+    setCreation({ folder, directory, trigger, after })
   }
 
   const beginMove = (entry: WorkspaceEntry) => {
@@ -279,18 +289,23 @@ export default function WorkspaceSidebar(props: {
 
   const contextShortcut = (event: KeyboardEvent, entry?: WorkspaceEntry) => {
     if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) showContext(event, entry)
+    if (event.key === 'F2' && entry && entry.accessible !== false) {
+      event.preventDefault()
+      setRenaming(entry.path)
+    }
   }
 
   const actionsFor = ({ entry, trigger }: SidebarContext) => {
     const actions: SidebarAction[] = []
-    const folder = entry?.directory ? entry.path : entry ? ancestors(root, entry.path).at(-1) ?? root : root
+    const after = entry && !entry.directory ? entry.path : undefined
+    const folder = entry?.directory ? entry.path : after ? ancestors(root, after).at(-1) ?? root : root
     if (entry && !entry.directory && entry.accessible !== false) {
       const label = entry.markdown ? '打开此文档' : '预览'
       actions.push({ label, run: () => props.onOpen(entry) })
     }
     if (folder) {
       actions.push(
-        { label: '新建文件…', run: () => beginCreation(folder, false, trigger) },
+        { label: '新建文件…', run: () => beginCreation(folder, false, trigger, after) },
         { label: '新建文件夹…', run: () => beginCreation(folder, true, trigger) },
       )
     }
@@ -319,7 +334,10 @@ export default function WorkspaceSidebar(props: {
     } })
     actions.push(
       { label: '打开文件夹…', run: props.onOpenWorkspace, separator: actions.length > 0 },
-      { label: '打开文件…', run: () => props.onOpenFile(folder) },
+      { label: '打开文件…', run: async () => {
+        const path = await props.onOpenFile(folder || undefined)
+        if (path && folder) placeFile(folder, path, after)
+      } },
     )
     if (root && !entry) actions.push({ label: '刷新文件夹', run: refresh }, { label: '关闭文件夹', run: props.onClose })
     if (!entry && props.onOpenDemo) actions.push({ label: '打开调试样例', run: props.onOpenDemo })
@@ -400,7 +418,7 @@ export default function WorkspaceSidebar(props: {
     }
     if (moving() || event.button !== 0 || event.pointerType === 'touch') return
     if (entry.accessible === false) return
-    if ((event.target as Element).closest('.workspace-row-action, .filename-rename')) return
+    if (renaming() === entry.path || (event.target as Element).closest('.workspace-row-action')) return
     press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, row: event.currentTarget as HTMLElement, entry }
   }
 
@@ -511,15 +529,29 @@ export default function WorkspaceSidebar(props: {
     )
   }
 
-  const Rows = (rows: { path: string }) => (
-    <ul class="workspace-rows" data-workspace-folder={rows.path}>
-      <Show when={creation()?.folder === rows.path ? creation() : undefined} keyed>
+  const EntryIcons = ({ entry }: { entry: WorkspaceEntry }) => (
+    <>
+      <span classList={{ 'workspace-chevron': true, 'has-folder': entry.directory, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true" />
+      <span classList={{
+        'workspace-entry-icon': true,
+        'is-folder': entry.directory,
+        'is-folder-open': entry.directory && expanded().has(entry.path),
+        'is-document': entry.markdown,
+      }} aria-hidden="true" />
+    </>
+  )
+
+  const Rows = (rows: { path: string }) => {
+    const entries = createMemo(() => orderedEntries(rows.path))
+    const draft = () => creation()?.folder === rows.path ? creation() : undefined
+    return <ul class="workspace-rows" data-workspace-folder={rows.path}>
+      <Show when={!draft()?.after || !entries().some((entry) => entry.path === draft()?.after) ? draft() : undefined} keyed>
         {(draft) => <CreateRow draft={draft} />}
       </Show>
-      <For each={orderedEntries(rows.path)} fallback={
+      <For each={entries()} fallback={
         <Show when={creation()?.folder !== rows.path}><li><DirectoryStatus path={rows.path} empty="空文件夹" /></li></Show>
       }>
-        {(entry) => (
+        {(entry) => (<>
           <li classList={{
             'workspace-drop-before': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'before',
             'workspace-drop-after': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'after',
@@ -538,8 +570,11 @@ export default function WorkspaceSidebar(props: {
               onKeyDown={(event) => contextShortcut(event, entry)}
             >
               <Show when={renaming() !== entry.path} fallback={
-                <NameField name={entry.name} directory={entry.directory} onRename={(stem) => rename(entry, stem)}
-                  onClose={() => setRenaming((current) => current === entry.path ? undefined : current)} />
+                <div class="workspace-row-rename">
+                  <EntryIcons entry={entry} />
+                  <NameField name={entry.name} directory={entry.directory} onRename={(stem) => rename(entry, stem)}
+                    onClose={() => setRenaming((current) => current === entry.path ? undefined : current)} />
+                </div>
               }>
                 <button
                   type="button"
@@ -549,15 +584,14 @@ export default function WorkspaceSidebar(props: {
                   aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
                   aria-current={!entry.directory && props.active === entry.path ? 'page' : undefined}
                   aria-busy={props.pending === entry.path || undefined}
-                  onClick={() => { if (entry.directory) toggle(entry.path); else props.onOpen(entry) }}
+                  onClick={(event) => {
+                    if (event.detail > 1) return
+                    if (entry.directory) toggle(entry.path)
+                    else props.onOpen(entry)
+                  }}
+                  onDblClick={() => setRenaming(entry.path)}
                 >
-                  <span classList={{ 'workspace-chevron': true, 'has-folder': entry.directory, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true" />
-                  <span classList={{
-                    'workspace-entry-icon': true,
-                    'is-folder': entry.directory,
-                    'is-folder-open': entry.directory && expanded().has(entry.path),
-                    'is-document': entry.markdown,
-                  }} aria-hidden="true" />
+                  <EntryIcons entry={entry} />
                   <span class="workspace-entry-name">{props.displayName?.(entry) ?? entry.name}</span>
                 </button>
               </Show>
@@ -565,17 +599,20 @@ export default function WorkspaceSidebar(props: {
                 <button
                   type="button" class="workspace-row-action" title="更多操作" aria-haspopup="menu"
                   aria-label={`${entry.name} 的操作`} onClick={(event) => showContext(event, entry)}
-                >…</button>
+                />
               </Show>
             </div>
             <Show when={entry.directory}>
               <FolderBranch path={entry.path} />
             </Show>
           </li>
-        )}
+          <Show when={draft()?.after === entry.path ? draft() : undefined} keyed>
+            {(draft) => <CreateRow draft={draft} />}
+          </Show>
+        </>)}
       </For>
     </ul>
-  )
+  }
 
   const MoveDialog = (dialogProps: { entry: WorkspaceEntry }) => {
     let dialog!: HTMLDialogElement
@@ -638,14 +675,10 @@ export default function WorkspaceSidebar(props: {
       setPending(true)
       setIssue(undefined)
       try {
-        await props.onCreate(draft.folder, name, draft.directory)
+        await props.onCreate(draft.folder, name, draft.directory, (entry) => {
+          placeFile(draft.folder, entry.path, draft.after)
+        })
         if (disposed) return
-        const currentOrder = orders()
-        if (currentOrder[draft.folder]) {
-          const updated = { ...currentOrder }
-          delete updated[draft.folder]
-          saveOrders(updated)
-        }
         setCreation((current) => current === draft ? undefined : current)
         if (draft.directory) draft.trigger.focus({ preventScroll: true })
       } catch (err) {
@@ -664,6 +697,11 @@ export default function WorkspaceSidebar(props: {
           <span class="workspace-entry-icon" classList={{ 'is-folder': draft.directory, 'is-document': !draft.directory }} aria-hidden="true" />
           <input ref={field} aria-label={label} placeholder={draft.directory ? label : '文件名.md'}
             aria-invalid={!!issue()} readOnly={pending()} onInput={() => setIssue(undefined)}
+            onBlur={() => {
+              if (!draft.directory && !pending() && !field.value.trim()) {
+                setCreation((current) => current === draft ? undefined : current)
+              }
+            }}
             onContextMenu={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
               if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return

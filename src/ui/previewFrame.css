@@ -3,6 +3,14 @@
 html, body, #viewer { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var(--ob-font-sans); }
 
+#viewer {
+  /* Match the DOCX preview's outer padding and page spacing. */
+  --ob-office-top: 24px;
+  --ob-office-inline: 14px;
+  --ob-office-bottom: 40px;
+  --ob-office-page-gap: 24px;
+}
+
 .file-viewer-loading,
 .file-viewer-web-source-status[data-file-viewer-source-state='loading'],
 .pdf-state:not(.pdf-state--error),
@@ -36,9 +44,7 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
 #viewer .file-viewer-web-content,
 #viewer .image-viewer,
 #viewer .excel-wrapper .btn-group,
-#viewer .pdf-wrapper,
-#viewer .pdf-page-list,
-#viewer .pdf-outline-list {
+#viewer :is(.pdf-wrapper, .pdf-outline-list) {
   scrollbar-color: var(--ob-scrollbar) transparent;
   scrollbar-width: thin;
 }
@@ -52,7 +58,7 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
 }
 
 #viewer .excel-wrapper .table-host {
-  inset: 12px 12px 0;
+  inset: var(--ob-office-top) var(--ob-office-inline) 0;
   transform: translateX(var(--ob-sheet-inset, 0));
 }
 
@@ -66,7 +72,7 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
 #viewer .excel-wrapper .toolbar {
   min-height: 40px;
   gap: 8px;
-  padding: 5px 10px;
+  padding: 5px var(--ob-office-inline);
   background: var(--ob-bg-sidebar);
   border-color: var(--ob-border);
 }
@@ -103,135 +109,213 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   font-variant-numeric: tabular-nums;
 }
 
-/* PDF also draws its own toolbar and navigation panel inside the shared shell. */
-#viewer .pdf-shell,
-#viewer .pdf-wrapper,
-#viewer .pptx-viewer-shell,
-#viewer .ppt-binary-shell {
+#viewer :is(.pdf-shell, .pdf-wrapper, .pptx-viewer-shell, .ppt-binary-shell) {
   background: var(--ob-bg-sidebar);
   color: var(--ob-text);
 }
 
 @media screen {
-  #viewer :is(.pptx-viewer-shell, .ppt-binary-shell) {
-    max-inline-size: calc(var(--ob-content-width) + 2 * var(--ob-page-padding-inline));
-    margin-inline: auto;
-    padding-inline: var(--ob-page-padding-inline);
+  #viewer .docx-fit-viewer .docx-wrapper {
+    padding: var(--ob-office-top) var(--ob-office-inline) var(--ob-office-bottom) !important;
   }
-}
 
-#viewer .pdf-shell {
-  --ob-pdf-top-inset: 18px;
-  --ob-pdf-toggle-height: 26px;
-}
+  #viewer :is(.docx-page-frame, .docx-flow-frame) {
+    margin-block-end: var(--ob-office-page-gap);
+  }
 
-#viewer .pdf-nav-pane,
-#viewer .pdf-nav-head,
-#viewer .pdf-nav-tabs {
-  background: var(--ob-bg-sidebar);
-  border-color: var(--ob-border);
-  color: var(--ob-text-secondary);
-  box-shadow: none;
-}
+  #viewer :is(.docx-page-frame, .docx-flow-frame):last-child {
+    margin-block-end: 0;
+  }
 
-#viewer .pdf-toolbar {
-  position: absolute;
-  z-index: 4;
-  inset-block-start: var(--ob-pdf-top-inset);
-  inset-inline-end: 12px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  #viewer .msdoc-stage {
+    gap: var(--ob-office-page-gap);
+    padding: var(--ob-office-top) var(--ob-office-inline) var(--ob-office-bottom);
+  }
+
+  #viewer :is(.pptx-viewer-shell, .ppt-binary-shell) {
+    padding: var(--ob-office-top) var(--ob-office-inline) var(--ob-office-bottom);
+  }
+
+  #viewer .pptx-viewer-shell {
+    max-inline-size: calc(var(--ob-content-width) + 2 * var(--ob-office-inline));
+    margin-inline: auto;
+  }
+
+  #viewer .ppt-binary-slides {
+    gap: var(--ob-office-page-gap);
+  }
+
+  #viewer .flyfish-pptx-content {
+    --ob-slide-gap: calc(var(--ob-office-page-gap) / var(--ob-slide-scale, 1));
+  }
+
+  #viewer .flyfish-pptx-content > .slide {
+    margin-block-end: var(--ob-slide-gap);
+  }
+
+  #viewer .flyfish-pptx-content > .slide:last-child {
+    margin-block-end: 0;
+  }
+
+  /* Keep the renderer's 50px allowance inside every virtual slot, including unloaded ones. */
+  #viewer .flyfish-pptx-slide-slot {
+    margin-block-end: calc(var(--ob-slide-gap) - 50px);
+  }
 }
 
 #viewer .pdfViewer {
-  padding-block-start: var(--ob-pdf-top-inset);
-}
-
-#viewer .pdf-toolbar > .pdf-icon-button {
-  background: var(--ob-bg-overlay);
-}
-
-#viewer .pdf-toolbar > .pdf-icon-button:is(:hover, [aria-pressed='true']) {
-  background: var(--ob-bg-active);
-}
-
-#viewer .pdf-panel-icon::before {
-  left: auto;
-  right: 4px;
-}
-
-#viewer .pdf-nav-pane {
-  border-right: 0;
-  border-left: 1px solid var(--ob-border);
-}
-
-#viewer .pdf-nav-head {
-  height: calc(2 * var(--ob-pdf-top-inset) + var(--ob-pdf-toggle-height));
-  padding-inline-end: 52px;
-}
-
-@media (width > 720px) {
-  #viewer .pdf-shell:not(.pdf-shell--nav-hidden) .pdf-content {
-    grid-template-columns: minmax(0, 1fr) clamp(148px, 22%, 220px);
-  }
-
-  #viewer .pdf-viewport { grid-area: 1 / 1; }
-  #viewer .pdf-nav-pane { grid-area: 1 / 2; }
-}
-
-@media (max-width: 720px) {
-  #viewer .pdf-shell { --ob-pdf-top-inset: 12px; }
-
-  #viewer .pdf-nav-pane {
-    left: auto;
-    right: 0;
-  }
-}
-
-#viewer .pdf-icon-button,
-#viewer .pdf-nav-head strong,
-#viewer .pdf-nav-tabs button,
-#viewer .pdf-outline-button {
-  color: var(--ob-text);
-}
-
-#viewer .pdf-icon-button {
-  height: var(--ob-pdf-toggle-height);
-  border-radius: 5px;
-}
-
-#viewer .pdf-page-button,
-#viewer .pdf-page-thumb,
-#viewer .pdf-outline-empty,
-#viewer .pdf-state {
-  border-color: var(--ob-border);
-  background: var(--ob-bg-overlay);
-  color: var(--ob-text-secondary);
-}
-
-#viewer .pdf-icon-button:hover:not(:disabled),
-#viewer .pdf-nav-tabs button:hover,
-#viewer .pdf-page-button:hover,
-#viewer .pdf-outline-button:hover {
-  background: var(--ob-bg-hover);
-  border-color: transparent;
-  color: var(--ob-text);
-}
-
-#viewer .pdf-icon-button--active,
-#viewer .pdf-nav-tabs button.active,
-#viewer .pdf-page-button--active {
-  background: var(--ob-bg-active);
-  border-color: transparent;
-  color: var(--ob-text);
-  box-shadow: none;
+  --page-margin: 0 auto var(--ob-office-page-gap);
+  --page-border: 0;
+  --page-border-image: none;
+  padding-block: var(--ob-office-top) var(--ob-office-bottom);
 }
 
 #viewer .pdfViewer .page {
-  box-shadow: 0 0 0 1px var(--ob-border);
+  box-shadow: none;
+}
+
+#viewer .pdfViewer .page:last-child {
+  margin-block-end: 0;
+}
+
+#viewer .pdf-shell:not(.pdf-shell--nav-hidden) .pdf-content {
+  grid-template-columns: minmax(0, 1fr) clamp(min(132px, 40%), var(--ob-pdf-outline-width, min(28%, 236px)), 60%);
+}
+
+#viewer .pdf-viewport { grid-area: 1 / 1; }
+
+#viewer .pdf-nav-pane:not([hidden]) {
+  grid-area: 1 / 2;
+  position: static;
+  width: auto;
+  border: 0;
+  border-inline-start: 1px solid var(--ob-border);
+  background: var(--ob-bg-sidebar);
+  box-shadow: none;
+}
+
+#viewer .pdf-outline-resize {
+  position: relative;
+  z-index: 1;
+  grid-area: 1 / 2;
+  justify-self: start;
+  inline-size: 9px;
+  margin-inline-start: -4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+#viewer .pdf-outline-resize::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 4px;
+  inline-size: 2px;
+  background: var(--ob-text-secondary);
+  opacity: 0;
+  content: '';
+}
+
+#viewer .pdf-outline-resize:is(:hover, :focus-visible, .is-resizing)::before { opacity: 1; }
+#viewer .pdf-shell--nav-hidden .pdf-outline-resize { display: none; }
+
+#viewer .pdf-nav-head {
+  flex: none;
+  block-size: 30px;
+  padding-inline: 12px;
+  border-block-end: 1px solid var(--ob-border);
+  color: var(--ob-text-secondary);
+  font-size: 12px;
+}
+
+#viewer .pdf-nav-head strong {
+  color: inherit;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+#viewer :is(.pdf-nav-tabs, .pdf-page-list) { display: none; }
+
+#viewer .pdf-outline-list {
+  gap: 1px;
+  padding: 5px 8px;
+}
+
+#viewer .pdf-outline-button {
+  min-block-size: 29px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ob-text);
+  background: transparent;
+  box-shadow: none;
+  font: 13px / 1.5 var(--ob-font-sans);
+  text-align: start;
+  --ob-outline-indent: 14px;
+  --ob-outline-inset: calc(var(--outline-depth) * var(--ob-outline-indent));
+  position: relative;
+  grid-template-columns: 14px minmax(0, 1fr);
+  padding: 4px 8px;
+  padding-inline-start: calc(8px + var(--ob-outline-inset));
+}
+
+#viewer .pdf-outline-button::before {
+  position: absolute;
+  inset-block: 0 -1px;
+  inset-inline-start: 12px;
+  inline-size: var(--ob-outline-inset);
+  background: repeating-linear-gradient(to right, var(--ob-border) 0 1px, transparent 1px var(--ob-outline-indent));
+  pointer-events: none;
+  content: '';
+}
+
+#viewer .pdf-outline-button:has(.pdf-outline-toggle:not(.pdf-outline-toggle--empty)) {
+  font-weight: 600;
+}
+
+#viewer .pdf-outline-title {
+  font: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#viewer .pdf-outline-toggle {
+  inline-size: 14px;
+  block-size: 100%;
+  color: var(--ob-text-secondary);
+}
+
+#viewer .pdf-outline-toggle::before {
+  inset: calc(50% - 4px) auto auto 2px;
+  inline-size: 0;
+  block-size: 0;
+  border: 0;
+  border-block: 4px solid transparent;
+  border-inline-start: 5px solid currentColor;
+  transform: none;
+}
+
+#viewer .pdf-outline-toggle--open::before { transform: rotate(90deg); }
+
+#viewer .pdf-outline-empty {
+  margin: 0;
+  padding: 5px 8px;
+  border: 0;
+  color: var(--ob-text-secondary);
+  background: transparent;
+  text-align: start;
+}
+
+#viewer .pdf-outline-button:hover { background: var(--ob-bg-hover); }
+
+#viewer .pdf-outline-button:focus-visible {
+  outline: 1px solid var(--ob-text-secondary);
+  outline-offset: -1px;
+}
+
+#viewer .pdf-state--error {
+  border-color: var(--ob-border);
+  background: var(--ob-bg-overlay);
+  color: var(--ob-text-secondary);
 }
 
 #viewer .code-viewer {
@@ -245,14 +329,14 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   --code-accent-soft: var(--ob-bg-hover);
 }
 
-#viewer .pdf-toolbar-group,
 #viewer .pptx-slideshow-button,
 #viewer .code-format-status:empty {
   display: none;
 }
 
 #viewer.preview-plain-text .code-viewer {
-  padding: var(--ob-page-padding-block) var(--ob-page-padding-inline) 48px;
+  padding: calc(var(--ob-page-padding-block) / 2 + var(--ob-block-padding))
+    var(--ob-page-padding-inline) 48px;
 }
 
 #viewer.preview-plain-text :is(.code-area, .code-virtual-scroll) {
@@ -266,55 +350,26 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   padding-inline: 0;
 }
 
-#viewer :is(.image-stage, .tiff-stage) img {
-  cursor: default;
+#viewer.preview-plain-text :is(.code-area code, .code-virtual-line) {
+  font: var(--ob-font-size) / var(--ob-line-height) var(--ob-font-sans);
 }
 
-#viewer :is(.image-toolbar, .tiff-toolbar) {
-  background: var(--ob-bg-overlay);
-  border-color: var(--ob-border);
-  color: var(--ob-text);
-  border-radius: 8px;
-  box-shadow: none;
-  font-family: var(--ob-font-sans);
+#viewer.preview-plain-text .plain-text-paragraph-gap {
+  display: block;
+  block-size: calc(2 * (var(--ob-block-padding) + var(--ob-block-margin)) + var(--ob-extra-text-lines, 0) * 1lh);
+  overflow: hidden;
 }
 
-#viewer :is(.image-toolbar, .tiff-toolbar) button {
-  color: var(--ob-text);
-}
-
-.image-zoom-controls {
-  display: flex;
-  align-items: center;
-  border-inline-start: 1px solid var(--ob-border);
-  padding-inline-start: 4px;
-}
-
-#viewer :is(.image-toolbar, .tiff-toolbar) .image-zoom-meter {
-  inline-size: auto;
-  min-inline-size: 3.75em;
-  padding-inline: 6px;
-  font: 600 12px var(--ob-font-sans);
-  font-variant-numeric: tabular-nums;
-}
-
-#viewer :is(.image-toolbar, .tiff-toolbar) :is(.image-rotation-meter, .tiff-rotation-meter),
-#viewer :is(.image-toolbar, .tiff-toolbar) > button:has(+ :is(.image-rotation-meter, .tiff-rotation-meter)) {
+#viewer.preview-image :is(.image-toolbar, .tiff-toolbar) {
   display: none;
 }
 
-#viewer .tiff-page-meter {
-  color: var(--ob-text-secondary);
+#viewer.preview-image :is(.image-stage, .tiff-stage) {
+  padding: 12px;
 }
 
-#viewer :is(.image-toolbar, .tiff-toolbar) button:hover {
-  background: var(--ob-bg-hover);
-  border-color: var(--ob-border);
-  color: var(--ob-text);
-}
-
-#viewer :is(.image-toolbar, .tiff-toolbar) button:focus-visible {
-  outline: 2px solid var(--ob-text-secondary);
+#viewer.preview-image :is(.image-stage, .tiff-stage) img {
+  cursor: default;
 }
 
 #viewer :is(.fv-audio-viewer, .fv-video-viewer, .epub-stage, .umd-stage, .drawing-viewer,

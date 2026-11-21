@@ -2,7 +2,7 @@ import { closeHistory } from '@tiptap/pm/history'
 import { Selection, TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 
-function isDisplayMath(node: import('@tiptap/pm/model').Node) {
+export function isDisplayMath(node: import('@tiptap/pm/model').Node) {
   return node.type.name === 'paragraph' && node.childCount === 1
     && node.firstChild?.type.name === 'math' && node.firstChild.attrs.display
 }

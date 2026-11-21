@@ -3,6 +3,10 @@
   --ob-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display',
     'Segoe UI', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
     'Apple Color Emoji', Arial, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --ob-font-size: 16px;
+  --ob-line-height: 1.5;
+  --ob-block-padding: 3px;
+  --ob-block-margin: 1px;
   --ob-content-width: 708px;
   --ob-page-padding-block: 32px;
   --ob-page-padding-inline: 40px;
@@ -20,7 +24,7 @@
 @media (max-width: 600px) {
   :root {
     --ob-page-padding-block: 20px;
-    --ob-page-padding-inline: clamp(14px, 4vw, 22px);
+    --ob-page-padding-inline: clamp(14px, calc(var(--ob-page-viewport-width, 100vw) * .04), 22px);
   }
 }
 

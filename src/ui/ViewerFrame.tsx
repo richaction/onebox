@@ -1,12 +1,20 @@
 import { convertFileSrc } from '@tauri-apps/api/core'
-import { createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js'
 import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
+import PreviewLoading from './PreviewLoading'
+import type { ImagePreviewAction, ImagePreviewState } from './previewImage'
 
-const LOADING_DELAY_MS = 300
-
-export default function ViewerFrame(props: { root?: string; entry: WorkspaceEntry; onClose: () => void }) {
+export default function ViewerFrame(props: {
+  root?: string
+  entry: WorkspaceEntry
+  onClose: () => void
+  onSettled: (ready: boolean) => void
+  imageCommand?: { action: ImagePreviewAction }
+  onImageState: (state?: ImagePreviewState) => void
+  pdfOutlineOpen: boolean
+}) {
   let frame!: HTMLIFrameElement
-  const [loading, setLoading] = createSignal(false)
+  const [loading, setLoading] = createSignal(true)
   const [visible, setVisible] = createSignal(false)
   const [error, setError] = createSignal('')
   let disposed = false
@@ -16,14 +24,22 @@ export default function ViewerFrame(props: { root?: string; entry: WorkspaceEntr
   let renderName = props.entry.name
   let temporaryPath: string | undefined
 
+  createEffect(on(() => props.imageCommand, (command) => {
+    if (command && visible()) frame.contentWindow?.postMessage({ type: 'onebox-preview-image-command', ...command }, '*')
+  }, { defer: true }))
+
+  createEffect(on(() => props.pdfOutlineOpen, (open) => {
+    if (visible() && /\.pdf$/iu.test(renderName)) frame.contentWindow?.postMessage({ type: 'onebox-preview-pdf-outline', open }, '*')
+  }, { defer: true }))
+
   onMount(() => {
-    const hint = setTimeout(() => setLoading(true), LOADING_DELAY_MS)
     const timeout = setTimeout(() => finish('预览未能加载'), 30000)
     const finish = (message = '') => {
-      clearTimeout(hint)
       clearTimeout(timeout)
       setLoading(false)
       setError(message)
+      setVisible(!message)
+      props.onSettled(!message)
     }
     const send = () => {
       if (disposed || !connected || !url || sent) return
@@ -32,16 +48,20 @@ export default function ViewerFrame(props: { root?: string; entry: WorkspaceEntr
     }
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.contentWindow) return
+      if (event.data?.type === 'onebox-preview-image-state') {
+        props.onImageState(event.data.state)
+        return
+      }
       switch (event.data) {
         case 'onebox-preview-ready':
           connected = true
           send()
           break
         case 'onebox-preview-rendered':
-          setVisible(true)
           finish()
           break
         case 'onebox-preview-error':
+          props.onImageState()
           finish('无法预览此文件。可以使用「打开方式」。')
           break
         case 'onebox-preview-close':
@@ -71,7 +91,6 @@ export default function ViewerFrame(props: { root?: string; entry: WorkspaceEntr
     })
     onCleanup(() => {
       disposed = true
-      clearTimeout(hint)
       clearTimeout(timeout)
       window.removeEventListener('message', receive)
       releaseTemporary()
@@ -79,14 +98,14 @@ export default function ViewerFrame(props: { root?: string; entry: WorkspaceEntr
   })
 
   return (
-    <div class="preview-surface">
+    <div class="preview-surface" classList={{ 'preview-surface-text': /\.txt$/iu.test(props.entry.name) }}>
       <iframe ref={frame} title={`只读预览：${props.entry.name}`}
         classList={{ 'preview-frame-ready': visible() }} inert={!visible()}
         src={`${import.meta.env.BASE_URL}preview-frame.html`} sandbox="allow-scripts allow-same-origin" />
-      <Show when={loading() || error()}>
+      <Show when={loading()}><PreviewLoading label="正在打开预览…" /></Show>
+      <Show when={error()}>
         <div class="preview-status" role="status">
-          <Show when={!error()}><span class="preview-spinner" aria-hidden="true" /></Show>
-          <p>{error() || '正在打开预览…'}</p>
+          <p>{error()}</p>
         </div>
       </Show>
     </div>

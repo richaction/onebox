@@ -7,6 +7,7 @@ export interface DevelopmentSnapshot {
   readonly: boolean
   workspace?: WorkspaceRoot
   preview?: PreviewEntry
+  emptyAfterDeletion?: boolean
   sidebarVisible: boolean
   savedDoc?: Node
   writer?: Promise<boolean>

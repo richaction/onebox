@@ -15,6 +15,7 @@ import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type PreviewEntry, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
+import PreviewLoading, { createLoadingHint } from './ui/PreviewLoading'
 import FileName, { splitName, type TitleEdit } from './ui/FileName'
 import WorkspaceSidebar from './ui/WorkspaceSidebar'
 import WorkspaceResizeHandle, { initialWorkspaceWidth } from './ui/WorkspaceResizeHandle'
@@ -58,7 +59,7 @@ export default function App() {
   let openingPath: string | undefined
   let disposed = false
   let developmentPreparing: string | undefined
-  let loadBefore: { path: string | null; state: EditorState; readonly: boolean; scrollTop: number } | undefined
+  let loadBefore: { path: string | null; state: EditorState; readonly: boolean; emptyAfterDeletion: boolean; scrollTop: number } | undefined
   if (writer) {
     const pending = writer
     void pending.then(() => { if (writer === pending) writer = undefined })
@@ -70,7 +71,9 @@ export default function App() {
   const [saving, setSaving] = createSignal(false)
   const [workspace, setWorkspace] = createSignal<WorkspaceRoot | undefined>(restored?.workspace)
   const [preview, setPreview] = createSignal<PreviewEntry | undefined>(restored?.preview)
+  const [emptyAfterDeletion, setEmptyAfterDeletion] = createSignal(restored?.emptyAfterDeletion ?? false)
   const [pendingOpen, setPendingOpen] = createSignal<{ entry: WorkspaceEntry; root: string }>()
+  const [pickedDocument, setPickedDocument] = createSignal<WorkspaceEntry>()
   const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop && !restored)
   const [sidebarVisible, setSidebarVisible] = createSignal(restored?.sidebarVisible ?? true)
   const [sidebarWidth, setSidebarWidth] = createSignal(initialWorkspaceWidth())
@@ -84,7 +87,12 @@ export default function App() {
   const [failure, setFailure] = createSignal<Failure>()
   const [titleDraft, setTitleDraft] = createSignal<{ entry: WorkspaceEntry; stem: string; error?: string }>()
   const [workspaceRename, setWorkspaceRename] = createSignal<{ source: string; destination: string; name: string }>()
-  const activeFile = () => preview()?.path ?? path()
+  const activeFile = () => preview()?.path ?? (emptyAfterDeletion() ? null : path())
+  const openingEntry = () => {
+    const entry = pendingOpen()?.entry ?? pickedDocument()
+    return entry?.path === activeFile() ? undefined : entry
+  }
+  const loadingStatus = createLoadingHint(() => !!openingEntry() || loading())
   createEffect(() => {
     const draft = titleDraft()
     if (draft?.error && draft.entry.path !== activeFile()) setTitleDraft(undefined)
@@ -97,7 +105,7 @@ export default function App() {
     setSidebarVisible((visible) => !visible)
   }
 
-  const editorIsEditable = () => !developmentPreparing && (!desktop || (!!path() && !readonly()))
+  const editorIsEditable = () => !developmentPreparing && !emptyAfterDeletion() && (!desktop || (!!path() && !readonly()))
 
   const clearSaveTimer = () => {
     clearTimeout(timer)
@@ -171,7 +179,9 @@ export default function App() {
     const previous = view.state
     const previousPath = path()
     const previousPreview = preview()
-    loadBefore = { path: previousPath, state: previous, readonly: readonly(), scrollTop: view.dom.closest('.editor-scroll')?.scrollTop ?? 0 }
+    const previousEmpty = emptyAfterDeletion()
+    loadBefore = { path: previousPath, state: previous, readonly: readonly(), emptyAfterDeletion: previousEmpty,
+      scrollTop: view.dom.closest('.editor-scroll')?.scrollTop ?? 0 }
     let session: number | undefined
     try {
       const start = await desktopDocuments.open(picked)
@@ -180,7 +190,10 @@ export default function App() {
       setPath(picked)
       editor.loadBlocks(start.blocks, start.total >= 4_000)
       editor.refreshImages()
-      if (reveal) setPreview(undefined)
+      if (reveal) batch(() => {
+        setPreview(undefined)
+        setEmptyAfterDeletion(false)
+      })
       let count = start.blocks.length
       let limit = 192
       while (count < start.total) {
@@ -190,7 +203,10 @@ export default function App() {
         if (cancelLoad || disposed) {
           if (disposed) return false
           setPath(previousPath)
-          if (reveal) setPreview(previousPreview)
+          if (reveal) batch(() => {
+            setPreview(previousPreview)
+            setEmptyAfterDeletion(previousEmpty)
+          })
           view.updateState(previous)
           editor.refreshImages()
           return false
@@ -208,7 +224,10 @@ export default function App() {
     } catch (error) {
       if (disposed) return false
       setPath(previousPath)
-      if (reveal) setPreview(previousPreview)
+      if (reveal) batch(() => {
+        setPreview(previousPreview)
+        setEmptyAfterDeletion(previousEmpty)
+      })
       view.updateState(previous)
       editor.refreshImages()
       throw error
@@ -219,32 +238,44 @@ export default function App() {
     }
   }
 
-  const openFile = (folder?: string) => runFileAction(async (editor) => {
-    const picked = await open({ multiple: false, defaultPath: folder })
-    if (typeof picked !== 'string') return true
-    const root = workspace()?.root
-    const entry = fileEntry(picked)
-    if (folder && root) {
-      const separator = folder.startsWith('/') ? '/' : '\\'
-      const parent = picked.slice(0, picked.lastIndexOf(separator) + 1)
-      const destination = folder.endsWith(separator) ? folder : folder + separator
-      if (parent !== destination) {
-        if (picked === path() && !await flush()) return false
-        return importWorkspaceFiles(root, folder, [picked], true)
+  const openFile = async (folder?: string) => {
+    let openedPath: string | undefined
+    await runFileAction(async (editor) => {
+      const picked = await open({ multiple: false, defaultPath: folder })
+      if (typeof picked !== 'string') return true
+      const root = workspace()?.root
+      const entry = fileEntry(picked)
+      if (folder && root) {
+        const separator = folder.startsWith('/') ? '/' : '\\'
+        const parent = picked.slice(0, picked.lastIndexOf(separator) + 1)
+        const destination = folder.endsWith(separator) ? folder : folder + separator
+        if (parent !== destination) {
+          if (picked === path() && !await flush()) return false
+          const [imported] = await importWorkspaceFiles(root, folder, [picked], true)
+          openedPath = imported
+          return !!imported
+        }
       }
-    }
-    if (entry.markdown) {
-      if (!await readDocument(editor, picked)) return false
-    } else {
-      setPreview({ ...entry, workspaceRoot: root && inWorkspace(picked, root) ? root : undefined })
-      setFailure(undefined)
-    }
-    if (root && inWorkspace(picked, root)) {
-      setWorkspaceReveal(picked)
-      refreshWorkspace()
-    } else setWorkspaceReveal(undefined)
-    return true
-  }, '打开失败')
+      if (entry.markdown) {
+        setPickedDocument(entry)
+        try {
+          if (!await readDocument(editor, picked)) return false
+        } finally {
+          setPickedDocument(undefined)
+        }
+      } else {
+        setPreview({ ...entry, workspaceRoot: root && inWorkspace(picked, root) ? root : undefined })
+        setFailure(undefined)
+      }
+      if (root && inWorkspace(picked, root)) {
+        setWorkspaceReveal(picked)
+        refreshWorkspace()
+        openedPath = picked
+      } else setWorkspaceReveal(undefined)
+      return true
+    }, '打开失败')
+    return openedPath
+  }
 
   const fileEntry = (file: string): WorkspaceEntry => ({
     path: file, name: nameOf(file), directory: false, markdown: /\.(md|markdown)$/iu.test(file),
@@ -284,7 +315,7 @@ export default function App() {
     return guide ? readDocument(editor, guide.path) : true
   }, '读取工作区失败')
 
-  const createWorkspaceEntry = async (folder: string, name: string, directory: boolean) => {
+  const createWorkspaceEntry = async (folder: string, name: string, directory: boolean, onCreated: (entry: WorkspaceEntry) => void) => {
     const current = workspace()
     if (!current || busy) throw new Error('请先打开工作区并等待文件操作完成')
     let cause: unknown
@@ -293,6 +324,7 @@ export default function App() {
       try {
         if (!await flush()) throw new Error('当前文档保存失败')
         const entry = await desktopWorkspace.create(current.root, folder, name, directory)
+        onCreated(entry)
         setWorkspaceReveal(entry.path)
         refreshWorkspace()
         setFailure(undefined)
@@ -323,17 +355,21 @@ export default function App() {
       try {
         if (contains(path()) && !await flush()) throw new Error('当前文档保存失败')
         await desktopWorkspace.trash(current.root, entry.path)
-        if (contains(path())) {
-          setPath(null)
-          setReadonly(false)
-          editor.loadMarkdown('')
-          savedDoc = editor.editor.state.doc
-        }
-        if (contains(preview()?.path)) setPreview(undefined)
-        if (contains(pendingOpen()?.entry.path)) setPendingOpen(undefined)
-        if (contains(workspaceReveal())) setWorkspaceReveal(undefined)
-        refreshWorkspace()
-        setFailure(undefined)
+        const removingActive = contains(activeFile())
+        batch(() => {
+          if (contains(path())) {
+            setPath(null)
+            setReadonly(false)
+            editor.loadMarkdown('')
+            savedDoc = editor.editor.state.doc
+          }
+          if (contains(preview()?.path)) setPreview(undefined)
+          if (removingActive) setEmptyAfterDeletion(true)
+          if (contains(pendingOpen()?.entry.path)) setPendingOpen(undefined)
+          if (contains(workspaceReveal())) setWorkspaceReveal(undefined)
+          refreshWorkspace()
+          setFailure(undefined)
+        })
         return true
       } catch (err) {
         cause = err
@@ -346,10 +382,12 @@ export default function App() {
   const openWorkspaceEntry = (entry: WorkspaceEntry) => {
     const current = workspace()
     if (!current) return
-    if (workspaceReveal() !== entry.path) setWorkspaceReveal(undefined)
-    setPendingOpen({ entry, root: current.root })
-    if (openingPath && openingPath !== entry.path) cancelLoad = true
-    openPendingEntry()
+    batch(() => {
+      if (workspaceReveal() !== entry.path) setWorkspaceReveal(undefined)
+      setPendingOpen({ entry, root: current.root })
+      if (openingPath && openingPath !== entry.path) cancelLoad = true
+      openPendingEntry()
+    })
   }
 
   function openPendingEntry() {
@@ -365,7 +403,10 @@ export default function App() {
       cancelLoad = false
       void runFileAction(async (editor) => {
         if (path() !== entry.path) return readDocument(editor, entry.path)
-        setPreview(undefined)
+        batch(() => {
+          setPreview(undefined)
+          setEmptyAfterDeletion(false)
+        })
         setFailure(undefined)
         return true
       }, '打开失败').finally(() => {
@@ -375,7 +416,10 @@ export default function App() {
       })
     } else {
       setPendingOpen(undefined)
-      setPreview({ ...entry, workspaceRoot: root })
+      const currentPreview = preview()
+      if (currentPreview?.path !== entry.path || currentPreview.workspaceRoot !== root) {
+        setPreview({ ...entry, workspaceRoot: root })
+      }
       setFailure(undefined)
     }
   }
@@ -662,13 +706,13 @@ export default function App() {
   }
 
   const importWorkspaceFiles = async (root: string, folder: string, files: string[], openCopy = false) => {
-    if (workspaceImporting()) return false
+    if (workspaceImporting()) return []
     setWorkspaceImporting(true)
     setImportMessage(undefined)
     setFailure(undefined)
     try {
       const result = await desktopWorkspace.importFiles(root, folder, files)
-      if (workspace()?.root !== root) return false
+      if (workspace()?.root !== root) return []
       if (result.paths.length) {
         setWorkspaceReveal(result.paths[0])
         refreshWorkspace()
@@ -677,10 +721,10 @@ export default function App() {
         ? `已导入 ${result.paths.length} 项，${result.failed} 项无法导入`
         : `已导入 ${result.paths.length} 个文件`)
       if (openCopy && result.paths.length === 1) openWorkspaceEntry(fileEntry(result.paths[0]))
-      return result.paths.length > 0
+      return result.paths
     } catch {
       setFailure('导入失败')
-      return false
+      return []
     } finally {
       setWorkspaceImporting(false)
     }
@@ -734,6 +778,7 @@ export default function App() {
         break
       case 's':
         event.preventDefault()
+        if (emptyAfterDeletion() && !preview()) break
         if (event.shiftKey && path()) void transferDocument('saveAs')
         else if (!busy) void flush()
         break
@@ -882,6 +927,7 @@ export default function App() {
         path: loadBefore ? loadBefore.path : path(),
         readonly: loadBefore?.readonly ?? readonly(),
         workspace: workspace(), preview: preview(), sidebarVisible: sidebarVisible(),
+        emptyAfterDeletion: loadBefore?.emptyAfterDeletion ?? emptyAfterDeletion(),
         savedDoc, writer, editorState: state, schemaSource: schema,
         scrollTop: loadBefore?.scrollTop ?? handle?.editor.view.dom.closest('.editor-scroll')?.scrollTop ?? 0,
         focused: handle?.editor.isFocused ?? false,
@@ -940,7 +986,7 @@ export default function App() {
       active={activeFile()} readonly={!!preview() || readonly()} reveal={workspaceReveal()} revision={workspaceRevision()}
       pending={pendingOpen()?.entry.path} importTarget={importTarget()}
       displayName={displayedName} renamed={workspaceRename()}
-      onOpen={openWorkspaceEntry} onOpenFile={(folder) => void openFile(folder)} onOpenWorkspace={() => void openWorkspace()}
+      onOpen={openWorkspaceEntry} onOpenFile={openFile} onOpenWorkspace={() => void openWorkspace()}
       onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry} onTrash={trashWorkspaceEntry} onRename={renameEntry}
       onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
@@ -973,7 +1019,8 @@ export default function App() {
           <WorkspaceResizeHandle width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
         </Show>
         <div class="editor-content">
-          <div class="editor-document" inert={!!preview()} hidden={!!preview()}>
+          <div class="editor-document" inert={!!preview() || !!openingEntry() || emptyAfterDeletion()}
+            hidden={!!preview() || !!openingEntry() || emptyAfterDeletion()}>
             <Show when={path()}>
               <header class="file-preview-toolbar">
                 <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
@@ -997,7 +1044,7 @@ export default function App() {
               } : undefined}
             />
           </div>
-          <Show when={preview()}>
+          <Show when={!openingEntry() && preview()}>
             <FilePreview root={preview()?.workspaceRoot} entry={preview()}
               titleEdit={preview() && preview()?.accessible !== false ? titleEdit(preview()!) : undefined}
               onOpenExternal={(application) => {
@@ -1006,11 +1053,22 @@ export default function App() {
               }}
               onClose={() => setPreview(undefined)} />
           </Show>
+          <Show when={openingEntry()}>{(entry) => (
+            <section class="file-preview" aria-label="正在打开文件">
+              <header class="file-preview-toolbar"><FileName name={entry().name} /></header>
+              <div class="preview-surface" classList={{ 'preview-surface-text': entry().markdown || /\.txt$/iu.test(entry().name) }}>
+                <PreviewLoading label="正在打开文件…" />
+              </div>
+            </section>
+          )}</Show>
+          <Show when={emptyAfterDeletion() && !preview() && !openingEntry()}>
+            <div class="editor-empty" role="status">没有打开的文件</div>
+          </Show>
         </div>
       </div>
       <footer class="statusbar" role="status">
-        <span title={preview()?.path ?? path() ?? undefined}>{preview()?.name ?? (path() ? nameOf(path()!) : '')}</span>
-        <span>{loading() ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : workspaceImporting() ? '正在导入' : preview() || readonly() ? '只读' : ''}</span>
+        <span title={openingEntry()?.path ?? activeFile() ?? undefined}>{openingEntry()?.name ?? (activeFile() ? nameOf(activeFile()!) : '')}</span>
+        <span>{loadingStatus() && (openingEntry() || loading()) ? '正在载入' : saving() ? '正在保存' : workspaceMoving() ? '正在移动' : workspaceImporting() ? '正在导入' : activeFile() && (preview() || readonly()) ? '只读' : ''}</span>
         <span>{failure() ?? importMessage()}</span>
       </footer>
     </main>

@@ -1,7 +1,12 @@
-import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from 'solid-js'
 import { desktopWorkspace, type FileApplications, type WorkspaceEntry } from '../io/tauri'
 import ViewerFrame from './ViewerFrame'
 import FileName, { type TitleEdit } from './FileName'
+import { isImagePreview, type ImagePreviewAction, type ImagePreviewState } from './previewImage'
+
+const previewRequest = (entry: WorkspaceEntry, root?: string) => ({
+  entry, root, ready: createSignal(false), image: createSignal<ImagePreviewState>(), outline: createSignal(false),
+})
 
 function AppIcon(props: { src?: string | null }) {
   return (
@@ -23,8 +28,20 @@ export default function FilePreview(props: {
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [applications, setApplications] = createSignal<FileApplications>()
   const [applicationIcons, setApplicationIcons] = createSignal<Record<string, string>>({})
+  const [imageCommand, setImageCommand] = createSignal<{ action: ImagePreviewAction }>()
+  const requested = createMemo(() => {
+    const { entry, root } = props
+    return entry ? previewRequest(entry, root) : undefined
+  })
+  const imageState = () => requested()?.image[0]()
+  const previewReady = () => requested()?.ready[0]() ?? false
+  const pdfOutlineOpen = () => requested()?.outline[0]() ?? false
+  const setPdfOutlineOpen = (open: boolean) => requested()?.outline[1](open)
+  const imagePreview = () => isImagePreview(props.entry?.name ?? '')
+  const pdfPreview = () => /\.pdf$/iu.test(props.entry?.name ?? '')
   let openWithButton!: HTMLButtonElement
   let openWithMenu!: HTMLDivElement
+  let outlineButton: HTMLButtonElement | undefined
   createEffect(() => {
     let disposed = false
     onCleanup(() => { disposed = true })
@@ -87,11 +104,43 @@ export default function FilePreview(props: {
 
   const defaultApp = () => applications()?.items.find((app) => app.default)
   const alternatives = () => applications()?.items.filter((app) => !app.default) ?? []
+  const closePreview = () => {
+    if (!pdfOutlineOpen()) {
+      props.onClose()
+      return
+    }
+    setPdfOutlineOpen(false)
+    outlineButton?.focus()
+  }
 
   return (
     <section class="file-preview" aria-label="文件预览">
       <header class="file-preview-toolbar">
         <FileName name={props.entry?.name ?? ''} edit={props.titleEdit} />
+        <Show when={imagePreview()}>
+          <div class="file-preview-image-tools" role="group" aria-label="图片工具栏">
+            <Show when={imageState()?.pages}>{(pages) => <span class="file-preview-image-pages">{pages()}</span>}</Show>
+            <button type="button" class="file-preview-image-rotate" title="顺时针旋转" aria-label="顺时针旋转"
+              disabled={!imageState()} onClick={() => setImageCommand({ action: 'rotate' })}>↻</button>
+            <button type="button" title="缩小图片" aria-label="缩小图片" disabled={!imageState()?.canZoomOut}
+              onClick={() => setImageCommand({ action: 'zoom-out' })}>−</button>
+            <button type="button" class="file-preview-image-fit" title="适合窗口" aria-label={`适合窗口，当前缩放 ${imageState()?.label ?? '未知'}`}
+              disabled={!imageState()} onClick={() => setImageCommand({ action: 'fit' })}>{imageState()?.label ?? '适合'}</button>
+            <button type="button" title="放大图片" aria-label="放大图片" disabled={!imageState()?.canZoomIn}
+              onClick={() => setImageCommand({ action: 'zoom-in' })}>+</button>
+          </div>
+        </Show>
+        <Show when={pdfPreview()}>
+          <button type="button" ref={outlineButton} class="file-preview-outline-toggle" title="PDF 目录" aria-label="PDF 目录"
+            aria-expanded={pdfOutlineOpen()} disabled={!previewReady()} onClick={() => setPdfOutlineOpen(!pdfOutlineOpen())}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape' || !pdfOutlineOpen()) return
+              event.stopPropagation()
+              closePreview()
+            }}>
+            <span class="sidebar-toggle-symbol" aria-hidden="true" />
+          </button>
+        </Show>
         <div class="file-open-with" role="group" aria-label="打开方式">
           <button type="button" class="file-open-with-default"
             aria-label={`用${defaultApp()?.name ?? '系统默认应用'}打开`}
@@ -120,9 +169,14 @@ export default function FilePreview(props: {
           <Show when={!applications()}><span class="file-open-with-loading" role="status">正在查找其他应用…</span></Show>
         </div>
       </header>
-      <Show when={props.entry} keyed>
-        {(entry) => <ViewerFrame root={props.root} entry={entry} onClose={props.onClose} />}
-      </Show>
+      <Show when={requested()} keyed>{(frame) => (
+          <ViewerFrame root={frame.root} entry={frame.entry} onClose={closePreview}
+            onSettled={(ready) => batch(() => {
+              frame.ready[1](ready)
+              if (!ready) frame.outline[1](false)
+            })}
+            imageCommand={imageCommand()} onImageState={frame.image[1]} pdfOutlineOpen={frame.outline[0]()} />
+      )}</Show>
     </section>
   )
 }
