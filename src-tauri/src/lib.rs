@@ -88,6 +88,7 @@ pub fn run() {
             workspace::release_workspace_preview,
             workspace::workspace_entries,
             workspace::rename_workspace_entry,
+            workspace::copy_workspace_file,
             workspace::move_workspace_entry
         ]);
 

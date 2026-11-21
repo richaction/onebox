@@ -28,7 +28,7 @@ it('keeps the sidebar steady on open and remembers contextual placement after re
   const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
   const mount = () => render(() => createComponent(WorkspaceSidebar, {
     workspace: { root, entries: [file('.DS_Store'), folder, first, second] },
-    visible: true, restoring: false, get active() { return active() }, readonly: false, get revision() { return revision() },
+    visible: true, restoring: false, get active() { return active() }, get revision() { return revision() },
     onOpen: (entry) => setActive(entry.path), onOpenFile: async () => { setActive(nested.path); return nested.path }, onOpenWorkspace: noop,
     onRevealLocation: async () => {},
     onCreate: async (parent, name, _directory, onCreated) => {
@@ -39,7 +39,7 @@ it('keeps the sidebar steady on open and remembers contextual placement after re
       setActive(entry.path)
     },
     onTrash: async () => {}, onRename: async (entry) => entry.path,
-    onMove: async () => {}, onCopy: noop, onMoveDocument: noop, onClose: noop,
+    onMove: async () => {}, onPaste: async () => {}, onClose: noop,
   }), host)
   let dispose = mount()
   const names = (path: string) => [...host.querySelectorAll(`ul[data-workspace-folder="${path}"] > li > .workspace-row`)]
@@ -116,7 +116,6 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
     visible: true,
     restoring: false,
     active: null,
-    readonly: false,
     revision: 0,
     onMove,
     onCreate: async () => {},
@@ -126,8 +125,7 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
     onOpenFile: async () => undefined,
     onOpenWorkspace: noop,
     onRevealLocation: async () => {},
-    onCopy: noop,
-    onMoveDocument: noop,
+    onPaste: async () => {},
     onClose: noop,
   }), host)
   const sourceRow = host.querySelector<HTMLElement>('[data-workspace-folder="/work/source"]')!
@@ -186,7 +184,6 @@ it('uses the same menu for right click and overflow, with inline creation and co
     visible: true,
     restoring: false,
     active: null,
-    readonly: false,
     revision: 0,
     onCreate,
     onTrash,
@@ -196,8 +193,7 @@ it('uses the same menu for right click and overflow, with inline creation and co
     onOpenFile: async () => undefined,
     onOpenWorkspace: noop,
     onRevealLocation,
-    onCopy: noop,
-    onMoveDocument: noop,
+    onPaste: async () => {},
     onClose: noop,
   }), host)
   const row = host.querySelector<HTMLElement>('[data-workspace-entry]')!
@@ -230,6 +226,9 @@ it('uses the same menu for right click and overflow, with inline creation and co
     expect(onRevealLocation).toHaveBeenCalledExactlyOnceWith(entry.path)
     more.click()
     expect(rightClickLabels).toContain('复制路径')
+    expect(rightClickLabels).not.toContain('打开此文档')
+    expect(rightClickLabels).not.toContain('移动到…')
+    expect(rightClickLabels).not.toContain('复制到…')
     const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
     menuItems().find((button) => button.textContent === '复制路径')!.click()
     expect(clipboard).toHaveBeenCalledWith('/work/note.md')
@@ -283,6 +282,89 @@ it('uses the same menu for right click and overflow, with inline creation and co
     await Promise.resolve()
   } finally {
     dispose()
+    host.remove()
+  }
+})
+
+it('copies and cuts one focused file and pastes into the focused folder or root', async () => {
+  const root = '/clipboard-test'
+  const source = { path: `${root}/sample.pdf`, name: 'sample.pdf', directory: false, markdown: false }
+  const folder = { path: `${root}/target`, name: 'target', directory: true, markdown: false }
+  const nested = { ...source, path: `${folder.path}/sample.pdf` }
+  const load = vi.spyOn(desktopWorkspace, 'entries').mockResolvedValue([nested])
+  const host = document.createElement('div')
+  document.body.append(host)
+  const onOpen = vi.fn()
+  const onPaste = vi.fn(async () => {})
+  const dispose = render(() => createComponent(WorkspaceSidebar, {
+    workspace: { root, entries: [source, folder] },
+    visible: true,
+    restoring: false,
+    active: null,
+    revision: 0,
+    onOpen,
+    onPaste,
+    onRevealLocation: async () => {},
+    onMove: async () => {},
+    onCreate: async () => {},
+    onTrash: async () => {},
+    onRename: async (entry) => entry.path,
+    onOpenFile: async () => undefined,
+    onOpenWorkspace: () => {},
+    onClose: () => {},
+  }), host)
+  const row = (path: string) => host.querySelector<HTMLElement>(`[data-workspace-entry="${path}"]`)!
+  const select = (path: string) => row(path).querySelector<HTMLButtonElement>('.workspace-row-button')!.click()
+  const press = (key: string, metaKey = false) => {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ctrlKey: !metaKey, metaKey })
+    document.activeElement!.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+
+  try {
+    select(source.path)
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(source)
+    expect(press('c')).toBe(true)
+    expect(press('v')).toBe(true)
+    expect(onPaste).toHaveBeenLastCalledWith(source, root, false)
+    await Promise.resolve()
+
+    select(folder.path)
+    expect(press('v', true)).toBe(true)
+    expect(onPaste).toHaveBeenLastCalledWith(source, folder.path, false)
+    await Promise.resolve()
+
+    select(nested.path)
+    expect(press('x')).toBe(true)
+    expect(row(nested.path).classList.contains('workspace-row-cut')).toBe(true)
+    host.querySelector<HTMLElement>('.workspace-title strong')!.click()
+    onPaste.mockRejectedValueOnce(new Error('目标已存在同名文件'))
+    expect(press('v')).toBe(true)
+    await Promise.resolve()
+    expect(row(nested.path).classList.contains('workspace-row-cut')).toBe(true)
+    expect(press('v')).toBe(true)
+    expect(onPaste).toHaveBeenLastCalledWith(nested, root, true)
+    await Promise.resolve()
+    expect(row(nested.path).classList.contains('workspace-row-cut')).toBe(false)
+    expect(press('v')).toBe(false)
+
+    select(nested.path)
+    expect(press('x')).toBe(true)
+    expect(press('v')).toBe(true)
+    expect(onPaste).toHaveBeenLastCalledWith(nested, folder.path, false)
+    await Promise.resolve()
+
+    const button = row(source.path).querySelector<HTMLButtonElement>('.workspace-row-button')!
+    button.focus()
+    expect(press('c')).toBe(true)
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
+    expect(document.activeElement?.tagName).toBe('INPUT')
+    expect(press('x')).toBe(false)
+    expect(press('v')).toBe(false)
+    expect(onPaste).toHaveBeenCalledTimes(5)
+  } finally {
+    dispose()
+    load.mockRestore()
     host.remove()
   }
 })

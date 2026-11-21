@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, Write},
     path::{Component, Path, PathBuf},
 };
 use tauri::{AppHandle, Manager};
@@ -431,20 +431,74 @@ pub(crate) struct WorkspaceImport {
     failed: usize,
 }
 
+#[tauri::command]
+pub(crate) async fn copy_workspace_file(
+    app: AppHandle,
+    root: String,
+    source: String,
+    target: String,
+) -> Result<PathBuf, String> {
+    let settings = workspace_preference(&app)?;
+    let root = selected_path(&app, root)?;
+    let source = selected_path(&app, source)?;
+    let target = selected_path(&app, target)?;
+    tokio::task::spawn_blocking(move || {
+        let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+        let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+        if real_root != root || remembered_root(&settings)?.as_deref() != Some(root.as_path()) {
+            return Err("请先打开此工作区".into());
+        }
+        let source = workspace_path(&root, &real_root, &source)?;
+        let target = workspace_path(&root, &real_root, &target)?;
+        copy_entry(&source, &target)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+fn copy_entry(source: &Path, target: &Path) -> Result<PathBuf, String> {
+    if !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.is_file()) || !target.is_dir() {
+        return Err("请选择要复制的文件和目标文件夹".into());
+    }
+    let from = source.parent().ok_or("找不到上级目录")?;
+    let mut rewritten = None;
+    if from != target && document_name(source) {
+        match fs::read_to_string(source) {
+            Ok(text) => {
+                rewritten = rewrite(&text, &links(&text), |href| {
+                    rebased_link(href, from, target, |_| None)
+                })?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => {}
+            Err(err) => return Err(format!("无法读取 Markdown：{err}")),
+        }
+    }
+    copy_file_to_folder(source, target, rewritten.as_deref()).map_err(|err| format!("复制失败：{err}"))
+}
+
 fn copy_into_workspace(source: &Path, folder: &Path) -> io::Result<PathBuf> {
+    copy_file_to_folder(source, folder, None)
+}
+
+fn copy_file_to_folder(source: &Path, folder: &Path, content: Option<&str>) -> io::Result<PathBuf> {
     let name = source
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "无效文件名"))?;
-    if !fs::symlink_metadata(source)?.is_file() {
+    let metadata = fs::symlink_metadata(source)?;
+    if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "请选择普通文件",
         ));
     }
-    let mut input = File::open(source)?;
     let mut staged = tempfile::NamedTempFile::new_in(folder)?;
-    io::copy(&mut input, &mut staged)?;
+    if let Some(content) = content {
+        staged.write_all(content.as_bytes())?;
+    } else {
+        io::copy(&mut File::open(source)?, &mut staged)?;
+    }
+    staged.as_file().set_permissions(metadata.permissions())?;
     staged.as_file().sync_all()?;
     let stem = source
         .file_stem()
@@ -1050,10 +1104,17 @@ fn snapshot_tree(
     let mut pending = vec![PathBuf::new()];
     let mut copied_folders = Vec::new();
     while let Some(relative) = pending.pop() {
-        let from = root.join(&relative);
+        let resolve = |base: &Path| {
+            if relative.as_os_str().is_empty() {
+                base.to_owned()
+            } else {
+                base.join(&relative)
+            }
+        };
+        let from = resolve(root);
         let metadata = fs::symlink_metadata(&from).map_err(|err| err.to_string())?;
         let kind = metadata.file_type();
-        let to = copy_to.map(|base| base.join(&relative));
+        let to = copy_to.map(resolve);
         let entry = if kind.is_dir() {
             if let Some(to) = to {
                 fs::create_dir(&to).map_err(|err| err.to_string())?;
@@ -1512,6 +1573,39 @@ mod tests {
             "existing"
         );
         assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn copying_one_file_uses_a_free_name_and_preserves_markdown_links() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("Note.md");
+        let target = workspace.path().join("target");
+        let original = "[图](assets/image.png#detail)\r\n";
+        fs::create_dir(&target).unwrap();
+        fs::write(&source, original).unwrap();
+        fs::write(workspace.path().join("Note (2).md"), "existing").unwrap();
+
+        let backup = copy_entry(&source, workspace.path()).unwrap();
+        assert_eq!(backup, workspace.path().join("Note (3).md"));
+        assert_eq!(fs::read_to_string(backup).unwrap(), original);
+
+        let copy = copy_entry(&source, &target).unwrap();
+        assert_eq!(copy, target.join("Note.md"));
+        assert_eq!(fs::read_to_string(copy).unwrap(), "[图](../assets/image.png#detail)\r\n");
+        assert_eq!(fs::read_to_string(source).unwrap(), original);
+    }
+
+    #[test]
+    fn moving_a_regular_file_across_volumes_stages_the_file_before_removing_the_source() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("source.pdf");
+        let destination = workspace.path().join("target.pdf");
+        fs::write(&source, b"%PDF").unwrap();
+
+        cross_volume_move(&source, &destination, &[]).unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read(destination).unwrap(), b"%PDF");
     }
 
     #[cfg(target_os = "macos")]
