@@ -180,6 +180,11 @@ fn seed_demo_workspace(path: &Path) -> io::Result<()> {
                 "WebP 透明图层.webp",
             ][..],
         ),
+        (
+            "demo-archives-v1",
+            "04 文件预览",
+            &["ZIP 中文目录.zip", "TAR.GZ 多文件.tar.gz", "7Z 多文件.7z"][..],
+        ),
     ] {
         let marker = parent.join(version);
         if marker.exists() {
@@ -478,6 +483,57 @@ fn preview_file(root: Option<&Path>, entry: &Path) -> Result<PathBuf, String> {
         return Err("请选择普通文件".into());
     }
     Ok(path)
+}
+
+#[tauri::command]
+pub(crate) async fn reveal_workspace_location(
+    app: AppHandle,
+    root: Option<String>,
+    path: String,
+) -> Result<(), String> {
+    let root = root.map(|root| selected_path(&app, root)).transpose()?;
+    let entry = selected_path(&app, path)?;
+    tokio::task::spawn_blocking(move || {
+        if let Some(root) = root {
+            workspace_path(&root, &root.canonicalize().map_err(|err| err.to_string())?, &entry)?;
+        } else {
+            entry.symlink_metadata().map_err(|err| err.to_string())?;
+        }
+        #[cfg(target_os = "macos")]
+        return std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&entry)
+            .status()
+            .map_err(|err| err.to_string())?
+            .success()
+            .then_some(())
+            .ok_or_else(|| "无法在访达中显示此项目".into());
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut selection = std::ffi::OsString::from("/select,\"");
+            selection.push(&entry);
+            selection.push("\"");
+            return std::process::Command::new("explorer.exe")
+                .raw_arg(selection)
+                .spawn()
+                .map(drop)
+                .map_err(|err| err.to_string());
+        }
+
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let folder = if entry.is_dir() {
+                entry.as_path()
+            } else {
+                entry.parent().ok_or("无法确定所在文件夹")?
+            };
+            open::that(folder).map_err(|err| err.to_string())
+        }
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]

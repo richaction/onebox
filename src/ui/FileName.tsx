@@ -19,7 +19,7 @@ export function NameField(props: {
   let input!: HTMLInputElement
   onMount(() => {
     input.focus({ preventScroll: true })
-    input.select()
+    input.setSelectionRange(stem.length, stem.length)
   })
 
   const submit = async () => {

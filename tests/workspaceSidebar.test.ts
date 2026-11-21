@@ -30,6 +30,7 @@ it('keeps the sidebar steady on open and remembers contextual placement after re
     workspace: { root, entries: [file('.DS_Store'), folder, first, second] },
     visible: true, restoring: false, get active() { return active() }, readonly: false, get revision() { return revision() },
     onOpen: (entry) => setActive(entry.path), onOpenFile: async () => { setActive(nested.path); return nested.path }, onOpenWorkspace: noop,
+    onRevealLocation: async () => {},
     onCreate: async (parent, name, _directory, onCreated) => {
       const entry = file(name, parent)
       children = [...children, entry]
@@ -124,6 +125,7 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
     onOpen: noop,
     onOpenFile: async () => undefined,
     onOpenWorkspace: noop,
+    onRevealLocation: async () => {},
     onCopy: noop,
     onMoveDocument: noop,
     onClose: noop,
@@ -176,6 +178,7 @@ it('uses the same menu for right click and overflow, with inline creation and co
   })
   const onTrash = vi.fn(async () => {})
   const onRename = vi.fn(async () => '/work/renamed.md')
+  const onRevealLocation = vi.fn(async () => {})
   const onOpen = vi.fn()
   const noop = () => {}
   const dispose = render(() => createComponent(WorkspaceSidebar, {
@@ -192,6 +195,7 @@ it('uses the same menu for right click and overflow, with inline creation and co
     onOpen,
     onOpenFile: async () => undefined,
     onOpenWorkspace: noop,
+    onRevealLocation,
     onCopy: noop,
     onMoveDocument: noop,
     onClose: noop,
@@ -213,6 +217,7 @@ it('uses the same menu for right click and overflow, with inline creation and co
       const input = host.querySelector<HTMLInputElement>('.filename-field input')!
       expect(document.activeElement).toBe(input)
       expect(input.value).toBe(stem)
+      expect([input.selectionStart, input.selectionEnd]).toEqual([stem.length, stem.length])
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     }
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(entry)
@@ -221,6 +226,9 @@ it('uses the same menu for right click and overflow, with inline creation and co
     const rightClickLabels = menuItems().map((button) => button.textContent)
     more.click()
     expect(menuItems().map((button) => button.textContent)).toEqual(rightClickLabels)
+    menuItems().find((button) => button.textContent === '打开文件位置')!.click()
+    expect(onRevealLocation).toHaveBeenCalledExactlyOnceWith(entry.path)
+    more.click()
     expect(rightClickLabels).toContain('复制路径')
     const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
     menuItems().find((button) => button.textContent === '复制路径')!.click()
@@ -237,14 +245,17 @@ it('uses the same menu for right click and overflow, with inline creation and co
     await Promise.resolve()
     await Promise.resolve()
 
-    more.click()
-    menuItems().find((button) => button.textContent === '新建文件…')!.click()
-    const unnamed = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
-    expect(document.activeElement).toBe(unnamed)
-    unnamed.value = '   '
-    more.focus()
-    expect(host.querySelector('input[aria-label="文件名称"]')).toBeNull()
-    expect(document.activeElement).toBe(more)
+    for (const kind of ['文件', '文件夹']) {
+      more.click()
+      menuItems().find((button) => button.textContent === `新建${kind}…`)!.click()
+      const selector = `input[aria-label="${kind}名称"]`
+      const unnamed = host.querySelector<HTMLInputElement>(selector)!
+      expect(document.activeElement).toBe(unnamed)
+      unnamed.value = '   '
+      more.focus()
+      expect(host.querySelector(selector)).toBeNull()
+      expect(document.activeElement).toBe(more)
+    }
     expect(onCreate).not.toHaveBeenCalled()
 
     more.click()

@@ -719,6 +719,39 @@ body {
   font-size: 13px;
 }
 
+.file-preview-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  justify-self: end;
+}
+
+.file-save-hint {
+  color: var(--ob-text-secondary);
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.file-save-hint:empty {
+  position: absolute;
+}
+
+.file-preview-toolbar:has(> .file-save-hint:not(:empty)) {
+  /* Reserve equal space on either side so the status stays centered in the pane. */
+  --file-header-track: minmax(min(var(--file-header-actions, 0px), calc(50% - 6px)), 1fr);
+  display: grid;
+  grid-template-columns: var(--file-header-track) minmax(0, max-content) var(--file-header-track);
+}
+
+.file-preview-toolbar:has(> .file-preview-actions) { --file-header-actions: 66px; }
+.file-preview-toolbar:has(.file-preview-outline-toggle) { --file-header-actions: 104px; }
+.file-preview-toolbar:has(.file-preview-image-tools) { --file-header-actions: 234px; }
+
 .file-preview-toolbar button {
   padding: 5px 8px;
   color: inherit;

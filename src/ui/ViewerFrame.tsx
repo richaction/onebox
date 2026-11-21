@@ -1,4 +1,5 @@
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { save } from '@tauri-apps/plugin-dialog'
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js'
 import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 import PreviewLoading from './PreviewLoading'
@@ -7,6 +8,7 @@ import type { ImagePreviewAction, ImagePreviewState } from './previewImage'
 export default function ViewerFrame(props: {
   root?: string
   entry: WorkspaceEntry
+  onSaveHint: () => void
   onClose: () => void
   onSettled: (ready: boolean) => void
   imageCommand?: { action: ImagePreviewAction }
@@ -20,6 +22,7 @@ export default function ViewerFrame(props: {
   let disposed = false
   let connected = false
   let sent = false
+  let savingArchiveEntry = false
   let url: string | undefined
   let renderName = props.entry.name
   let temporaryPath: string | undefined
@@ -46,8 +49,25 @@ export default function ViewerFrame(props: {
       sent = true
       frame.contentWindow?.postMessage({ type: 'onebox-preview-source', url, name: renderName }, '*')
     }
+    const saveArchiveEntry = async (name: unknown, bytes: unknown) => {
+      if (savingArchiveEntry || typeof name !== 'string' || !(bytes instanceof ArrayBuffer) ||
+        !name || name === '.' || name === '..' || /[/\\\0]/u.test(name)) return
+      savingArchiveEntry = true
+      try {
+        const path = await save({ defaultPath: name })
+        if (path) await invoke('plugin:fs|write_file', bytes, { headers: { path: encodeURIComponent(path) } })
+      } catch {
+        if (!disposed) frame.contentWindow?.postMessage({ type: 'onebox-preview-archive-save-error' }, '*')
+      } finally {
+        savingArchiveEntry = false
+      }
+    }
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.contentWindow) return
+      if (event.origin === location.origin && event.data?.type === 'onebox-preview-save-archive-entry') {
+        void saveArchiveEntry(event.data.name, event.data.bytes)
+        return
+      }
       if (event.data?.type === 'onebox-preview-image-state') {
         props.onImageState(event.data.state)
         return
@@ -66,6 +86,9 @@ export default function ViewerFrame(props: {
           break
         case 'onebox-preview-close':
           props.onClose()
+          break
+        case 'onebox-preview-save-hint':
+          props.onSaveHint()
           break
       }
     }

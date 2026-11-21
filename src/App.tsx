@@ -22,6 +22,7 @@ import WorkspaceResizeHandle, { initialWorkspaceWidth } from './ui/WorkspaceResi
 
 const SAVE_DEBOUNCE_MS = 800
 const TITLE_SAVE_DELAY_MS = 700
+const AUTO_SAVE_HINT_MS = 2200
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
 
@@ -49,6 +50,7 @@ export default function App() {
   let handle: EditorHandle | undefined
   let sidebarToggle: HTMLButtonElement | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
+  let autoSaveHintTimer: ReturnType<typeof setTimeout> | undefined
   let savedDoc: Node | undefined = restored?.savedDoc
   let writer: Promise<boolean> | undefined = restored?.writer
   let titleTimer: ReturnType<typeof setTimeout> | undefined
@@ -69,6 +71,7 @@ export default function App() {
   const [readonly, setReadonly] = createSignal(restored?.readonly ?? false)
   const [loading, setLoading] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
+  const [autoSaveHint, setAutoSaveHint] = createSignal(false)
   const [workspace, setWorkspace] = createSignal<WorkspaceRoot | undefined>(restored?.workspace)
   const [preview, setPreview] = createSignal<PreviewEntry | undefined>(restored?.preview)
   const [emptyAfterDeletion, setEmptyAfterDeletion] = createSignal(restored?.emptyAfterDeletion ?? false)
@@ -755,6 +758,14 @@ export default function App() {
     }
   })
 
+  const autoSaveMessage = () => autoSaveHint() ? '无需手动保存，编辑会自动保存' : ''
+
+  const showAutoSaveHint = () => {
+    clearTimeout(autoSaveHintTimer)
+    setAutoSaveHint(true)
+    autoSaveHintTimer = setTimeout(() => setAutoSaveHint(false), AUTO_SAVE_HINT_MS)
+  }
+
   const onKeydown = (event: KeyboardEvent) => {
     if (event.key === 'Escape' && loading()) {
       event.preventDefault()
@@ -778,9 +789,11 @@ export default function App() {
         break
       case 's':
         event.preventDefault()
-        if (emptyAfterDeletion() && !preview()) break
-        if (event.shiftKey && path()) void transferDocument('saveAs')
-        else if (!busy) void flush()
+        if (event.shiftKey) {
+          if (path() && (!emptyAfterDeletion() || preview())) void transferDocument('saveAs')
+          break
+        }
+        showAutoSaveHint()
         break
     }
   }
@@ -899,6 +912,7 @@ export default function App() {
   }
 
   onCleanup(clearSaveTimer)
+  onCleanup(() => clearTimeout(autoSaveHintTimer))
   onCleanup(pauseTitle)
   onCleanup(() => { disposed = true; cancelLoad = true })
 
@@ -987,6 +1001,10 @@ export default function App() {
       pending={pendingOpen()?.entry.path} importTarget={importTarget()}
       displayName={displayedName} renamed={workspaceRename()}
       onOpen={openWorkspaceEntry} onOpenFile={openFile} onOpenWorkspace={() => void openWorkspace()}
+      onRevealLocation={(target) => {
+        const root = current?.root
+        return desktopWorkspace.revealLocation(root && (root === target || inWorkspace(target, root)) ? root : undefined, target)
+      }}
       onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry} onTrash={trashWorkspaceEntry} onRename={renameEntry}
       onCopy={() => void transferDocument('copy')} onMoveDocument={() => void transferDocument('move')}
@@ -1024,6 +1042,7 @@ export default function App() {
             <Show when={path()}>
               <header class="file-preview-toolbar">
                 <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
+                <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
               </header>
             </Show>
             <EditorShell
@@ -1051,11 +1070,15 @@ export default function App() {
                 const entry = preview()
                 if (entry) openWorkspaceAttachment(entry, application)
               }}
+              onSaveHint={showAutoSaveHint} saveHint={autoSaveMessage()}
               onClose={() => setPreview(undefined)} />
           </Show>
           <Show when={openingEntry()}>{(entry) => (
             <section class="file-preview" aria-label="正在打开文件">
-              <header class="file-preview-toolbar"><FileName name={entry().name} /></header>
+              <header class="file-preview-toolbar">
+                <FileName name={entry().name} />
+                <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
+              </header>
               <div class="preview-surface" classList={{ 'preview-surface-text': entry().markdown || /\.txt$/iu.test(entry().name) }}>
                 <PreviewLoading label="正在打开文件…" />
               </div>
