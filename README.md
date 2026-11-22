@@ -1,24 +1,54 @@
 # Onebox
 
-Onebox 是一款本地桌面 Markdown 编辑器。它以块为单位编辑标题、列表、引用、代码和表格，文档直接保存为 `.md` 或 `.markdown` 文件。
+Onebox 是一款本地桌面 Markdown 编辑器与文件工作区。可以在同一个窗口写笔记、整理文件和查看 PDF、Office 文档、图片与压缩包。笔记直接保存为磁盘上的 `.md` 或 `.markdown` 文件。
 
-项目处于早期开发阶段，使用 Tauri v2、SolidJS `1.9.X` 稳定版（当前锁定 `1.9.19`）和 Tiptap。
+[核心功能](#核心功能) · [界面截图](#界面截图) · [快速开始](#快速开始) · [本地开发](#本地开发)
 
-## 基本使用
+![Onebox Markdown 编辑器。左侧是工作树，右侧显示表格、LaTeX 公式与 Mermaid 流程图](docs/screenshots/workspace.png)
 
-- **打开和保存** · 用 `⌘O`（`Ctrl+O`）打开文件，`⌘S`（`Ctrl+S`）查看自动保存提示，`⌘⇧S`（`Ctrl+Shift+S`）另存为。首次保存时选择路径。已有路径的可编辑文档在停止输入约 800 毫秒后自动保存。遇到可能无法安全写回的语法时，状态栏显示「只读」。
-- **编辑区块** · 在空段落输入 `/` 或在正文中右键打开菜单。可按方向键选择命令，按回车执行。输入 `###` 加空格可直接创建三级标题。
-- **管理工作区** · 点击「打开文件夹…」选择本地文件夹。侧栏显示文件夹的内容，包括点号开头的条目和 `assets/`。单击文件即可打开或预览。选中单个文件后，用 `Ctrl+C` 复制或 `Ctrl+X` 剪切，再选中目标文件夹并按 `Ctrl+V` 粘贴，macOS 也可用 `⌘`。在原文件夹粘贴会生成带编号的副本，剪切后粘贴到其他文件夹会移动原文件。点击侧栏顶部可粘贴到根目录。也可拖动文件或文件夹。在工作区内移动 Markdown 时，文档所在目录下直接引用的附件或文件夹会随行，工作区内的相关相对链接也会更新。
-- **插入图片和附件** · 从块菜单插入，也可粘贴或拖入本地文件。导入的文件位于文档旁的 `assets/` 目录。
-- **预览文件** · Onebox 使用 Flyfish Full 在主窗口内只读预览 PDF、Office、图片、音视频、压缩包等文件。渲染资源随应用打包，预览不需要上传文件或安装 LibreOffice。点击「打开方式」可用系统应用打开原文件。Markdown 仍可直接编辑和保存。
+## 核心功能
+
+### Markdown 编辑
+
+- **块式编辑**。输入 `/` 或右键打开区块菜单，插入标题、列表、待办、引用、代码块、表格和附件。支持代码高亮、脚注、嵌套列表，以及表格行列编辑。
+- **公式与图表**。在正文中渲染行内和块级 LaTeX、Mermaid 流程图和 ECharts 图表。可以直接编辑公式、图表源码和配置。
+- **本地保存**。编辑已有文档时自动保存，也可另存为。遇到可能无法安全写回的 Markdown 语法，会以只读方式打开。大文档使用分批解析与按视口渲染，样例包含十万字符和百万字符文档。
+- **图片与附件**。可以插入、拖入或粘贴本地附件。应用导入的附件保存在文档旁的 `assets/`，正文以相对路径引用。
+
+### 文件工作区
+
+- **用工作树管理本地目录**。可以新建、重命名、拖动、复制、剪切和粘贴文件及文件夹。文件夹展开、收起时会保留现有的文件选区。
+- **批量操作文件**。用 Shift 连选，用 Ctrl 或 ⌘ 点选。右侧列出所选文件和图片缩略图，支持批量复制、剪切以及点击单个文件弹出预览。
+- **与 Finder 互通**。macOS 上可以在 Finder 复制文件或文件夹，再到 Onebox 工作树中粘贴，也可以从 Onebox 复制到 Finder。剪切到 Finder 时用 ⌥⌘V 移动。复制遇到同名项会生成带编号的副本。
+- **移动文档时维护链接**。在工作区内移动 Markdown 时，符合条件的本地附件可随文档移动，相关的相对链接会更新。
+
+### 本地文件预览
+
+单击文件即可在 Onebox 内查看，也可以通过「打开方式」交给系统应用。常规预览在本机完成，渲染资源随应用提供。
+
+| 类型 | 可以查看和操作 |
+| --- | --- |
+| PDF | 连续滚动、调整目录栏宽度、按目录跳转到对应页面 |
+| Office | 预览常见的新旧版 Word、Excel 和 PowerPoint 文件，切换 Excel 工作表 |
+| 图片 | 查看 PNG、JPEG、GIF、WebP、AVIF、SVG、TIFF 等格式，支持旋转、缩放、拖动和适配窗口 |
+| 文本和音视频 | 预览 UTF-8、UTF-16、GB18030 文本，播放 MP4、WAV 等媒体文件 |
+| 压缩包 | 浏览 ZIP、TAR.GZ、7Z 中的文件，预览其中支持的格式，或将单个文件另存到本地 |
+
+WPS 原生文档及模板（`.wps`、`.et`、`.dps`、`.wpt`、`.ett`、`.dpt`）需要本机安装 LibreOffice。Onebox 会在本地转换临时副本供只读预览，原文件保持原格式。
 
 ## 界面截图
 
-![Onebox 桌面窗口，左侧是工作区文件树，右侧是 Markdown 文档](docs/screenshots/workspace.png)
+### PDF 预览与文档目录
 
-## 本地开发
+![左侧工作树和 PDF 预览。PDF 右侧打开了可跳转的文档目录](docs/screenshots/file-preview.png)
 
-准备 Git、Node.js（建议 24 或 26）、pnpm 和通过 `rustup` 安装的 Rust 稳定工具链。macOS 桌面开发可用 `xcode-select --install` 安装命令行工具。Windows 需要 C++ Build Tools 和 WebView2，Linux 的系统依赖按发行版安装。[Tauri v2 环境准备](https://v2.tauri.app/start/prerequisites/)
+### 多选文件与图片缩略图
+
+![工作树中同时选中六个文件。右侧列出文件类型、图片缩略图及剪切和复制按钮](docs/screenshots/selection-preview.png)
+
+## 快速开始
+
+项目目前处于早期开发阶段，可以从源码运行。准备 Git、Node.js（建议 24 或 26）、pnpm 和通过 `rustup` 安装的 Rust 稳定工具链。macOS 可用 `xcode-select --install` 安装命令行工具。Windows 和 Linux 的桌面依赖见 [Tauri v2 环境准备](https://v2.tauri.app/start/prerequisites/)。
 
 ```sh
 git clone https://github.com/richaction/onebox.git
@@ -27,39 +57,54 @@ pnpm install --frozen-lockfile
 pnpm dev:app
 ```
 
-`pnpm dev:app` 在后台维护一个桌面调试实例。重复运行会唤回已有窗口，界面与样式改动通过 Vite 热更新。组件更新时保留当前文档、光标、滚动位置和撤销记录。Rust 或原生配置变更后，开发进程先等待文件操作结束并保存文档，再重新编译和启动，恢复工作区、当前文件和编辑位置。保存失败时会保留当前窗口，日志记录失败原因。
+启动后，在侧栏点击「打开文件夹…」选择本地目录。也可以选「打开调试样例」，体验 Markdown、Office、PDF、图片、音视频和大文档。开发版第一次打开样例时会创建独立的可编辑副本。
 
-`pnpm dev:status` 查看运行状态及日志位置，`pnpm dev:restart` 请求保存后重启，`pnpm dev:stop` 保存并结束调试。文件操作和保存超过 30 秒时，本次重启会取消。只调试编辑器界面时可运行 `pnpm dev`，然后访问 `http://localhost:1420`。文件对话框、磁盘保存和工作区需要在桌面窗口中验证。
+### 常用操作
 
-开发版在侧边栏空状态和工作区「⋯」菜单提供「打开调试样例」。第一次打开时会从 `examples/manual-testing` 创建一份可编辑副本，之后保留该副本上的改动。样例包含操作清单、Markdown 区块、十万及百万字符、附件移动、Office、新旧编码文本、PDF、图片和音视频。
-
-WPS 原生文档和模板（`.wps`、`.et`、`.dps`、`.wpt`、`.ett`、`.dpt`）可尝试在主窗口只读预览。此功能需要本机安装 LibreOffice，后台离线转档后由 Flyfish 显示，关闭或切换文件时清理临时副本。转换失败时可用「打开方式」打开原件。
-
-| 命令 | 用途 |
+| 操作 | 快捷键或入口 |
 | --- | --- |
-| `pnpm typecheck` | 检查 TypeScript 类型 |
-| `pnpm test` | 运行前端测试 |
-| `cargo test --locked --manifest-path src-tauri/Cargo.toml` | 运行 Rust 测试 |
-| `pnpm build` | 构建前端静态产物到 `dist/` |
+| 打开文件或工作区 | ⌘O 打开文件，⌘⇧O 打开工作区 |
+| 插入区块 | 在正文输入 `/`，也可以右键打开区块菜单 |
+| 多选文件 | Shift 连选，Ctrl 或 ⌘ 点选 |
+| 复制、剪切和粘贴 | ⌘C、⌘X、⌘V，也可以用工作树右键菜单。点击工作区名称后粘贴到根目录 |
+| 保存与另存为 | 编辑时自动保存，⌘S 查看保存提示，⌘⇧S 另存为 |
+| 关闭弹出预览或取消剪切 | Esc |
 
-编辑器内核和 Markdown 转换位于 `src/core/`，界面位于 `src/ui/`，桌面文件读写、解析和工作区命令位于 `src-tauri/src/`。
+Windows 和 Linux 上，可在 Onebox 内用 Ctrl 代替上述 ⌘ 组合键。
 
-## 构建正式版并安装
+### 构建 macOS 应用
 
-安装依赖后，从仓库根目录运行以下命令，在 macOS 上生成可直接打开的应用。
+安装依赖后，从仓库根目录运行构建命令。
 
 ```sh
 pnpm tauri build --bundles app --config '{"bundle":{"active":true}}'
 open src-tauri/target/release/bundle/macos/Onebox.app
 ```
 
-仓库默认关闭安装包生成，命令中的 `--config` 为本次构建开启打包。Tauri 会先构建前端，再编译正式版并生成 `Onebox.app`。可将 `.app` 拖入 Finder 的「应用程序」，之后从那里启动。[Tauri macOS 应用打包](https://v2.tauri.app/distribute/macos-application-bundle/)
+构建得到的 `Onebox.app` 可拖到 Finder 的「应用程序」目录。只需要当前平台的可执行文件时，可运行 `pnpm tauri build --no-bundle`。[Tauri 打包说明](https://v2.tauri.app/distribute/macos-application-bundle/)
 
-如需在当前平台只构建正式版可执行文件，运行 `pnpm tauri build --no-bundle`。默认产物为 `src-tauri/target/release/onebox`，Windows 上为 `onebox.exe`。[Tauri CLI 构建参数](https://v2.tauri.app/reference/cli/#build)
+## 本地开发
 
-## 项目文档
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm dev:app` | 启动或唤回桌面调试窗口 |
+| `pnpm dev:status` | 查看调试状态和日志位置 |
+| `pnpm dev:restart` / `pnpm dev:stop` | 保存会话后重启或停止调试 |
+| `pnpm dev` | 在 `http://localhost:1420` 调试前端界面 |
+| `pnpm typecheck` / `pnpm test` | 检查 TypeScript 类型和运行前端测试 |
+| `cargo test --locked --manifest-path src-tauri/Cargo.toml` | 运行 Rust 测试 |
+| `pnpm build` | 将前端静态产物构建到 `dist/` |
 
+`pnpm dev:app` 维护一个桌面调试实例。前端热更新会保留文档、光标、滚动位置和撤销记录。Rust 或原生配置变更后，调试进程先保存文档，再重启并恢复工作区。文件对话框、剪贴板和磁盘操作请在桌面窗口中验证。
+
+项目使用 Tauri v2、Rust、SolidJS 和 Tiptap。编辑器和 Markdown 转换在 [`src/core/`](src/core)，界面在 [`src/ui/`](src/ui)，桌面文件操作在 [`src-tauri/src/`](src-tauri/src)，多格式预览使用 Flyfish Full。
+
+### 设计与验证资料
+
+- [调试样例与操作清单](examples/manual-testing/00%20开始测试.md)
 - [原始需求与技术方案](docs/高性能块式Markdown编辑器技术方案.md)
-- [第一阶段验收记录](docs/superpowers/plans/2026-11-15-onebox-foundation-verification.md)
+- [第一阶段验收](docs/superpowers/plans/2026-11-15-onebox-foundation-verification.md)
 - [第二阶段计划与验收](docs/superpowers/plans/2026-11-15-onebox-phase-two.md)
 - [工作区设计与验收](docs/superpowers/plans/2026-11-15-onebox-workspace.md)
+
+项目采用 [MIT 许可证](LICENSE)。
