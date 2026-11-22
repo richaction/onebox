@@ -36,6 +36,7 @@ export function createEditor(opts: {
   element: HTMLElement
   scrollRoot: HTMLElement
   markdown: string
+  editable?: boolean
   onUpdate: (doc: Node) => void
   handleKeyDown?: NonNullable<EditorProps['handleKeyDown']>
   handleContextMenu?: NonNullable<EditorProps['handleDOMEvents']>['contextmenu']
@@ -123,6 +124,7 @@ export function createEditor(opts: {
   })
   const editor = new Editor({
     element: opts.element,
+    editable: opts.editable ?? true,
     extensions: [
       ...extensions.map((extension) => extension === MarkdownImage ? inlineImage : extension),
       MarkdownTaskInput,
@@ -142,7 +144,8 @@ export function createEditor(opts: {
     },
     editorProps: {
       attributes: {
-        'aria-label': 'Markdown 编辑器', 'aria-multiline': 'true', role: 'textbox',
+        'aria-label': opts.editable === false ? 'Markdown 预览' : 'Markdown 编辑器',
+        'aria-multiline': 'true', role: 'textbox',
         autocorrect: 'off', autocapitalize: 'none',
       },
       clipboardTextSerializer: (slice, view) =>
