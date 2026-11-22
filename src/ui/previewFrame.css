@@ -381,6 +381,11 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   cursor: default;
 }
 
+#viewer.preview-image .onebox-image-zoom-layer {
+  transform: scale(var(--ob-image-zoom));
+  will-change: transform;
+}
+
 #viewer :is(.fv-audio-viewer, .fv-video-viewer, .epub-stage, .umd-stage, .drawing-viewer,
   .xmind-viewer, .ofd-viewer, .typst-viewer, .data-viewer, .email-viewer, .odf-viewer, .flyfish-rtf-viewer) {
   background: var(--ob-bg-sidebar);

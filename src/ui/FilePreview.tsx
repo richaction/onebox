@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from 'solid-js'
+import { batch, createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from 'solid-js'
 import { desktopWorkspace, type FileApplications, type WorkspaceEntry } from '../io/tauri'
 import ViewerFrame from './ViewerFrame'
 import FileName, { type TitleEdit } from './FileName'
@@ -18,7 +18,7 @@ function AppIcon(props: { src?: string | null }) {
   )
 }
 
-export default function FilePreview(props: {
+interface FilePreviewProps {
   root?: string
   entry?: WorkspaceEntry
   onOpenExternal: (application?: string) => void
@@ -26,7 +26,44 @@ export default function FilePreview(props: {
   saveHint: string
   onClose: () => void
   titleEdit?: TitleEdit
-}) {
+}
+
+export function FilePreviewDialog(props: FilePreviewProps & { trigger: HTMLButtonElement }) {
+  let dialog!: HTMLDivElement
+  const close = () => {
+    const trigger = props.trigger
+    props.onClose()
+    trigger.focus({ preventScroll: true })
+  }
+  onMount(() => {
+    dialog.focus({ preventScroll: true })
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return
+      if (event.key === 'Escape') {
+        if (dialog.querySelector('[popover]:popover-open')) return
+        event.preventDefault()
+        close()
+      } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        props.onSaveHint()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    onCleanup(() => document.removeEventListener('keydown', onKeyDown))
+  })
+
+  return (
+    <div class="file-preview-overlay">
+      <div class="file-preview-dialog" ref={dialog} role="dialog" aria-modal="true" tabIndex={-1}
+        aria-label={`预览 ${props.entry?.name ?? ''}`}>
+        <FilePreview {...props} onClose={close} showClose />
+      </div>
+    </div>
+  )
+}
+
+export default function FilePreview(props: FilePreviewProps & { showClose?: boolean }) {
+  const menuId = createUniqueId()
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [applications, setApplications] = createSignal<FileApplications>()
   const [applicationIcons, setApplicationIcons] = createSignal<Record<string, string>>({})
@@ -152,13 +189,17 @@ export default function FilePreview(props: {
               <AppIcon src={applications()?.defaultIcon} />
             </button>
             <button type="button" class="file-open-with-toggle" ref={openWithButton} aria-label="打开方式"
-              aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls="preview-open-with"
-              popovertarget="preview-open-with" onClick={positionOpenWith}>
+              aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls={menuId}
+              popovertarget={menuId} onClick={positionOpenWith}>
               <span aria-hidden="true" />
             </button>
           </div>
+          <Show when={props.showClose}>
+            <button type="button" class="file-preview-close" aria-label="关闭预览"
+              title="关闭预览（Esc）" onClick={props.onClose} />
+          </Show>
         </div>
-        <div ref={openWithMenu} id="preview-open-with" class="file-open-with-menu" popover="auto" role="menu" aria-label="打开方式"
+        <div ref={openWithMenu} id={menuId} class="file-open-with-menu" popover="auto" role="menu" aria-label="打开方式"
           onToggle={updateOpenWith} onKeyDown={onMenuKey}>
           <button type="button" role="menuitem" aria-label={`${defaultApp()?.name ?? '系统应用'}，默认`} onClick={() => openWith()}>
             <AppIcon src={applications()?.defaultIcon} />

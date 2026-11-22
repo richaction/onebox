@@ -1,6 +1,6 @@
 import type { ViewerController, ViewerOptions, mountViewer } from '@file-viewer/web-full'
 import { customizeArchivePreview } from './archivePreview'
-import { imageFit, isImagePreview, type ImagePreviewState } from './previewImage'
+import { createImageZoom, imageFit, isImagePreview, type ImagePreviewState } from './previewImage'
 import './previewFrame.css'
 
 const runtime = (window as Window & {
@@ -15,8 +15,7 @@ let stopArchiveLayout: (() => void) | undefined
 let stopTextLayout: (() => void) | undefined
 let reported = false
 
-let imageWheelDelta = 0
-let lastImageWheel = 0
+let imageZoom: ReturnType<typeof createImageZoom> | undefined
 const imageContentSelector = '.image-stage img, .tiff-stage img'
 const blockImageLightbox = (event: Event) => {
   if (event.target instanceof Element && event.target.matches(imageContentSelector)) {
@@ -25,29 +24,30 @@ const blockImageLightbox = (event: Event) => {
   }
 }
 const zoomImageWithWheel = (event: WheelEvent) => {
-  if (!viewer || event.ctrlKey || event.metaKey || event.defaultPrevented ||
+  const deltaY = event.deltaY
+  if (event.defaultPrevented || !Number.isFinite(deltaY) || deltaY === 0 ||
     !(event.target instanceof Element) || !event.target.closest('.image-stage, .tiff-stage') ||
-    Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
-  event.preventDefault()
+    Math.abs(deltaY) <= Math.abs(event.deltaX)) return
   const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewerHost.clientHeight : 1
-  if (event.timeStamp - lastImageWheel > 180 || Math.sign(event.deltaY) !== Math.sign(imageWheelDelta)) imageWheelDelta = 0
-  lastImageWheel = event.timeStamp
-  imageWheelDelta += event.deltaY * unit
-  if (Math.abs(imageWheelDelta) < 40) return
-  const zoom = imageWheelDelta < 0 ? viewer.zoomIn() : viewer.zoomOut()
-  imageWheelDelta = 0
-  void zoom.catch(() => {})
+  const delta = Math.min(180, Math.max(-180, deltaY * unit))
+  if (imageZoom?.scaleBy(Math.exp(-delta * 0.002))) event.preventDefault()
 }
+
+const imageZoomStep = 1.2
 
 const handleImageCommand = (action: unknown) => {
   if (!viewer) return
   switch (action) {
     case 'rotate':
+      imageZoom?.cancel()
       void viewer.applyViewState({ rotation: ((viewer.getViewState()?.rotation ?? 0) + 90) % 360 }).catch(() => {})
       break
-    case 'zoom-out': void viewer.zoomOut().catch(() => {}); break
-    case 'fit': void viewer.fitToView(imageFit).catch(() => {}); break
-    case 'zoom-in': void viewer.zoomIn().catch(() => {}); break
+    case 'zoom-out': imageZoom?.scaleBy(1 / imageZoomStep); break
+    case 'fit':
+      imageZoom?.cancel()
+      void viewer.fitToView(imageFit).catch(() => {})
+      break
+    case 'zoom-in': imageZoom?.scaleBy(imageZoomStep); break
   }
 }
 
@@ -264,6 +264,7 @@ window.addEventListener('keydown', (event) => {
   }
 })
 window.addEventListener('pagehide', () => {
+  imageZoom?.cancel()
   initialContent?.disconnect()
   previewLayout?.disconnect()
   tiffPageLabel?.disconnect()
@@ -298,9 +299,23 @@ window.addEventListener('message', (event: MessageEvent) => {
   viewerHost.classList.toggle('preview-plain-text', plainText)
   if (plainText) alignTextLayout()
   const imagePreview = isImagePreview(name)
+  let imageState: ImagePreviewState | undefined
+  const publishImageState = (state: ImagePreviewState) => {
+    if (imageState && imageState.label === state.label && imageState.canZoomIn === state.canZoomIn &&
+      imageState.canZoomOut === state.canZoomOut && imageState.pages === state.pages) return
+    imageState = state
+    parent.postMessage({ type: 'onebox-preview-image-state', state }, '*')
+  }
   viewerHost.classList.toggle('preview-image', imagePreview)
   if (imagePreview) {
+    const zoom = createImageZoom(viewerHost, () => viewer, publishImageState)
+    imageZoom = zoom
     viewerHost.addEventListener('wheel', zoomImageWithWheel, { passive: false })
+    window.addEventListener('resize', zoom.finish)
+    viewerHost.addEventListener('pointerdown', zoom.finish, true)
+    viewerHost.addEventListener('touchstart', (event) => {
+      if (event.touches.length === 2) zoom.finish()
+    }, { passive: true })
     viewerHost.addEventListener('click', blockImageLightbox, true)
     viewerHost.addEventListener('dblclick', blockImageLightbox, true)
     viewerHost.addEventListener('keydown', (event) => {
@@ -312,13 +327,10 @@ window.addEventListener('message', (event: MessageEvent) => {
   const legacyPresentation = /\.ppt$/iu.test(name)
   // PDF.js can request byte ranges on HTTP sources. The macOS asset scheme uses the buffered path.
   const pdfStreaming = pdfPreview && /^https?:/iu.test(url)
-  let imageState: ImagePreviewState | undefined
   let tiffMeter: Element | null | undefined
   const updateTiffPage = () => {
     const pages = tiffMeter?.textContent ?? undefined
-    if (!imageState || pages === imageState.pages) return
-    imageState = { ...imageState, pages }
-    parent.postMessage({ type: 'onebox-preview-image-state', state: imageState }, '*')
+    if (imageState) publishImageState({ ...imageState, pages })
   }
   viewer = runtime.mountViewer(viewerHost, {
     url,
@@ -331,7 +343,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       toolbar: false,
       search: false,
       ai: false,
-      zoomGestures: imagePreview,
+      zoomGestures: imagePreview && { wheel: false },
       image: imagePreview ? { handTool: true } : undefined,
       pdf: {
         darkMode: false, defaultNavigationVisible: false, toolbar: false, thumbnails: false,
@@ -367,10 +379,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         }
         const pages = tiffMeter?.textContent ?? undefined
         const { label, canZoomIn, canZoomOut } = zoom
-        if (!imageState || label !== imageState.label || canZoomIn !== imageState.canZoomIn || canZoomOut !== imageState.canZoomOut || pages !== imageState.pages) {
-          imageState = { label, canZoomIn, canZoomOut, pages }
-          parent.postMessage({ type: 'onebox-preview-image-state', state: imageState }, '*')
-        }
+        publishImageState({ label, canZoomIn, canZoomOut, pages })
       }
       if (error) report('error')
       else if (ready && !reported && !initialContent) {

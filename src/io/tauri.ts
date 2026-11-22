@@ -1,4 +1,4 @@
-import { Channel, invoke } from '@tauri-apps/api/core'
+import { Channel, invoke, Resource } from '@tauri-apps/api/core'
 import type { JSONContent } from '@tiptap/core'
 import type { RelativeReference } from '../core/attachmentLinks'
 import type { FileSystem } from './types'
@@ -48,6 +48,11 @@ export interface WorkspaceRoot {
 
 export type PreviewEntry = WorkspaceEntry & { workspaceRoot?: string }
 
+interface WorkspaceWatchEvent {
+  paths: string[]
+  type: string | Record<string, unknown>
+}
+
 export interface FileApplications {
   items: { path: string; name: string; default: boolean }[]
   defaultIcon: string | null
@@ -72,12 +77,23 @@ export const desktopWorkspace = {
   releasePreview: (path: string) => invoke<void>('release_workspace_preview', { path }),
   entries: (root: string, folder: string) =>
     invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),
+  async watchDirectories(paths: string[], onEvent: (event: WorkspaceWatchEvent) => void) {
+    const id = await invoke<number>('plugin:fs|watch', {
+      paths, options: { delayMs: 75 }, onEvent: new Channel(onEvent),
+    })
+    const watcher = new Resource(id)
+    return () => watcher.close()
+  },
   rename: (root: string | undefined, source: string, stem: string, activeDocument: string | null) =>
     invoke<{ destination: string; activeDocument: string | null; activeDocumentChanged: boolean }>('rename_workspace_entry', {
       root, source, stem, activeDocument,
     }),
   copy: (root: string, source: string, target: string) =>
     invoke<string>('copy_workspace_file', { root, source, target }),
+  copyToClipboard: (root: string, sources: string[]) =>
+    invoke<number>('copy_workspace_file_to_clipboard', { root, sources }),
+  pasteFromClipboard: (root: string, folder: string, localChangeCount?: number) =>
+    invoke<{ paths: string[]; failed: number } | null>('paste_workspace_clipboard', { root, folder, localChangeCount }),
   move: (root: string, source: string, target: string, activeDocument: string | null) =>
     invoke<{ destination: string; activeDocument: string | null }>('move_workspace_entry', {
       root, source, target, activeDocument,

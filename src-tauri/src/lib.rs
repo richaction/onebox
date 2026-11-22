@@ -84,6 +84,8 @@ pub fn run() {
             workspace::reveal_workspace_location,
             workspace::workspace_file_applications,
             workspace::import_workspace_files,
+            workspace::copy_workspace_file_to_clipboard,
+            workspace::paste_workspace_clipboard,
             workspace::workspace_preview,
             workspace::release_workspace_preview,
             workspace::workspace_entries,

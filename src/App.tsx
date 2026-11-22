@@ -17,7 +17,8 @@ import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
 import PreviewLoading, { createLoadingHint } from './ui/PreviewLoading'
 import FileName, { splitName, type TitleEdit } from './ui/FileName'
-import WorkspaceSidebar from './ui/WorkspaceSidebar'
+import WorkspaceSidebar, { type WorkspaceSelection } from './ui/WorkspaceSidebar'
+import WorkspaceSelectionPreview from './ui/WorkspaceSelectionPreview'
 import WorkspaceResizeHandle, { initialWorkspaceWidth } from './ui/WorkspaceResizeHandle'
 
 const SAVE_DEBOUNCE_MS = 800
@@ -82,6 +83,9 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = createSignal(initialWorkspaceWidth())
   const [resizingSidebar, setResizingSidebar] = createSignal(false)
   const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
+  const [workspaceSelection, setWorkspaceSelection] = createSignal<WorkspaceSelection>()
+  const [selectionFilePreviewOpen, setSelectionFilePreviewOpen] = createSignal(false)
+  const [selectionReset, setSelectionReset] = createSignal(0)
   const [workspaceReveal, setWorkspaceReveal] = createSignal<string>()
   const [workspaceMoving, setWorkspaceMoving] = createSignal(false)
   const [importTarget, setImportTarget] = createSignal<string>()
@@ -91,6 +95,10 @@ export default function App() {
   const [titleDraft, setTitleDraft] = createSignal<{ entry: WorkspaceEntry; stem: string; error?: string }>()
   const [workspaceRename, setWorkspaceRename] = createSignal<{ source: string; destination: string; name: string }>()
   const activeFile = () => preview()?.path ?? (emptyAfterDeletion() ? null : path())
+  const selectionPreview = () => {
+    const selection = workspaceSelection()
+    return selection?.showOverview() ? selection : undefined
+  }
   const openingEntry = () => {
     const entry = pendingOpen()?.entry ?? pickedDocument()
     return entry?.path === activeFile() ? undefined : entry
@@ -246,6 +254,7 @@ export default function App() {
     await runFileAction(async (editor) => {
       const picked = await open({ multiple: false, defaultPath: folder })
       if (typeof picked !== 'string') return true
+      setSelectionReset((version) => version + 1)
       const root = workspace()?.root
       const entry = fileEntry(picked)
       if (folder && root) {
@@ -623,7 +632,24 @@ export default function App() {
     if (!moved) throw cause ?? new Error('移动失败')
   }
 
-  const pasteWorkspaceFile = async (entry: WorkspaceEntry, target: string, move: boolean) => {
+  const containsCurrentDocument = (entry: WorkspaceEntry) => {
+    const document = path()
+    return !!document && (document === entry.path || (entry.directory && inWorkspace(document, entry.path)))
+  }
+
+  const copyWorkspaceEntriesToClipboard = async (entries: WorkspaceEntry[]) => {
+    const current = workspace()
+    if (!current) throw new Error('请先打开此工作区')
+    while (openingTask) await openingTask
+    if (workspace() !== current || developmentPreparing || disposed) throw new Error('工作区已切换，请重新复制')
+    if (entries.some(containsCurrentDocument)) {
+      if (busy) throw new Error('请等待当前文件操作完成')
+      if (!await flush()) throw new Error('当前文档保存失败')
+    }
+    return desktopWorkspace.copyToClipboard(current.root, entries.map((entry) => entry.path))
+  }
+
+  const pasteWorkspaceEntry = async (entry: WorkspaceEntry, target: string, move: boolean) => {
     const current = workspace()
     while (openingTask) await openingTask
     if (!current || workspace() !== current || busy) throw new Error('请等待当前文件操作完成')
@@ -631,7 +657,7 @@ export default function App() {
     let cause: unknown
     const copied = await runFileAction(async () => {
       try {
-        if (path() === entry.path && !await flush()) throw new Error('当前文档保存失败')
+        if (containsCurrentDocument(entry) && !await flush()) throw new Error('当前文档保存失败')
         const destination = await desktopWorkspace.copy(current.root, entry.path, target)
         setWorkspaceReveal(destination)
         refreshWorkspace()
@@ -643,6 +669,33 @@ export default function App() {
       }
     }, '复制失败')
     if (!copied) throw cause ?? new Error('复制失败')
+  }
+
+  const pasteWorkspaceClipboard = async (folder: string, localChangeCount?: number) => {
+    const current = workspace()
+    while (openingTask) await openingTask
+    if (!current || workspace() !== current || busy || developmentPreparing || workspaceImporting()) {
+      throw new Error('请等待当前文件操作完成')
+    }
+    setWorkspaceImporting(true)
+    try {
+      const result = await desktopWorkspace.pasteFromClipboard(current.root, folder, localChangeCount)
+      if (!result) return 'local'
+      if (!result.paths.length && !result.failed) return 'empty'
+      if (!disposed && workspace() === current) {
+        if (result.paths.length) {
+          setWorkspaceReveal(result.paths[0])
+          refreshWorkspace()
+        }
+        setFailure(undefined)
+        setImportMessage(result.failed
+          ? `已粘贴 ${result.paths.length} 项，${result.failed} 项无法粘贴`
+          : `已粘贴 ${result.paths.length} 项`)
+      }
+      return 'pasted'
+    } finally {
+      setWorkspaceImporting(false)
+    }
   }
 
   const saveAs = () => runFileAction(async (editor) => {
@@ -743,7 +796,7 @@ export default function App() {
 
   const listenForFileDrops = () => getCurrentWebview().onDragDropEvent(({ payload }) => {
     if (disposed) return
-    if (payload.type === 'leave') {
+    if (selectionFilePreviewOpen() || payload.type === 'leave') {
       setImportTarget(undefined)
       return
     }
@@ -775,6 +828,7 @@ export default function App() {
   }
 
   const onKeydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || selectionFilePreviewOpen()) return
     if (event.key === 'Escape' && loading()) {
       event.preventDefault()
       cancelLoad = true
@@ -1008,6 +1062,7 @@ export default function App() {
       active={activeFile()} reveal={workspaceReveal()} revision={workspaceRevision()}
       pending={pendingOpen()?.entry.path} importTarget={importTarget()}
       displayName={displayedName} renamed={workspaceRename()}
+      selectionReset={selectionReset()} onSelectionReady={setWorkspaceSelection}
       onOpen={openWorkspaceEntry} onOpenFile={openFile} onOpenWorkspace={() => void openWorkspace()}
       onRevealLocation={(target) => {
         const root = current?.root
@@ -1015,7 +1070,8 @@ export default function App() {
       }}
       onOpenDemo={import.meta.env.DEV ? () => void openDemoWorkspace() : undefined}
       onCreate={createWorkspaceEntry} onMove={moveWorkspaceEntry} onTrash={trashWorkspaceEntry} onRename={renameEntry}
-      onPaste={pasteWorkspaceFile}
+      onCopy={mac ? copyWorkspaceEntriesToClipboard : undefined} onPaste={pasteWorkspaceEntry}
+      onPasteSystem={mac ? pasteWorkspaceClipboard : undefined}
       onClose={() => void closeWorkspace()}
     />
   )
@@ -1024,7 +1080,7 @@ export default function App() {
     <main class="app" classList={{ 'workspace-open': desktop && sidebarVisible(), 'workspace-resizing': resizingSidebar() }}
       style={{ '--workspace-preferred-width': `${sidebarWidth()}px` }}>
       <Show when={desktop}>
-        <header class="window-bar" classList={{ 'window-bar-mac': mac }}
+        <header class="window-bar" classList={{ 'window-bar-mac': mac }} inert={selectionFilePreviewOpen()}
           data-tauri-drag-region="">
           <button type="button" class="sidebar-toggle" ref={sidebarToggle}
             aria-label={sidebarLabel()} aria-expanded={sidebarVisible()} aria-controls="workspace-sidebar"
@@ -1035,66 +1091,75 @@ export default function App() {
       </Show>
       <div class="editor-layout">
         <Show when={desktop}>
-          <div class="workspace-slot">
+          <div class="workspace-slot" inert={selectionFilePreviewOpen()}>
             <Show when={workspace()} keyed fallback={renderSidebar()}>
               {(current) => renderSidebar(current)}
             </Show>
           </div>
         </Show>
-        <Show when={desktop && sidebarVisible()}>
+        <Show when={desktop && sidebarVisible() && !selectionFilePreviewOpen()}>
           <WorkspaceResizeHandle width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
         </Show>
         <div class="editor-content">
-          <div class="editor-document" inert={!!preview() || !!openingEntry() || emptyAfterDeletion()}
-            hidden={!!preview() || !!openingEntry() || emptyAfterDeletion()}>
-            <Show when={path()}>
-              <header class="file-preview-toolbar">
-                <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
-                <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
-              </header>
+          <div class="editor-current-content" inert={!!selectionPreview()}
+            classList={{ 'editor-current-content-covered': !!selectionPreview() }}>
+            <div class="editor-document" inert={!!preview() || !!openingEntry() || emptyAfterDeletion()}
+              hidden={!!preview() || !!openingEntry() || emptyAfterDeletion()}>
+              <Show when={path()}>
+                <header class="file-preview-toolbar">
+                  <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
+                  <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
+                </header>
+              </Show>
+              <EditorShell
+                markdown=""
+                onReady={onReady}
+                onDispose={onEditorDispose}
+                onUpdate={onUpdate}
+                onInsertAttachment={desktop ? pickAttachment : undefined}
+                onInsertFiles={desktop ? insertFiles : undefined}
+                imageContext={path}
+                readImage={desktop ? (href) => {
+                  const document = path()
+                  return document ? desktopAttachments.readImage(document, href) : Promise.resolve(undefined)
+                } : undefined}
+                openResource={desktop ? (href) => {
+                  const document = path()
+                  if (document) void desktopAttachments.open(document, href).catch(() => setFailure('附件操作失败'))
+                } : undefined}
+              />
+            </div>
+            <Show when={!openingEntry() && preview()}>
+              <FilePreview root={preview()?.workspaceRoot} entry={preview()}
+                titleEdit={preview() && preview()?.accessible !== false ? titleEdit(preview()!) : undefined}
+                onOpenExternal={(application) => {
+                  const entry = preview()
+                  if (entry) openWorkspaceAttachment(entry, application)
+                }}
+                onSaveHint={showAutoSaveHint} saveHint={autoSaveMessage()}
+                onClose={() => setPreview(undefined)} />
             </Show>
-            <EditorShell
-              markdown=""
-              onReady={onReady}
-              onDispose={onEditorDispose}
-              onUpdate={onUpdate}
-              onInsertAttachment={desktop ? pickAttachment : undefined}
-              onInsertFiles={desktop ? insertFiles : undefined}
-              imageContext={path}
-              readImage={desktop ? (href) => {
-                const document = path()
-                return document ? desktopAttachments.readImage(document, href) : Promise.resolve(undefined)
-              } : undefined}
-              openResource={desktop ? (href) => {
-                const document = path()
-                if (document) void desktopAttachments.open(document, href).catch(() => setFailure('附件操作失败'))
-              } : undefined}
-            />
+            <Show when={openingEntry()}>{(entry) => (
+              <section class="file-preview" aria-label="正在打开文件">
+                <header class="file-preview-toolbar">
+                  <FileName name={entry().name} />
+                  <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
+                </header>
+                <div class="preview-surface" classList={{ 'preview-surface-text': entry().markdown || /\.txt$/iu.test(entry().name) }}>
+                  <PreviewLoading label="正在打开文件…" />
+                </div>
+              </section>
+            )}</Show>
+            <Show when={emptyAfterDeletion() && !preview() && !openingEntry()}>
+              <div class="editor-empty" role="status">没有打开的文件</div>
+            </Show>
           </div>
-          <Show when={!openingEntry() && preview()}>
-            <FilePreview root={preview()?.workspaceRoot} entry={preview()}
-              titleEdit={preview() && preview()?.accessible !== false ? titleEdit(preview()!) : undefined}
-              onOpenExternal={(application) => {
-                const entry = preview()
-                if (entry) openWorkspaceAttachment(entry, application)
-              }}
-              onSaveHint={showAutoSaveHint} saveHint={autoSaveMessage()}
-              onClose={() => setPreview(undefined)} />
-          </Show>
-          <Show when={openingEntry()}>{(entry) => (
-            <section class="file-preview" aria-label="正在打开文件">
-              <header class="file-preview-toolbar">
-                <FileName name={entry().name} />
-                <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
-              </header>
-              <div class="preview-surface" classList={{ 'preview-surface-text': entry().markdown || /\.txt$/iu.test(entry().name) }}>
-                <PreviewLoading label="正在打开文件…" />
-              </div>
-            </section>
+          <Show when={selectionPreview()} keyed>{(selection) => (
+            <WorkspaceSelectionPreview selection={selection} root={workspace()?.root}
+              onFilePreviewOpenChange={setSelectionFilePreviewOpen}
+              onOpenExternal={(entry, application) => openWorkspaceAttachment({ ...entry, workspaceRoot: workspace()?.root }, application)}
+              onSaveHint={showAutoSaveHint} saveHint={autoSaveMessage()} />
           )}</Show>
-          <Show when={emptyAfterDeletion() && !preview() && !openingEntry()}>
-            <div class="editor-empty" role="status">没有打开的文件</div>
-          </Show>
         </div>
       </div>
       <footer class="statusbar" role="status">

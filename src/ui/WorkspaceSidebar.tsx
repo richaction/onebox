@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { NameField } from './FileName'
 import { createStore, reconcile } from 'solid-js/store'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
@@ -47,6 +47,27 @@ interface Creation {
   after?: string
   directory: boolean
   trigger: HTMLElement
+}
+
+interface ClipboardEntry {
+  entry: WorkspaceEntry
+  parent: string
+}
+
+interface ClipboardNotice {
+  paths: ReadonlySet<string>
+  message: string
+}
+
+export interface WorkspaceSelection {
+  entries: () => WorkspaceEntry[]
+  showOverview: () => boolean
+  remove: (path: string) => void
+  copy: (cut: boolean) => void
+  canCopy: () => boolean
+  cutPaths: () => ReadonlySet<string>
+  message: () => string | undefined
+  onKeyDown: (event: KeyboardEvent) => void
 }
 
 function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; close: (restoreFocus: boolean) => void }) {
@@ -119,8 +140,12 @@ export default function WorkspaceSidebar(props: {
   onRename: (entry: WorkspaceEntry, stem: string) => Promise<string>
   displayName?: (entry: WorkspaceEntry) => string
   renamed?: { source: string; destination: string; name: string }
+  selectionReset?: number
+  onSelectionReady?: (selection?: WorkspaceSelection) => void
   onMove: (entry: WorkspaceEntry, target: string) => Promise<void>
+  onCopy?: (entries: WorkspaceEntry[]) => Promise<number>
   onPaste: (entry: WorkspaceEntry, target: string, cut: boolean) => Promise<void>
+  onPasteSystem?: (target: string, localChangeCount?: number) => Promise<'local' | 'empty' | 'pasted'>
   onClose: () => void
 }) {
   const root = props.workspace?.root ?? ''
@@ -137,20 +162,40 @@ export default function WorkspaceSidebar(props: {
   })())
   const [moving, setMoving] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const [clipboard, setClipboard] = createSignal<{ entry: WorkspaceEntry; parent: string; cut: boolean }>()
+  const [selection, setSelection] = createSignal(new Set<string>())
+  const selectedFolders = createMemo(() => new Set([...selection()].flatMap((path) => ancestors(root, path))))
+  const [keepOverview, setKeepOverview] = createSignal(false)
+  const [clipboard, setClipboard] = createSignal<{ entries: ClipboardEntry[]; cut: boolean; systemWriteFailed?: boolean }>()
+  const [cutMarked, setCutMarked] = createSignal(false)
+  const cutPaths = createMemo(() => {
+    const item = clipboard()
+    return new Set(cutMarked() && item?.cut ? item.entries.map(({ entry }) => entry.path) : [])
+  })
+  const [clipboardHint, setClipboardHint] = createSignal<ClipboardNotice & { label: string; fromOverview?: boolean }>()
+  const [overviewCopyError, setOverviewCopyError] = createSignal<ClipboardNotice>()
   const [pasting, setPasting] = createSignal(false)
   const [context, setContext] = createSignal<SidebarContext>()
   const [creation, setCreation] = createSignal<Creation>()
   const [renaming, setRenaming] = createSignal<string>()
   const [trashEntry, setTrashEntry] = createSignal<WorkspaceEntry>()
   let tree!: HTMLElement
+  let selectionAnchor: string | undefined
+  let controlClick: string | undefined
+  let systemCopy = Promise.resolve()
+  let systemClipboardChangeCount: number | undefined
+  let clipboardHintTimer: ReturnType<typeof setTimeout> | undefined
   let disposed = false
-  onCleanup(() => { disposed = true })
+  onCleanup(() => {
+    disposed = true
+    clearTimeout(clipboardHintTimer)
+    props.onSelectionReady?.(undefined)
+  })
 
   const requests = new Map<string, number>()
   const load = async (path: string, refresh = false) => {
     const state = directories[path]
     if (!refresh && (state?.loading || state?.entries)) return
+    const cutAtStart = clipboard()
     const generation = (requests.get(path) ?? 0) + 1
     requests.set(path, generation)
     setDirectory(path, { entries: state?.entries, loading: true, error: undefined })
@@ -159,6 +204,15 @@ export default function WorkspaceSidebar(props: {
       if (disposed || requests.get(path) !== generation) return
       setDirectory(path, 'entries', reconcile(entries, { key: 'path' }))
       setDirectory(path, 'loading', false)
+      const item = clipboard()
+      if (item?.cut && cutAtStart?.cut && !pasting()) {
+        const paths = new Set(entries.map((entry) => entry.path))
+        const remaining = item.entries.filter((source) =>
+          source.parent !== path || !cutAtStart.entries.includes(source) || paths.has(source.entry.path))
+        if (remaining.length !== item.entries.length) {
+          setClipboard(remaining.length ? { ...item, entries: remaining } : undefined)
+        }
+      }
     } catch {
       if (disposed || requests.get(path) !== generation) return
       setDirectory(path, 'loading', false)
@@ -191,11 +245,46 @@ export default function WorkspaceSidebar(props: {
   const refresh = () => {
     if (!root) return
     void load(root, true)
-    for (const path of expanded()) {
-      if (ancestors(root, path).every((parent) => expanded().has(parent))) void load(path, true)
+    const open = expanded()
+    const folders = new Set(selectedFolders())
+    for (const path of open) {
+      if (ancestors(root, path).every((parent) => open.has(parent))) folders.add(path)
     }
+    for (const path of folders) void load(path, true)
   }
   createEffect(on(() => props.revision, refresh, { defer: true }))
+  createEffect(on(clipboard, (item) => {
+    if (!props.onCopy || !item?.cut) return
+    const sources = new Map(item.entries.map(({ entry, parent }) => [entry.path, parent]))
+    const folders = new Set(sources.values())
+    let watching = true
+    let stop: (() => Promise<void>) | undefined
+    const refreshCutSource = () => {
+      for (const folder of folders) void load(folder, true)
+    }
+    window.addEventListener('focus', refreshCutSource)
+    void desktopWorkspace.watchDirectories([...folders], ({ paths, type }) => {
+      if (!watching || (typeof type === 'object' && 'access' in type)) return
+      if (!paths.length) {
+        refreshCutSource()
+        return
+      }
+      const changed = new Set(paths.map((path) => folders.has(path) ? path : sources.get(path)))
+      for (const folder of changed) {
+        if (folder !== undefined) void load(folder, true)
+      }
+    }).then((unwatch) => {
+      if (!watching) return unwatch()
+      stop = unwatch
+      // Catch a move that happened before the native watcher was attached.
+      refreshCutSource()
+    }).catch(() => { /* Refresh on focus if the filesystem cannot be watched. */ })
+    onCleanup(() => {
+      watching = false
+      window.removeEventListener('focus', refreshCutSource)
+      if (stop) void stop().catch(() => {})
+    })
+  }))
 
   createEffect(() => {
     const file = props.reveal
@@ -237,6 +326,63 @@ export default function WorkspaceSidebar(props: {
       (ranks.get(first.path) ?? order.length) - (ranks.get(second.path) ?? order.length))
   }
 
+  const collectFiles = (includeFolder: (path: string) => boolean, includeFile: (path: string) => boolean = () => true) => {
+    const items: ClipboardEntry[] = []
+    const visit = (parent: string) => {
+      for (const entry of orderedEntries(parent)) {
+        if (entry.accessible === false) continue
+        if (entry.directory) {
+          if (includeFolder(entry.path)) visit(entry.path)
+        } else if (includeFile(entry.path)) items.push({ entry, parent })
+      }
+    }
+    if (root) visit(root)
+    return items
+  }
+  const visibleFiles = createMemo(() => collectFiles((path) => expanded().has(path)))
+  const selectedEntries = createMemo(() => {
+    const paths = selection()
+    if (!paths.size) return []
+    const folders = selectedFolders()
+    return collectFiles((path) => folders.has(path), (path) => paths.has(path))
+  })
+  const overviewEntries = createMemo(() => selectedEntries().map(({ entry }) => entry))
+  const clearSelection = () => batch(() => {
+    selectionAnchor = undefined
+    setKeepOverview(false)
+    setSelection(new Set<string>())
+  })
+  createEffect(on(() => props.selectionReset, clearSelection, { defer: true }))
+
+  const removeFromOverview = (path: string) => {
+    if (!selection().has(path)) return
+    batch(() => {
+      setKeepOverview(true)
+      setSelection((paths) => new Set([...paths].filter((selected) => selected !== path)))
+    })
+    if (selectionAnchor === path) selectionAnchor = selectedEntries().at(-1)?.entry.path
+  }
+
+  const selectFile = (path: string, event: MouseEvent) => batch(() => {
+    setKeepOverview(false)
+    const toggle = event.ctrlKey || event.metaKey
+    if (event.shiftKey) {
+      const paths = visibleFiles().map(({ entry }) => entry.path)
+      const anchor = paths.indexOf(selectionAnchor ?? props.active ?? '')
+      const end = paths.indexOf(path)
+      if (anchor !== -1 && end !== -1) {
+        const range = paths.slice(Math.min(anchor, end), Math.max(anchor, end) + 1)
+        setSelection(new Set(toggle ? [...selection(), ...range] : range))
+        return
+      }
+    }
+    selectionAnchor = path
+    const next = new Set(toggle ? selection() : [])
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    setSelection(next)
+  })
+
   const saveOrders = (updated: Record<string, string[]>) => {
     setOrders(updated)
     try { localStorage.setItem(orderKey, JSON.stringify(updated)) } catch { /* Keep session order. */ }
@@ -267,7 +413,13 @@ export default function WorkspaceSidebar(props: {
   const showContext = (event: MouseEvent | KeyboardEvent, entry?: WorkspaceEntry) => {
     event.preventDefault()
     event.stopPropagation()
+    if (event.type === 'contextmenu' && entry?.path === controlClick && controlClick !== undefined) return
     if (moving() || pasting() || props.restoring) return
+    if (entry && !entry.directory && entry.accessible !== false && !selection().has(entry.path)) {
+      selectionAnchor = entry.path
+      setKeepOverview(false)
+      setSelection(new Set([entry.path]))
+    }
     const target = event.target as HTMLElement
     const trigger = target.closest('button') ?? (event.currentTarget as HTMLElement)
     const bounds = trigger.getBoundingClientRect()
@@ -288,41 +440,157 @@ export default function WorkspaceSidebar(props: {
     }
   }
 
-  const paste = async (item: NonNullable<ReturnType<typeof clipboard>>, folder: string) => {
+  const paste = async (folder: string) => {
     setPasting(true)
     setError(undefined)
+    setOverviewCopyError(undefined)
+    setCutMarked(false)
+    if (clipboard()?.cut) setClipboardHint(undefined)
+    const failed: ClipboardEntry[] = []
+    const errors: string[] = []
     try {
-      await props.onPaste(item.entry, folder, item.cut && item.parent !== folder)
-      if (item.cut && clipboard() === item) setClipboard(undefined)
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      if (props.onPasteSystem) {
+        await systemCopy
+        if (disposed) return
+        const result = await props.onPasteSystem(folder, systemClipboardChangeCount)
+        if (disposed) return
+        if (result === 'pasted' || (result === 'empty' && !clipboard()?.systemWriteFailed)) {
+          setClipboard(undefined)
+          return
+        }
+      }
+      const item = clipboard()
+      if (!item) return
+      for (const source of item.entries) {
+        if (disposed) return
+        const sameFolder = source.parent === folder
+        if (item.cut && source.entry.directory && sameFolder) continue
+        try {
+          await props.onPaste(source.entry, folder, item.cut && !sameFolder)
+        } catch (failure) {
+          failed.push(source)
+          const message = failure instanceof Error ? failure.message : String(failure)
+          errors.push(item.entries.length === 1 ? message : `${source.entry.name}：${message}`)
+        }
+      }
+      if (item.cut && clipboard() === item) {
+        setClipboard(failed.length ? { ...item, entries: failed } : undefined)
+      }
+      if (errors.length) setError(errors.join('；'))
+    } catch (error) {
+      if (!disposed) setError(error instanceof Error ? error.message : String(error))
     } finally {
       setPasting(false)
     }
   }
 
-  const clipboardShortcut = (event: KeyboardEvent, entry?: WorkspaceEntry, parent = root) => {
-    if (!root || !props.visible || event.defaultPrevented || event.isComposing
+  const showClipboardHint = (paths: ReadonlySet<string>, label: string, message = label, duration = 1600, fromOverview = false) => {
+    clearTimeout(clipboardHintTimer)
+    setClipboardHint({ paths, label, message, fromOverview })
+    clipboardHintTimer = setTimeout(() => setClipboardHint(undefined), duration)
+  }
+
+  const cancelCut = () => {
+    setClipboard(undefined)
+    setCutMarked(false)
+    setClipboardHint(undefined)
+    setOverviewCopyError(undefined)
+  }
+
+  const copy = (entries: ClipboardEntry[], cut: boolean, fromOverview = false) => {
+    setError(undefined)
+    setClipboardHint(undefined)
+    setOverviewCopyError(undefined)
+    const item = { entries: entries.map(({ entry, parent }) => ({ entry: { ...entry }, parent })), cut }
+    const paths = new Set(item.entries.map(({ entry }) => entry.path))
+    setClipboard(item)
+    setCutMarked(cut)
+    const onCopy = props.onCopy
+    const label = cut ? '已剪切' : '已复制'
+    const confirm = () => {
+      const message = paths.size > 1 ? `${label} ${paths.size} 个文件` : label
+      const finder = cut && onCopy
+      showClipboardHint(paths, label, finder ? `${message} · 到 Finder 按 ⌥⌘V 移动` : message, finder ? 3200 : 1600, fromOverview)
+    }
+    if (!onCopy) {
+      confirm()
+      return
+    }
+    systemCopy = systemCopy.then(async () => {
+      if (disposed || clipboard() !== item) return
+      systemClipboardChangeCount = await onCopy(item.entries.map(({ entry }) => entry))
+      if (!disposed && clipboard() === item && (!cut || cutMarked())) confirm()
+    }).catch((failure) => {
+      if (!disposed && clipboard() === item) {
+        const message = failure instanceof Error ? failure.message : String(failure)
+        setClipboard({ ...item, systemWriteFailed: true })
+        setError(message)
+        if (fromOverview) setOverviewCopyError({ paths, message })
+      }
+    })
+  }
+
+  const showOverview = () => overviewEntries().length > 1 || (overviewEntries().length === 1 && keepOverview())
+
+  const clipboardShortcut = (event: KeyboardEvent, options?: { entry?: WorkspaceEntry; parent?: string; fromOverview?: boolean }) => {
+    const { entry, parent = root, fromOverview } = options ?? {}
+    if (!root || event.defaultPrevented || event.isComposing
       || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
     const key = event.key.toLowerCase()
     if (key !== 'c' && key !== 'x' && key !== 'v') return
     const target = event.target as HTMLElement
     if (target.closest('input, textarea, select, [contenteditable], dialog, [role="menu"]')) return
     if (key === 'v') {
-      const item = clipboard()
-      if (!item) return
+      if (!clipboard() && !props.onPasteSystem) return
       event.preventDefault()
       if (!event.repeat && !pasting() && !moving() && entry?.accessible !== false) {
-        void paste(item, entry?.directory ? entry.path : parent)
+        void paste(entry?.directory ? entry.path : parent)
       }
-    } else if (entry && !entry.directory && entry.accessible !== false) {
-      event.preventDefault()
-      if (!event.repeat) {
-        setError(undefined)
-        setClipboard({ entry: { ...entry }, parent, cut: key === 'x' })
+    } else {
+      const selected = selectedEntries()
+      const focused = entry?.accessible !== false ? entry : undefined
+      const useFocused = focused && (focused.directory ? !showOverview() : !selected.length)
+      const entries = useFocused ? [{ entry: focused, parent }] : selected
+      if (entries.length) {
+        event.preventDefault()
+        if (!event.repeat && !pasting() && !moving()) copy(entries, key === 'x', fromOverview)
       }
     }
   }
+
+  const cancelCutShortcut = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement
+    if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing ||
+      !clipboard()?.cut || pasting() || moving() ||
+      target.closest('input, textarea, select, [contenteditable], dialog, [role="menu"]')) return false
+    event.preventDefault()
+    event.stopPropagation()
+    cancelCut()
+    return true
+  }
+
+  const canCopyOverview = () => selectedEntries().length > 0 && !moving() && !pasting()
+  const overviewMessage = () => {
+    if (props.visible) return
+    const hint = clipboardHint()
+    const notice = overviewCopyError() ?? (hint?.fromOverview ? hint : undefined)
+    const entries = overviewEntries()
+    if (notice?.paths.size === entries.length && entries.every(({ path }) => notice.paths.has(path))) return notice.message
+  }
+  onMount(() => props.onSelectionReady?.({
+    entries: overviewEntries,
+    showOverview,
+    remove: removeFromOverview,
+    copy: (cut) => { if (canCopyOverview()) copy(selectedEntries(), cut, true) },
+    canCopy: canCopyOverview,
+    cutPaths,
+    message: overviewMessage,
+    onKeyDown: (event) => {
+      if (cancelCutShortcut(event)) return
+      const key = event.key.toLowerCase()
+      if (key === 'c' || key === 'x') clipboardShortcut(event, { fromOverview: true })
+    },
+  }))
 
   const actionsFor = ({ entry, trigger }: SidebarContext) => {
     const actions: SidebarAction[] = []
@@ -335,10 +603,27 @@ export default function WorkspaceSidebar(props: {
       )
     }
     if (entry && entry.accessible !== false) {
+      if (root && entry.directory) {
+        const parent = ancestors(root, entry.path).at(-1) ?? root
+        actions.push(
+          { label: '复制文件夹', run: () => copy([{ entry, parent }], false) },
+          { label: '剪切文件夹', run: () => copy([{ entry, parent }], true) },
+        )
+      } else if (root) {
+        const files = selection().has(entry.path)
+          ? selectedEntries() : [{ entry, parent: folder }]
+        actions.push(
+          { label: '复制文件', run: () => copy(files, false) },
+          { label: '剪切文件', run: () => copy(files, true) },
+        )
+      }
       actions.push(
         { label: '重命名…', run: () => setRenaming(entry.path) },
         { label: '删除…', run: () => setTrashEntry(entry) },
       )
+    }
+    if ((clipboard() || props.onPasteSystem) && folder && (!entry || (entry.directory && entry.accessible !== false))) {
+      actions.push({ label: '粘贴', run: () => { if (!moving() && !pasting()) void paste(folder) } })
     }
     const copyPath = entry?.path ?? (root || props.active)
     if (copyPath && entry?.accessible !== false) actions.push({ label: '打开文件位置', run: async () => {
@@ -350,9 +635,13 @@ export default function WorkspaceSidebar(props: {
       }
     } })
     if (copyPath) actions.push({ label: '复制路径', run: async () => {
+      const previous = clipboard()
       try {
         await navigator.clipboard.writeText(copyPath)
+        if (previous?.cut && clipboard() === previous) cancelCut()
         setError(undefined)
+        setOverviewCopyError(undefined)
+        showClipboardHint(new Set([copyPath]), '已复制路径')
       } catch {
         setError('复制路径失败')
       }
@@ -370,7 +659,12 @@ export default function WorkspaceSidebar(props: {
   }
 
   function discardClipboard(path: string) {
-    setClipboard((current) => current && childOf(current.entry.path, path, true) ? undefined : current)
+    const current = clipboard()
+    if (current) {
+      const entries = current.entries.filter(({ entry }) => !childOf(entry.path, path, true))
+      if (entries.length !== current.entries.length) setClipboard(entries.length ? { ...current, entries } : undefined)
+    }
+    setSelection((paths) => new Set([...paths].filter((selected) => !childOf(selected, path, true))))
   }
 
   const forgetFolder = (entry: WorkspaceEntry) => {
@@ -441,11 +735,24 @@ export default function WorkspaceSidebar(props: {
   }
 
   const pressRow = (event: PointerEvent, entry: WorkspaceEntry) => {
-    if (event.button === 2 || (event.button === 0 && event.ctrlKey)) {
+    controlClick = undefined
+    const button = (event.target as Element).closest<HTMLButtonElement>('.workspace-row-button')
+    if ((event.button === 0 || event.button === 2) && event.ctrlKey && button && !button.disabled) {
+      // macOS can dispatch a context menu instead of a click for Ctrl + left click.
+      event.preventDefault()
+      controlClick = entry.path
+      if (!entry.directory) {
+        button.focus({ preventScroll: true })
+        selectFile(entry.path, event)
+      }
+      return
+    }
+    if (event.button === 2) {
       event.preventDefault()
       return
     }
-    if (moving() || pasting() || event.button !== 0 || event.pointerType === 'touch') return
+    if (moving() || pasting() || event.button !== 0 || event.pointerType === 'touch' ||
+      event.shiftKey || event.metaKey || event.ctrlKey) return
     if (entry.accessible === false) return
     if (renaming() === entry.path || (event.target as Element).closest('.workspace-row-action')) return
     press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, row: event.currentTarget as HTMLElement, entry }
@@ -570,6 +877,15 @@ export default function WorkspaceSidebar(props: {
     </>
   )
 
+  const ClipboardHint = (props: { path: string }) => {
+    const hint = () => clipboardHint()?.paths.has(props.path) ? clipboardHint() : undefined
+    return (
+      <Show when={hint()}>{(item) => (
+        <span class="workspace-clipboard-hint" aria-hidden="true" title={item().message}>{item().label}</span>
+      )}</Show>
+    )
+  }
+
   const Rows = (rows: { path: string }) => {
     const entries = createMemo(() => orderedEntries(rows.path))
     const draft = () => creation()?.folder === rows.path ? creation() : undefined
@@ -591,14 +907,14 @@ export default function WorkspaceSidebar(props: {
                 'workspace-drop-target': props.importTarget === entry.path || (dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'inside'),
                 'workspace-dragged': dragged()?.path === entry.path,
                 'workspace-row-menu-open': context()?.entry?.path === entry.path,
-                'workspace-row-cut': clipboard()?.cut === true && clipboard()?.entry.path === entry.path,
+                'workspace-row-cut': cutPaths().has(entry.path),
               }}
               data-workspace-folder={entry.directory ? entry.path : undefined}
               data-workspace-entry={entry.path} data-workspace-parent={rows.path}
               onPointerDown={(event) => pressRow(event, entry)}
               onContextMenu={(event) => showContext(event, entry)}
               onKeyDown={(event) => {
-                clipboardShortcut(event, entry, rows.path)
+                clipboardShortcut(event, { entry, parent: rows.path })
                 contextShortcut(event, entry)
               }}
             >
@@ -616,17 +932,27 @@ export default function WorkspaceSidebar(props: {
                   disabled={entry.accessible === false}
                   aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
                   aria-current={!entry.directory && props.active === entry.path ? 'page' : undefined}
+                  aria-pressed={entry.directory ? undefined : selection().has(entry.path)}
                   aria-busy={props.pending === entry.path || undefined}
                   onClick={(event) => {
-                    if (event.detail > 1) return
+                    if (event.detail > 1 || (event.ctrlKey && controlClick === entry.path)) return
+                    const modified = event.shiftKey || event.metaKey || event.ctrlKey
+                    if (entry.directory && modified) return
                     event.currentTarget.focus({ preventScroll: true })
-                    if (entry.directory) toggle(entry.path)
-                    else props.onOpen(entry)
+                    if (entry.directory) {
+                      toggle(entry.path)
+                    } else {
+                      selectFile(entry.path, event)
+                      if (!modified) props.onOpen(entry)
+                    }
                   }}
-                  onDblClick={() => setRenaming(entry.path)}
+                  onDblClick={(event) => {
+                    if (!event.shiftKey && !event.metaKey && !event.ctrlKey) setRenaming(entry.path)
+                  }}
                 >
                   <EntryIcons entry={entry} />
                   <span class="workspace-entry-name">{props.displayName?.(entry) ?? entry.name}</span>
+                  <ClipboardHint path={entry.path} />
                 </button>
               </Show>
               <Show when={entry.accessible !== false}>
@@ -743,7 +1069,9 @@ export default function WorkspaceSidebar(props: {
     <aside class="workspace" id="workspace-sidebar" aria-label="工作区文件" ref={tree}
       inert={!props.visible} onContextMenu={(event) => showContext(event)}
       onKeyDown={(event) => {
-        if (!(event.target as HTMLElement).closest('[data-workspace-entry]')) clipboardShortcut(event)
+        if (cancelCutShortcut(event)) return
+        const target = event.target as HTMLElement
+        if (!target.closest('[data-workspace-entry]')) clipboardShortcut(event)
         contextShortcut(event)
       }}>
       <div
@@ -755,6 +1083,7 @@ export default function WorkspaceSidebar(props: {
       >
         <Show when={root}><span class="workspace-entry-icon is-folder is-folder-open" aria-hidden="true" /></Show>
         <strong title={root || undefined}>{root ? nameOf(root) : '工作区'}</strong>
+        <ClipboardHint path={root || props.active || ''} />
         <button type="button" class="workspace-more" aria-label="工作区操作" aria-haspopup="menu"
           disabled={moving() || props.restoring} onClick={(event) => showContext(event)}>⋯</button>
       </div>
@@ -777,6 +1106,7 @@ export default function WorkspaceSidebar(props: {
         }}><Rows path={root} /></nav>
       </Show>
       <Show when={error()}><p class="workspace-move-error" role="alert">{error()}</p></Show>
+      <span class="workspace-clipboard-announcement" role="status">{clipboardHint()?.message}</span>
       <Show when={context()} keyed>
         {(current) => <ContextMenu at={current} actions={actionsFor(current)} close={closeContext} />}
       </Show>

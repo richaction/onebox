@@ -432,6 +432,180 @@ pub(crate) struct WorkspaceImport {
 }
 
 #[tauri::command]
+pub(crate) async fn copy_workspace_file_to_clipboard(
+    app: AppHandle,
+    root: String,
+    sources: Vec<String>,
+) -> Result<isize, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let settings = workspace_preference(&app)?;
+        let root = selected_path(&app, root)?;
+        let sources = sources
+            .into_iter()
+            .map(|path| selected_path(&app, path))
+            .collect::<Result<Vec<_>, _>>()?;
+        tokio::task::spawn_blocking(move || {
+            let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+            if real_root != root || remembered_root(&settings)?.as_deref() != Some(root.as_path()) {
+                return Err("请先打开此工作区".into());
+            }
+            if sources.is_empty() {
+                return Err("请选择要复制的文件或文件夹".into());
+            }
+            let sources = sources
+                .into_iter()
+                .map(|source| {
+                    let source = workspace_path(&root, &real_root, &source)?;
+                    if source == real_root
+                        || !fs::symlink_metadata(&source)
+                            .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir())
+                    {
+                        return Err("请选择要复制的文件或文件夹".into());
+                    }
+                    Ok(source)
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            objc2::rc::autoreleasepool(|_| {
+                write_files_to_pasteboard(&objc2_app_kit::NSPasteboard::generalPasteboard(), &sources)
+            })
+        })
+        .await
+        .map_err(|err| err.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, root, sources);
+        Err("当前平台不支持复制文件到系统剪贴板".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn write_files_to_pasteboard(
+    board: &objc2_app_kit::NSPasteboard,
+    sources: &[PathBuf],
+) -> Result<isize, String> {
+    use objc2::runtime::ProtocolObject;
+    use objc2_foundation::{NSArray, NSString, NSURL};
+
+    let urls = sources
+        .iter()
+        .map(|source| {
+            let path = source.to_str().ok_or("无效文件名")?;
+            Ok(NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(path),
+                source.is_dir(),
+            ))
+        })
+        .collect::<Result<Vec<_>, &str>>()?;
+    let objects: Vec<_> = urls.iter().map(|url| ProtocolObject::from_ref(&**url)).collect();
+    let items = NSArray::from_slice(&objects);
+    board.clearContents();
+    if !board.writeObjects(&items) {
+        return Err("无法复制文件到系统剪贴板".into());
+    }
+    Ok(board.changeCount())
+}
+
+#[cfg(target_os = "macos")]
+fn read_clipboard_paths(
+    board: &objc2_app_kit::NSPasteboard,
+    local_change_count: Option<isize>,
+) -> Result<Option<Vec<PathBuf>>, String> {
+    use objc2::ClassType;
+    use objc2_foundation::{NSArray, NSURL};
+
+    let change_count = board.changeCount();
+    if local_change_count == Some(change_count) {
+        return Ok(None);
+    }
+    let classes = NSArray::from_slice(&[NSURL::class()]);
+    // NSURL conforms to NSPasteboardReading. The returned objects are checked
+    // before the path is used, and non-file and remote URLs are ignored.
+    let objects = unsafe { board.readObjectsForClasses_options(&classes, None) };
+    let paths = objects
+        .into_iter()
+        .flat_map(|objects| objects.to_vec())
+        .filter_map(|object| {
+            let url = object.downcast::<NSURL>().ok()?;
+            if !url.isFileURL() || url.host().is_some_and(|host| {
+                let host = host.to_string();
+                !host.is_empty() && !host.eq_ignore_ascii_case("localhost")
+            }) {
+                return None;
+            }
+            let path = PathBuf::from(url.path()?.to_string());
+            path.is_absolute().then_some(path)
+        })
+        .collect();
+    if board.changeCount() != change_count {
+        return Err("剪贴板内容已变化，请重试".into());
+    }
+    Ok(Some(paths))
+}
+
+#[cfg(target_os = "macos")]
+fn copy_clipboard_entry(source: &Path, folder: &Path) -> Result<PathBuf, String> {
+    let metadata = fs::symlink_metadata(source).map_err(|err| err.to_string())?;
+    if metadata.is_dir() {
+        let source = source.canonicalize().map_err(|err| err.to_string())?;
+        return copy_directory_to_folder(&source, folder);
+    }
+    copy_into_workspace(source, folder).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn paste_workspace_clipboard(
+    app: AppHandle,
+    root: String,
+    folder: String,
+    local_change_count: Option<isize>,
+) -> Result<Option<WorkspaceImport>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let settings = workspace_preference(&app)?;
+        let root = selected_path(&app, root)?;
+        let folder = selected_path(&app, folder)?;
+        tokio::task::spawn_blocking(move || {
+            let _locked = FILE_OPERATION.lock().map_err(|err| err.to_string())?;
+            let real_root = root.canonicalize().map_err(|err| err.to_string())?;
+            if real_root != root || remembered_root(&settings)?.as_deref() != Some(root.as_path()) {
+                return Err("请先打开此工作区".into());
+            }
+            let folder = workspace_path(&root, &real_root, &folder)?;
+            if !folder.is_dir() {
+                return Err("请选择目标文件夹".into());
+            }
+            let paths = objc2::rc::autoreleasepool(|_| {
+                read_clipboard_paths(
+                    &objc2_app_kit::NSPasteboard::generalPasteboard(),
+                    local_change_count,
+                )
+            })?;
+            let Some(paths) = paths else {
+                return Ok(None);
+            };
+            let mut result = WorkspaceImport::default();
+            for path in paths {
+                match copy_clipboard_entry(&path, &folder) {
+                    Ok(path) => result.paths.push(path),
+                    Err(_) => result.failed += 1,
+                }
+            }
+            Ok(Some(result))
+        })
+        .await
+        .map_err(|err| err.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, root, folder, local_change_count);
+        Err("当前平台不支持从系统剪贴板粘贴文件".into())
+    }
+}
+
+#[tauri::command]
 pub(crate) async fn copy_workspace_file(
     app: AppHandle,
     root: String,
@@ -457,8 +631,14 @@ pub(crate) async fn copy_workspace_file(
 }
 
 fn copy_entry(source: &Path, target: &Path) -> Result<PathBuf, String> {
-    if !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.is_file()) || !target.is_dir() {
-        return Err("请选择要复制的文件和目标文件夹".into());
+    let source_type = fs::symlink_metadata(source)
+        .map_err(|err| err.to_string())?
+        .file_type();
+    if !target.is_dir() || !(source_type.is_file() || source_type.is_dir()) {
+        return Err("请选择要复制的文件或文件夹，以及目标文件夹".into());
+    }
+    if source_type.is_dir() {
+        return copy_directory_to_folder(source, target);
     }
     let from = source.parent().ok_or("找不到上级目录")?;
     let mut rewritten = None;
@@ -474,6 +654,34 @@ fn copy_entry(source: &Path, target: &Path) -> Result<PathBuf, String> {
         }
     }
     copy_file_to_folder(source, target, rewritten.as_deref()).map_err(|err| format!("复制失败：{err}"))
+}
+
+fn copy_directory_to_folder(source: &Path, target: &Path) -> Result<PathBuf, String> {
+    if target.starts_with(source) {
+        return Err("不能将文件夹粘贴到自身或其子目录".into());
+    }
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("无效文件夹名")?;
+    let staging = tempfile::Builder::new()
+        .prefix(".onebox-copy-")
+        .tempdir_in(target)
+        .map_err(|err| format!("复制失败：{err}"))?;
+    let staged = staging.path().join("folder");
+    snapshot_tree(source, Some(&staged))?;
+    let mut destination = target.join(name);
+    let mut suffix = 2;
+    loop {
+        match rename_exclusive(&staged, &destination) {
+            Ok(()) => return Ok(destination),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                destination = target.join(format!("{name} ({suffix})"));
+                suffix += 1;
+            }
+            Err(error) => return Err(format!("复制失败：{error}")),
+        }
+    }
 }
 
 fn copy_into_workspace(source: &Path, folder: &Path) -> io::Result<PathBuf> {
@@ -1148,7 +1356,7 @@ fn snapshot_tree(
             };
             TreeEntry::File(hash)
         } else {
-            return Err(format!("不支持跨卷移动此文件类型：{}", from.display()));
+            return Err(format!("不支持复制此文件类型：{}", from.display()));
         };
         entries.insert(relative, entry);
     }
@@ -1593,6 +1801,107 @@ mod tests {
         assert_eq!(copy, target.join("Note.md"));
         assert_eq!(fs::read_to_string(copy).unwrap(), "[图](../assets/image.png#detail)\r\n");
         assert_eq!(fs::read_to_string(source).unwrap(), original);
+    }
+
+    #[test]
+    fn copying_a_folder_keeps_its_name_tree_and_existing_destinations() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("资料.v2");
+        let target = workspace.path().join("target");
+        let note = "[附件](附件/数据.BIN)\r\n";
+        fs::create_dir_all(source.join("附件/空文件夹")).unwrap();
+        fs::write(source.join("笔记.md"), note).unwrap();
+        fs::write(source.join("附件/数据.BIN"), [0, 1, 255]).unwrap();
+        fs::create_dir(&target).unwrap();
+
+        let first = copy_entry(&source, &target).unwrap();
+        assert_eq!(first, target.join("资料.v2"));
+        assert_eq!(fs::read_to_string(first.join("笔记.md")).unwrap(), note);
+        assert_eq!(fs::read(first.join("附件/数据.BIN")).unwrap(), [0, 1, 255]);
+        assert!(first.join("附件/空文件夹").is_dir());
+
+        fs::write(target.join("资料.v2 (2)"), "same name").unwrap();
+        let next = copy_entry(&source, &target).unwrap();
+        assert_eq!(next, target.join("资料.v2 (3)"));
+        assert_eq!(
+            fs::read_to_string(target.join("资料.v2 (2)")).unwrap(),
+            "same name"
+        );
+        assert_eq!(fs::read_to_string(source.join("笔记.md")).unwrap(), note);
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 3);
+        assert!(copy_entry(&source, &source).is_err());
+        assert!(copy_entry(&source, &source.join("附件")).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_puts_original_file_and_folder_urls_on_the_pasteboard() {
+        use objc2::ClassType;
+        use objc2_app_kit::NSPasteboard;
+        use objc2_foundation::{NSArray, NSURL};
+
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("中文 #备份.TAR.GZ");
+        let folder = directory.path().join("第二份.PDF");
+        fs::write(&file, [0, 1, 255]).unwrap();
+        fs::create_dir(&folder).unwrap();
+        let sources = [file, folder];
+        objc2::rc::autoreleasepool(|_| {
+            let board = NSPasteboard::pasteboardWithUniqueName();
+            write_files_to_pasteboard(&board, &sources).unwrap();
+            let classes = NSArray::from_slice(&[NSURL::class()]);
+            // NSURL conforms to NSPasteboardReading. No reading options are supplied.
+            let objects = unsafe { board.readObjectsForClasses_options(&classes, None) }.unwrap();
+            assert_eq!(objects.count(), sources.len());
+            for (object, source) in objects.to_vec().into_iter().zip(sources) {
+                let url = object.downcast::<NSURL>().unwrap();
+                assert!(url.isFileURL());
+                let pasted_path = PathBuf::from(url.path().unwrap().to_string());
+                assert_eq!(pasted_path, source);
+                assert_eq!(url.hasDirectoryPath(), source.is_dir());
+            }
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pasting_a_finder_folder_uses_the_current_clipboard_without_moving_the_source() {
+        use objc2_app_kit::NSPasteboard;
+
+        let directory = tempfile::tempdir().unwrap();
+        let old = directory.path().join("old.txt");
+        let source = directory.path().join("资料.v2");
+        let target = directory.path().join("workspace");
+        fs::write(&old, "old clipboard").unwrap();
+        fs::create_dir_all(source.join("子目录/空目录")).unwrap();
+        fs::write(source.join("子目录/笔记.txt"), "keep the original").unwrap();
+        fs::create_dir(&target).unwrap();
+        let target = target.canonicalize().unwrap();
+
+        objc2::rc::autoreleasepool(|_| {
+            let board = NSPasteboard::pasteboardWithUniqueName();
+            let local = write_files_to_pasteboard(&board, &[old]).unwrap();
+            assert_eq!(read_clipboard_paths(&board, Some(local)).unwrap(), None);
+
+            write_files_to_pasteboard(&board, std::slice::from_ref(&source)).unwrap();
+            let paths = read_clipboard_paths(&board, Some(local)).unwrap().unwrap();
+            assert_eq!(paths, [source.clone()]);
+            let pasted = copy_clipboard_entry(&paths[0], &target).unwrap();
+            assert_eq!(pasted, target.join("资料.v2"));
+            assert!(pasted.join("子目录/空目录").is_dir());
+            assert_eq!(
+                fs::read_to_string(pasted.join("子目录/笔记.txt")).unwrap(),
+                "keep the original"
+            );
+            assert!(source.join("子目录/笔记.txt").is_file());
+            assert_eq!(
+                copy_clipboard_entry(&paths[0], &target).unwrap(),
+                target.join("资料.v2 (2)")
+            );
+            assert!(copy_clipboard_entry(&source, &source.join("子目录").canonicalize().unwrap()).is_err());
+            board.clearContents();
+            assert_eq!(read_clipboard_paths(&board, Some(local)).unwrap(), Some(vec![]));
+        });
     }
 
     #[test]
