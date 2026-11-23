@@ -27,6 +27,65 @@ const detector = createTokenizer(true)
 
 const singleLineComment = /^<!--(?:(?!-->)[^\r\n])*-->$/
 const footnoteLabel = /^[^\s\[\]\\]+$/u
+type Token = ReturnType<typeof tokenizer.parse>[number]
+const inlineFormatNames: Readonly<Record<string, string>> = { '<u>': 'underline', '<mark>': 'highlight' }
+const inlineFormatTag = /^<(\/?)(u|mark)>/u
+
+function pairedFormats(tokens: readonly Token[]) {
+  const opening: Token[] = []
+  const pairs = new Map<Token, string>()
+  for (const token of tokens) {
+    if (token.type !== 'html_inline' && token.type !== 'onebox_format') continue
+    const tag = token.content
+    if (inlineFormatNames[tag]) opening.push(token)
+    else if (tag.startsWith('</') && opening.at(-1)?.content === '<' + tag.slice(2)) {
+      const first = opening.pop()!
+      const name = inlineFormatNames[first.content]
+      pairs.set(first, `onebox_${name}_open`)
+      pairs.set(token, `onebox_${name}_close`)
+    }
+  }
+  return pairs
+}
+
+tokenizer.inline.ruler.before('html_inline', 'onebox_format', (state, silent) => {
+  if (state.src[state.pos] !== '<') return false
+  const match = inlineFormatTag.exec(state.src.slice(state.pos, state.pos + 7))
+  if (!match || state.pos + match[0].length > state.posMax) return false
+  if (!silent) state.push('onebox_format', '', 0).content = match[0]
+  state.pos += match[0].length
+  return true
+})
+
+tokenizer.core.ruler.push('onebox_inline_formats', ({ tokens }) => {
+  for (const block of tokens) {
+    if (!block.children?.some((token) => token.type === 'onebox_format')) continue
+    const pairs = pairedFormats(block.children)
+    for (const token of block.children) {
+      if (token.type === 'onebox_format') token.type = pairs.get(token) ?? 'text'
+    }
+  }
+})
+
+tokenizer.core.ruler.push('onebox_quote_styles', (state) => {
+  const output: Token[] = []
+  for (let index = 0; index < state.tokens.length; index++) {
+    const block = state.tokens[index]
+    output.push(block)
+    if (block.type !== 'blockquote_open' || state.tokens[index + 1]?.type !== 'paragraph_open') continue
+    const inline = state.tokens[index + 2]
+    const children = inline?.children
+    if (!children?.length) continue
+    const [first, second] = children
+    if (first.type !== 'text' || (second && second.type !== 'softbreak')) continue
+    const variant = first.content === '[!NOTE]' ? 'note' : first.content === '[!NOTE]-' ? 'fold' : undefined
+    if (!variant || inline.content.split('\n', 1)[0].trimEnd() !== first.content) continue
+    block.meta = { variant }
+    children.splice(0, 2)
+    if (children.length === 0 && state.tokens[index + 4]?.type !== 'blockquote_close') index += 3
+  }
+  state.tokens = output
+})
 
 function imageAlt(tokens: NonNullable<ReturnType<typeof tokenizer.parse>[number]['children']>): string {
   return tokens.map((token) => {
@@ -80,7 +139,7 @@ tokenizer.core.ruler.push('onebox_table_paragraphs', (state) => {
 
 function buildParser(schema: Schema): MarkdownParser {
   return new MarkdownParser(schema, tokenizer, {
-    blockquote: { block: 'blockquote' },
+    blockquote: { block: 'blockquote', getAttrs: (tok) => ({ variant: tok.meta?.variant ?? null }) },
     paragraph: { block: 'paragraph' },
     list_item: { block: 'listItem', getAttrs: (tok) => ({ checked: tok.meta?.checked ?? null }) },
     bullet_list: { block: 'bulletList' },
@@ -118,6 +177,8 @@ function buildParser(schema: Schema): MarkdownParser {
     em: { mark: 'italic' },
     strong: { mark: 'bold' },
     s: { mark: 'strike' },
+    onebox_underline: { mark: 'underline' },
+    onebox_highlight: { mark: 'highlight' },
     code_inline: { mark: 'code', noCloseToken: true },
     link: { mark: 'link', getAttrs: (tok) => ({ href: tok.attrGet('href'), title: tok.attrGet('title') }) },
   })
@@ -135,7 +196,15 @@ const serializer = new MarkdownSerializer(
       state.renderContent(node)
     },
     paragraph: base.paragraph,
-    blockquote: base.blockquote,
+    blockquote(state, node) {
+      const variant = node.attrs.variant
+      if (!variant) { base.blockquote(state, node, node, 0); return }
+      state.wrapBlock('> ', null, node, () => {
+        state.write(variant === 'fold' ? '[!NOTE]-\n' : '[!NOTE]\n')
+        state.write('\n')
+        state.renderContent(node)
+      })
+    },
     heading: base.heading,
     horizontalRule: base.horizontal_rule,
     hardBreak: base.hard_break,
@@ -229,6 +298,8 @@ const serializer = new MarkdownSerializer(
     code: defaultMarkdownSerializer.marks.code,
     link: defaultMarkdownSerializer.marks.link,
     strike: { open: '~~', close: '~~', mixable: true, expelEnclosingWhitespace: true },
+    underline: { open: '<u>', close: '</u>' },
+    highlight: { open: '<mark>', close: '</mark>' },
   },
   { escapeExtraCharacters: /[<&|$]/g, hardBreakNodeName: 'hardBreak' },
 )
@@ -281,8 +352,11 @@ export function detectUnsupported(text: string): UnsupportedKind[] {
       if (definitions.has(label) || !footnoteLabel.test(label)) found.add('footnote')
       definitions.add(label)
     }
-    for (const tok of block.children ?? []) {
-      if (tok.type === 'html_inline' && !singleLineComment.test(tok.content)) found.add('html')
+    const children = block.children
+    if (!children?.some((tok) => tok.type === 'html_inline' && !singleLineComment.test(tok.content))) continue
+    const formats = pairedFormats(children)
+    for (const tok of children) {
+      if (tok.type === 'html_inline' && !singleLineComment.test(tok.content) && !formats.has(tok)) found.add('html')
     }
   }
   return [...found]

@@ -200,7 +200,7 @@ export default function InlineAiEditor(props: {
     const end = props.editor.view.coordsAtPos(range.to, -1)
     const left = Math.max(viewport.left, content.left)
     const width = Math.max(0, Math.min(viewport.right, content.right) - left)
-    const height = panel.offsetHeight || 36
+    const height = panel.offsetHeight || 31
     const below = end.bottom + 6
     const above = start.top - height - 6
     const preferAbove = above >= viewport.top + 6 && (suggestion() || below + height > viewport.bottom)
@@ -275,6 +275,13 @@ export default function InlineAiEditor(props: {
     style={{
       left: `${layout()?.left ?? 0}px`, top: `${layout()?.top ?? 0}px`, width: `${layout()?.width ?? 0}px`,
       visibility: layout() ? 'visible' : 'hidden',
+    }}
+    onPointerDown={(event) => {
+      const target = event.target as Element
+      if (event.button !== 0 || input.hidden || target.closest('textarea, button, a') ||
+        (target !== panel && !target.closest('.editor-inline-ai-bar'))) return
+      event.preventDefault()
+      input.focus({ preventScroll: true })
     }}
     onKeyDown={(event) => {
       if (event.key === 'Escape' && !event.isComposing) { event.stopPropagation(); props.close(true) }

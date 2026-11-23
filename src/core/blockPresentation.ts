@@ -1,3 +1,5 @@
+import type { Node as DocumentNode } from '@tiptap/pm/model'
+import { NodeSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import { codeLanguage, codeLanguageIds } from './codeLanguages'
 import { codeLanguageMenu } from './codeLanguageMenu'
@@ -43,6 +45,7 @@ export function keepTableCaretVisible(view: EditorView) {
 export function createBlockPresentation(highlight: ReturnType<typeof createCodeHighlight>) {
   const languageMenus = new Set<ReturnType<typeof codeLanguageMenu>>()
   const mermaidEditors = new Set<ReturnType<typeof mountMermaidEditor>>()
+  const foldedQuotes = new WeakSet<DocumentNode>()
   const present: PresentBlock = (node, rendered, view, getPos) => {
     const { dom, contentDOM } = rendered
     const document = dom.ownerDocument
@@ -53,6 +56,40 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       }
       updateContent(node)
       return { ...rendered, updateContent }
+    }
+
+    if (node.type.name === 'blockquote' && node.attrs.variant === 'fold') {
+      const frame = document.createElement('div')
+      frame.className = 'editor-fold-block'
+      const toggle = document.createElement('button')
+      toggle.type = 'button'
+      toggle.contentEditable = 'false'
+      frame.append(toggle, dom)
+      let current = node
+      let folded = foldedQuotes.has(node)
+      const updateContent = (next: DocumentNode) => {
+        current = next
+        if (folded) foldedQuotes.add(next)
+        const first = next.firstChild
+        toggle.textContent = first?.isTextblock ? first.textContent.slice(0, 100).split('\n', 1)[0] || '折叠区块' : '折叠区块'
+        toggle.setAttribute('aria-expanded', String(!folded))
+        frame.toggleAttribute('data-folded', folded)
+      }
+      toggle.onmousedown = (event) => { if (event.button === 0) event.preventDefault() }
+      toggle.onclick = () => {
+        folded = !folded
+        if (!folded) foldedQuotes.delete(current)
+        else {
+          const pos = getPos()
+          const { selection, doc, tr } = view.state
+          if (pos !== undefined && selection.from > pos && selection.to < pos + current.nodeSize) {
+            view.dispatch(tr.setSelection(NodeSelection.create(doc, pos)))
+          }
+        }
+        updateContent(current)
+      }
+      updateContent(node)
+      return { dom: frame, contentDOM, updateContent, stopEvent: (event) => event.target === toggle }
     }
 
     if (node.type.name === 'table') {

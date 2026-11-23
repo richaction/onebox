@@ -14,6 +14,7 @@ import { createEditor, type EditorHandle } from '../core/editor'
 import { ListRowsSelection, listTextSelectionRects } from '../core/listSelection'
 import BlockMenu from './BlockMenu'
 import InlineAiEditor from './InlineAiEditor'
+import SelectionToolbar, { selectionToolbarHeight, selectionToolbarWidth } from './SelectionToolbar'
 
 export type AttachmentKind = 'image' | 'file'
 
@@ -70,7 +71,9 @@ export default function EditorShell(props: {
   let suppressGripClick = false
 
   const [popup, setPopup] = createSignal<Popup>()
-  const [selectionMenu, setSelectionMenu] = createSignal<{ x: number; y: number; selection: Selection }>()
+  const [selectionMenu, setSelectionMenu] = createSignal<{
+    x: number; y: number; above: boolean; width: number; maxHeight: number; selection: Selection
+  }>()
   const [inlineEdit, setInlineEdit] = createSignal<AiReference & { anchor: number }>()
   const [blockGrip, setBlockGrip] = createSignal<{ x: number; y: number; selection: NodeSelection }>()
   const [blockDrop, setBlockDrop] = createSignal<ReturnType<typeof blockDropTarget>>()
@@ -130,9 +133,9 @@ export default function EditorShell(props: {
     setInlineEdit({ ...reference, anchor: reference.anchor })
   }
 
-  const showSelectionMenu = (x: number, y: number, afterRelease = false) => {
+  const showSelectionMenu = (x: number, y: number, edgeTolerance = 0) => {
     const view = handle?.editor.view
-    if (!view?.editable || !view.hasFocus() || view.composing || !props.inlineAi || inlineEdit() || popup()) return
+    if (!view?.editable || !view.hasFocus() || view.composing || inlineEdit() || popup()) return
     const { selection } = view.state
     if (!(selection instanceof TextSelection || selection instanceof ListRowsSelection ||
       (selection instanceof NodeSelection && selection.node.isBlock)) || selection.empty) return
@@ -153,8 +156,8 @@ export default function EditorShell(props: {
       }
     }
     const rects = selectionRects.rects.filter((rect) => rect.width > 0)
-    if (!rects.length || (!afterRelease && !rects.some((rect) =>
-      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom))) return
+    if (!rects.some((rect) => x >= rect.left - edgeTolerance && x <= rect.right + edgeTolerance &&
+      y >= rect.top && y <= rect.bottom)) return
     const bounds = scrollRoot.getBoundingClientRect()
     let topEdge = rects[0].top
     let bottomEdge = rects[0].bottom
@@ -162,16 +165,22 @@ export default function EditorShell(props: {
       topEdge = Math.min(topEdge, rect.top)
       bottomEdge = Math.max(bottomEdge, rect.bottom)
     }
-    const above = topEdge - 38
-    const below = bottomEdge + 4
+    const width = Math.min(selectionToolbarWidth, Math.max(0, bounds.width - 8))
+    const minY = bounds.top + 4
+    const maxY = bounds.bottom - 4
+    const aboveY = topEdge - 5
+    const belowY = bottomEdge + 5
+    const aboveSpace = aboveY - minY
+    const belowSpace = maxY - belowY
     const nearEnd = Math.abs(y - bottomEdge) <= Math.abs(y - topEdge)
-    const canOpenAbove = above >= bounds.top + 4
-    const canOpenBelow = below + 32 <= bounds.bottom - 4
-    const top = canOpenBelow && (nearEnd || !canOpenAbove) ? below
-      : canOpenAbove ? above : Math.max(bounds.top + 4, Math.min(y + 8, bounds.bottom - 36))
+    const above = aboveSpace >= selectionToolbarHeight ? !nearEnd || belowSpace < selectionToolbarHeight
+      : belowSpace < selectionToolbarHeight && aboveSpace > belowSpace
+    const minHeight = Math.min(selectionToolbarHeight, maxY - minY)
+    const anchor = above ? Math.max(minY + minHeight, Math.min(aboveY, maxY))
+      : Math.min(maxY - minHeight, Math.max(minY, belowY))
     setSelectionMenu({
-      x: Math.max(bounds.left + 4, Math.min(x - 64, bounds.right - 132)),
-      y: top,
+      x: Math.max(bounds.left + 4, Math.min(x - width / 2, bounds.right - width - 4)),
+      y: anchor, above, width, maxHeight: Math.min(360, above ? anchor - minY : maxY - anchor),
       selection,
     })
   }
@@ -184,8 +193,8 @@ export default function EditorShell(props: {
   const hoverAfterSelection = (event: PointerEvent) => {
     if (event.button !== 0 || (event.target as Element | null)?.closest?.('button, input, textarea, [contenteditable="false"]')) return
     cancelAnimationFrame(selectionFrame)
-    // Mouseup and the editor's native selection sync complete after pointerup.
-    const show = () => showSelectionMenu(event.clientX, event.clientY, true)
+    // Native selection snaps to character boundaries after pointerup.
+    const show = () => showSelectionMenu(event.clientX, event.clientY, 2)
     selectionFrame = requestAnimationFrame(() => {
       show()
       if (!selectionMenu()) selectionFrame = requestAnimationFrame(show)
@@ -515,25 +524,14 @@ export default function EditorShell(props: {
             style={{ left: `${target().x}px`, top: `${target().y}px`, width: `${target().width}px` }} />
         </Portal>}
       </Show>
-      <Show when={props.inlineAi && selectionMenu()} keyed>
+      <Show when={selectionMenu()} keyed>
         {(current) => (
           <Portal>
-            <button type="button" class="editor-selection-menu" style={{ left: `${current.x}px`, top: `${current.y}px` }}
-              onMouseDown={(event) => { if (event.button === 0) event.preventDefault() }}
-              onKeyDown={(event) => {
-                if (event.key !== 'Escape') return
-                closeSelectionMenu()
-                handle?.editor.view.focus()
-              }}
-              onClick={() => {
-                const view = handle?.editor.view
-                closeSelectionMenu()
-                if (!view?.editable || !view.state.selection.eq(current.selection)) return
+            <SelectionToolbar {...current} editor={handle!.editor} onClose={closeSelectionMenu}
+              onAiEdit={props.inlineAi ? () => {
                 const { from, to } = current.selection
                 startInlineEdit({ from, to })
-              }}>
-              <span aria-hidden="true">✨</span> 使用 AI 编辑
-            </button>
+              } : undefined} />
           </Portal>
         )}
       </Show>

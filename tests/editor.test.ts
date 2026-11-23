@@ -60,7 +60,8 @@ it('opens the in-document AI editor on first click and applies only after approv
     const hover = (x: number, buttons = 0) => paragraph.dispatchEvent(new PointerEvent('pointermove', {
       bubbles: true, pointerType: 'mouse', clientX: x, clientY: 70, buttons,
     }))
-    const menu = () => document.querySelector<HTMLButtonElement>('.editor-selection-menu')
+    const menu = () => document.querySelector<HTMLElement>('.editor-selection-menu')
+    const aiButton = () => menu()?.querySelector<HTMLButtonElement>('.selection-toolbar-ai')
     try {
       hover(40, 1)
       hover(100)
@@ -83,10 +84,10 @@ it('opens the in-document AI editor on first click and applies only after approv
       vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 80, top: 60, bottom: 80 })
       const retryFocus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus').mockImplementationOnce(() => {})
       try {
-        const button = menu()!
+        const button = aiButton()!
         button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
         scroll.dispatchEvent(new Event('scroll'))
-        expect(menu()).toBe(button)
+        expect(aiButton()).toBe(button)
         button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
         button.click()
         await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('修改要求'))
@@ -96,6 +97,16 @@ it('opens the in-document AI editor on first click and applies only after approv
       const panel = input.closest<HTMLElement>('.editor-inline-ai')!
       expect(input).not.toBeNull()
       expect(document.activeElement).toBe(input)
+      input.blur()
+      panel.querySelector('.editor-inline-ai-spark')!.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0,
+      }))
+      expect(document.activeElement).toBe(input)
+      const sendButton = panel.querySelector<HTMLButtonElement>('[aria-label="发送修改要求"]')!
+      expect(sendButton.disabled).toBe(true)
+      input.value = '   '
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(sendButton.disabled).toBe(true)
       expect(panel.style.left).toBe('56px')
       expect(panel.style.width).toBe('708px')
       contentBounds.mockReturnValue(new DOMRect(22, 24, 276, 180))
@@ -108,7 +119,8 @@ it('opens the in-document AI editor on first click and applies only after approv
       expect(menu()).toBeNull()
       input.value = '改为 Onebox'
       input.dispatchEvent(new Event('input', { bubbles: true }))
-      document.querySelector<HTMLButtonElement>('[aria-label="发送修改要求"]')!.click()
+      expect(sendButton.disabled).toBe(false)
+      sendButton.click()
       expect(document.body.textContent).toContain('正在工作')
       expect(panel.style.width).toBe('276px')
       expect(document.querySelector('.editor-inline-ai-loading')).not.toBeNull()
@@ -142,11 +154,11 @@ it('opens the in-document AI editor on first click and applies only after approv
       })
       try {
         scroll.dispatchEvent(new PointerEvent('pointerup', {
-          bubbles: true, pointerType: 'mouse', clientX: 110, clientY: 80, button: 0,
+          bubbles: true, pointerType: 'mouse', clientX: 45, clientY: 75, button: 0,
         }))
         await vi.waitFor(() => expect(menu()).not.toBeNull())
       } finally { restoredNative.mockRestore() }
-      menu()!.click()
+      aiButton()!.click()
       expect(document.querySelector('.editor-inline-ai')).not.toBeNull()
       const outsideClick = vi.fn()
       host.addEventListener('click', outsideClick)
@@ -185,6 +197,56 @@ it('keeps a pressed block-menu item mounted until the click after a scroll', () 
     item.click()
     expect(mounted.toMarkdown()).toBe('# paragraph')
   } finally {
+    dispose()
+    host.remove()
+  }
+})
+
+it('opens text formatting and lets the block submenu convert a selected line', () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'example', onReady: (value) => { mounted = value }, onUpdate: vi.fn(), inlineAi: true,
+  }), host)
+  const { view } = mounted.editor
+  const focus = vi.spyOn(view, 'hasFocus').mockReturnValue(true)
+  const menu = () => document.querySelector<HTMLElement>('.editor-selection-menu')!
+  const open = () => {
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 8)))
+    const paragraph = view.dom.querySelector('p')!
+    const text = paragraph.querySelector('u')?.firstChild ?? paragraph.firstChild
+    const native = vi.spyOn(window, 'getSelection').mockReturnValue({ anchorNode: text, focusNode: text, rangeCount: 1, isCollapsed: false,
+      getRangeAt: () => ({ getClientRects: () => [new DOMRect(20, 60, 80, 20)] }),
+    } as unknown as globalThis.Selection)
+    try {
+      paragraph.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: 40, clientY: 70 }))
+    } finally { native.mockRestore() }
+  }
+  try {
+    open()
+    expect(menu().lastElementChild?.textContent).toContain('使用 AI 编辑')
+    expect(menu().textContent).not.toMatch(/评论|技能/)
+    menu().querySelector<HTMLButtonElement>('[aria-label="下划线"]')!.click()
+    expect(mounted.toMarkdown()).toBe('<u>example</u>')
+    expect(menu()).toBeNull()
+
+    open()
+    menu().querySelector<HTMLButtonElement>('[aria-label="转换区块"]')!.click()
+    const blocks = menu().querySelector('[aria-label="区块类型"]')!
+    const fold = [...blocks.querySelectorAll('button')].find((button) => button.textContent?.includes('折叠标题 2'))!
+    fold.click()
+    const folded = view.dom.querySelector('.editor-fold-block')!
+    const heading = folded.querySelector('h2')!
+    const toggle = folded.querySelector('button')!
+    expect(heading.textContent).toBe('example')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    toggle.click()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(folded.hasAttribute('data-folded')).toBe(true)
+    expect(mounted.toMarkdown()).toContain('## <u>example</u>')
+  } finally {
+    focus.mockRestore()
     dispose()
     host.remove()
   }

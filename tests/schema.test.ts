@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { TOP_LEVEL_BLOCK_TYPES, schema } from '../src/core/schema'
 
 describe('GFM schema', () => {
-  it('does not register underline (not GFM)', () => {
-    expect(schema.marks.underline).toBeUndefined()
+  it('registers the two supported inline HTML marks', () => {
+    expect(Object.keys(schema.marks)).toContain('underline')
+    expect(Object.keys(schema.marks)).toContain('highlight')
   })
 
   it('registers GFM marks', () => {

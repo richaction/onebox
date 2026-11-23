@@ -168,6 +168,25 @@ describe('phase two Markdown', () => {
 })
 
 describe('read-only protection', () => {
+  it('round-trips the allowed underline and highlight tags while protecting other HTML', () => {
+    const source = '<u>下划线</u>、<mark>高亮</mark>与 **<u>嵌套粗体</u>**'
+    expect(detectUnsupported(source)).toEqual([])
+    const doc = parseMarkdown(source, schema)
+    expect(doc.firstChild?.firstChild?.marks.map((mark) => mark.type.name)).toEqual(['underline'])
+    expect(serializeMarkdownForFile(doc)).toBe(source)
+    expect(detectUnsupported('<u class="unknown">text</u>')).toEqual(['html'])
+    expect(detectUnsupported('<mark>unclosed')).toEqual(['html'])
+  })
+
+  it('round-trips callouts and foldable headings while keeping escaped markers literal', () => {
+    const source = '> [!NOTE]\n>\n> 标注内容\n\n> [!NOTE]-\n>\n> ## 折叠标题\n>\n> 正文'
+    const doc = parseMarkdown(source, schema)
+    expect(doc.child(0).attrs.variant).toBe('note')
+    expect(doc.child(1).attrs.variant).toBe('fold')
+    expect(doc.child(1).firstChild?.type.name).toBe('heading')
+    expect(serializeMarkdownForFile(doc).replace(/^> +$/gmu, '>')).toBe(source)
+    expect(parseMarkdown('> \\[!NOTE]\n> 正文', schema).firstChild?.attrs.variant).toBeNull()
+  })
   it('flags raw HTML, including multiline inline tags and comments', () => {
     expect(detectUnsupported('正文 <div>x</div>\n')).toContain('html')
     expect(detectUnsupported('text <span\n class="x">value</span>')).toContain('html')

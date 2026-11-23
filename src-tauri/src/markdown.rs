@@ -127,16 +127,61 @@ impl Frame {
     }
 }
 
+fn inline_format(tag: &str) -> Option<(&'static str, bool)> {
+    match tag {
+        "<u>" => Some(("underline", false)),
+        "</u>" => Some(("underline", true)),
+        "<mark>" => Some(("highlight", false)),
+        "</mark>" => Some(("highlight", true)),
+        _ => None,
+    }
+}
+
+fn apply_quote_style(quote: &mut Node, source: &str) {
+    let marker_line = source.lines().next().unwrap_or_default().trim_start();
+    let Some(marker_line) = marker_line.strip_prefix('>') else {
+        return;
+    };
+    let Some(paragraph) = quote.content.first_mut().filter(|node| node.kind == "paragraph") else {
+        return;
+    };
+    let Some(first) = paragraph.content.first_mut().filter(|node| node.marks.is_empty()) else {
+        return;
+    };
+    let Some(text) = first.text.as_mut() else {
+        return;
+    };
+    let (marker, rest) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    if marker_line.trim() != marker {
+        return;
+    }
+    let variant = match marker {
+        "[!NOTE]" => "note",
+        "[!NOTE]-" => "fold",
+        _ => return,
+    };
+    if rest.is_empty() {
+        paragraph.content.remove(0);
+    } else {
+        *text = rest.to_owned();
+    }
+    if paragraph.content.is_empty() && quote.content.len() > 1 {
+        quote.content.remove(0);
+    }
+    quote.attrs = json!({ "variant": variant });
+}
+
 // Pulldown parses the complete document before its top-level blocks are batched.
 // Its reference map therefore also covers link definitions after the first viewport.
 fn parse_document(source: &str) -> (Vec<Node>, bool) {
     let mut stack = vec![Frame::new(Node::plain("doc"))];
     let mut marks = Vec::new();
+    let mut inline_formats = Vec::new();
     let mut images: Vec<(Node, String)> = Vec::new();
     let mut footnotes = HashSet::new();
     let mut readonly = false;
 
-    for event in parser(source) {
+    for (event, range) in parser(source).into_offset_iter() {
         if !images.is_empty() {
             match &event {
                 Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => {}
@@ -233,9 +278,18 @@ fn parse_document(source: &str) -> (Vec<Node>, bool) {
                 stack.push(Frame::new(block));
             }
             Event::End(
-                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link,
+                end @ (TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link),
             ) => {
-                marks.pop();
+                let kind = match end {
+                    TagEnd::Emphasis => "italic",
+                    TagEnd::Strong => "bold",
+                    TagEnd::Strikethrough => "strike",
+                    TagEnd::Link => "link",
+                    _ => unreachable!(),
+                };
+                if let Some(index) = marks.iter().rposition(|mark| mark["type"] == kind) {
+                    marks.remove(index);
+                }
             }
             Event::End(TagEnd::Image) => {
                 let (mut image, alt) = images.pop().unwrap();
@@ -248,7 +302,15 @@ fn parse_document(source: &str) -> (Vec<Node>, bool) {
                 }
             }
             Event::End(end) => {
+                if !inline_formats.is_empty() {
+                    readonly = true;
+                    marks.retain(|mark| mark["type"] != "underline" && mark["type"] != "highlight");
+                    inline_formats.clear();
+                }
                 let mut finished = stack.pop().unwrap().node;
+                if matches!(end, TagEnd::BlockQuote(_)) {
+                    apply_quote_style(&mut finished, &source[range]);
+                }
                 match end {
                     TagEnd::Item
                         if !finished
@@ -319,6 +381,21 @@ fn parse_document(source: &str) -> (Vec<Node>, bool) {
                 }
             }
             Event::Rule => node.content.push(Node::plain("horizontalRule")),
+            Event::InlineHtml(raw) if inline_format(&raw).is_some() => {
+                let (kind, closing) = inline_format(&raw).unwrap();
+                if !closing {
+                    inline_formats.push(kind);
+                    marks.push(json!({ "type": kind }));
+                } else if inline_formats.last() == Some(&kind) {
+                    inline_formats.pop();
+                    if let Some(index) = marks.iter().rposition(|mark| mark["type"] == kind) {
+                        marks.remove(index);
+                    }
+                } else {
+                    readonly = true;
+                    node.inline_parent().push_text(&raw, &marks);
+                }
+            }
             Event::Html(raw) | Event::InlineHtml(raw) => {
                 let trimmed = raw.trim();
                 let safe_comment = trimmed.starts_with("<!--")
@@ -457,5 +534,21 @@ $$
         let (blocks, readonly) = parse_document("<div>unsafe</div>\n\n```rs\nline\n```");
         assert!(readonly);
         assert_eq!(blocks[1].content[0].text.as_deref(), Some("line"));
+    }
+
+    #[test]
+    fn parses_allowed_formatting_tags_and_quote_styles() {
+        let (blocks, readonly) = parse_document(
+            "<u>underlined</u> and <mark>highlighted</mark>\n\n> [!NOTE]\n>\n> text\n\n> [!NOTE]-\n>\n> ## Fold title",
+        );
+        assert!(!readonly);
+        assert_eq!(blocks[0].content[0].marks, vec![json!({ "type": "underline" })]);
+        assert_eq!(blocks[0].content[2].marks, vec![json!({ "type": "highlight" })]);
+        assert_eq!(blocks[1].attrs["variant"], "note");
+        assert_eq!(blocks[2].attrs["variant"], "fold");
+        assert_eq!(blocks[2].content[0].kind, "heading");
+        assert!(parse_document("<u>unclosed").1);
+        assert!(parse_document("<mark class=\"x\">untrusted</mark>").1);
+        assert!(parse_document("> \\[!NOTE]\n> text").0[0].attrs.is_null());
     }
 }
