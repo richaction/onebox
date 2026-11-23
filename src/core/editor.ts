@@ -1,19 +1,20 @@
 import { Editor, Extension, type JSONContent } from '@tiptap/core'
 import { Fragment, Mark } from '@tiptap/pm/model'
 import type { Node } from '@tiptap/pm/model'
-import { EditorState, Plugin } from '@tiptap/pm/state'
-import type { EditorProps } from '@tiptap/pm/view'
+import { EditorState, NodeSelection, Plugin, TextSelection, type Selection } from '@tiptap/pm/state'
+import type { EditorProps, EditorView } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
-import { aiDocumentPlugin } from './aiDocument'
+import { aiDocumentPlugin, aiInlineSourcePlugin } from './aiDocument'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
 import { createCodeHighlight } from './codeHighlight'
 import { developmentSession } from './developmentSession'
-import { placeCaretInGutter } from './editorCaret'
+import { blockAtGutterPoint, placeCaretInGutter } from './editorCaret'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import type { ViewportMetrics } from './metrics'
 import { MarkdownImage } from './markdownNodes'
 import { extensions, schema } from './schema'
+import { ListRowsSelection, listSelectionPlugin } from './listSelection'
 import { blockNodeViews, type ViewportObserver } from './viewport/blockNodeView'
 import { HeightCache } from './viewport/heights'
 import { createViewportObserver } from './viewport/observer'
@@ -32,6 +33,21 @@ export interface EditorHandle {
 }
 
 const BLOCKS_PER_GROUP = 64
+
+function collapseClickedSelection(view: EditorView, pos: number, event: MouseEvent) {
+  const { doc, selection } = view.state
+  const isTextOrBlock = selection instanceof TextSelection || selection instanceof ListRowsSelection
+    || (selection instanceof NodeSelection && selection.node.isBlock)
+  if (!view.editable || view.composing || event.button !== 0 ||
+    event.shiftKey || event.altKey || event.metaKey || event.ctrlKey ||
+    !isTextOrBlock || selection.empty || pos < selection.from || pos > selection.to) return false
+  if ((event.target as Element | null)?.closest?.('button, input, [contenteditable="false"]')) return false
+  const caret = doc.resolve(pos)
+  if (!caret.parent.inlineContent) return false
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, pos)))
+  view.focus()
+  return true
+}
 
 export function createEditor(opts: {
   element: HTMLElement
@@ -54,6 +70,9 @@ export function createEditor(opts: {
     ? { created: 0, destroyed: 0, transactions: 0, lastTransactionMs: 0, maxTransactionMs: 0 }
     : undefined
   let observer: ViewportObserver | null = null
+  let mousePress: { x: number; y: number; selection: Selection; dragged: boolean } | undefined
+  const finishesDrag = (view: EditorView) => !!mousePress &&
+    (mousePress.dragged || (!view.state.selection.empty && !view.state.selection.eq(mousePress.selection)))
   const localImages = new Set<() => void>()
   const viewport = Extension.create({
     name: 'oneboxViewport',
@@ -62,6 +81,8 @@ export function createEditor(opts: {
       return [
         createVisibilityPlugin(),
         aiDocumentPlugin(),
+        aiInlineSourcePlugin(),
+        listSelectionPlugin(opts.scrollRoot),
         new Plugin({
           props: { nodeViews: blockNodeViews(heights, () => observer, presentation.present) },
           view(view) {
@@ -153,6 +174,9 @@ export function createEditor(opts: {
       clipboardTextSerializer: (slice, view) =>
         serializeMarkdown(view.state.schema.topNodeType.create(null, slice.content)),
       handleKeyDown: opts.handleKeyDown,
+      handleClick(view, pos, event) {
+        return !finishesDrag(view) && collapseClickedSelection(view, pos, event)
+      },
       handleDrop: opts.handleDrop,
       handlePaste: opts.handlePaste,
       handleScrollToSelection(view) {
@@ -162,6 +186,9 @@ export function createEditor(opts: {
       handleDOMEvents: {
         contextmenu: opts.handleContextMenu,
         click(view, event) {
+          const moved = !!mousePress?.dragged
+          const dragged = event.detail > 0 && finishesDrag(view)
+          mousePress = undefined
           const target = event.target as Element | null
           const anchor = target?.closest?.('a[href]')
           const href = anchor?.getAttribute('href')
@@ -172,7 +199,12 @@ export function createEditor(opts: {
           }
           const button = target?.closest?.('[data-task-toggle]')
           const item = button?.closest('li')
-          if (!item || !view.editable) return false
+          if (!item || !view.editable) {
+            if (dragged || event.detail !== 1 || view.state.selection.empty || event.defaultPrevented) return false
+            const point = view.posAtCoords({ left: event.clientX, top: event.clientY })
+            return !!point && collapseClickedSelection(view, point.pos, event)
+          }
+          if (event.detail > 0 && moved) return true
           const $pos = view.state.doc.resolve(view.posAtDOM(item, 0))
           for (let depth = $pos.depth; depth > 0; depth--) {
             const node = $pos.node(depth)
@@ -189,10 +221,53 @@ export function createEditor(opts: {
 
   observer = createViewportObserver(editor.view, opts.scrollRoot, 200, viewportMetrics)
   for (const child of editor.view.dom.children) observer.observe(child)
-  const focusGutter = (event: MouseEvent) => placeCaretInGutter(editor.view, event, opts.scrollRoot)
+  let listDrag: { selection: NodeSelection; y: number } | undefined
+  const updateMousePress = (event: MouseEvent) => {
+    if (mousePress && (Math.abs(event.clientX - mousePress.x) > 4 || Math.abs(event.clientY - mousePress.y) > 4)) {
+      mousePress.dragged = true
+    }
+  }
+  const endMousePress = (event: MouseEvent) => {
+    if (event.button === 0) updateMousePress(event)
+    listDrag = undefined
+  }
+  const resetMousePress = () => {
+    mousePress = undefined
+    listDrag = undefined
+  }
+  const focusGutter = (event: MouseEvent) => {
+    resetMousePress()
+    if (event.button === 0) {
+      mousePress = { x: event.clientX, y: event.clientY, selection: editor.state.selection, dragged: false }
+    }
+    placeCaretInGutter(editor.view, event, opts.scrollRoot)
+    const { selection } = editor.state
+    if (event.defaultPrevented && selection instanceof NodeSelection && selection.node.type.name === 'listItem') {
+      listDrag = { selection, y: event.clientY }
+    }
+  }
+  const dragListRows = (event: MouseEvent) => {
+    if (event.buttons & 1) updateMousePress(event)
+    if (!listDrag) return
+    if (!(event.buttons & 1) || editor.state.doc !== listDrag.selection.$from.doc || !editor.isEditable) {
+      listDrag = undefined
+      return
+    }
+    if (Math.abs(event.clientY - listDrag.y) < 4 && editor.state.selection === listDrag.selection) return
+    const target = blockAtGutterPoint(editor.view, event.clientY)
+    if (!target) return
+    const selected = ListRowsSelection.between(listDrag.selection.$from, target.$from)
+    if (selected && !selected.eq(editor.state.selection)) {
+      editor.view.dispatch(editor.state.tr.setSelection(selected))
+    }
+  }
   opts.scrollRoot.addEventListener('mousedown', focusGutter, true)
+  document.addEventListener('mousemove', dragListRows, true)
+  document.addEventListener('mouseup', endMousePress, true)
+  window.addEventListener('blur', resetMousePress)
 
   const load = (doc: Node) => {
+    resetMousePress()
     editor.view.updateState(EditorState.create({ doc, plugins: editor.state.plugins }))
     opts.scrollRoot.scrollTop = 0
   }
@@ -238,6 +313,9 @@ export function createEditor(opts: {
     toMarkdown: () => serializeMarkdown(editor.state.doc),
     destroy() {
       opts.scrollRoot.removeEventListener('mousedown', focusGutter, true)
+      document.removeEventListener('mousemove', dragListRows, true)
+      document.removeEventListener('mouseup', endMousePress, true)
+      window.removeEventListener('blur', resetMousePress)
       observer?.disconnect()
       observer = null
       editor.destroy()

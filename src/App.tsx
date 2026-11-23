@@ -1172,7 +1172,8 @@ export default function App() {
                   onReady={onReady}
                   onDispose={onEditorDispose}
                   onUpdate={onUpdate}
-                  onQuoteSelection={desktop && path() ? openAi : undefined}
+                  onQuoteSelection={desktop && path() && !loading() && !preview() && !openingEntry() ? openAi : undefined}
+                  inlineAi={!!(desktop && path() && !loading() && !preview() && !openingEntry())}
                   onInsertAttachment={desktop ? pickAttachment : undefined}
                   onInsertFiles={desktop ? insertFiles : undefined}
                   imageContext={path}

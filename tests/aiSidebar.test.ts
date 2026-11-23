@@ -1,10 +1,87 @@
 import { createComponent, createSignal } from 'solid-js'
 import { render } from 'solid-js/web'
 import { expect, it, vi } from 'vitest'
-import { ai } from '../src/io/ai'
+import { captureAiReference } from '../src/core/aiDocument'
+import { createEditor } from '../src/core/editor'
+import { ai, type AiEvent } from '../src/io/ai'
 import AiSidebar, { type AiConversationHistory } from '../src/ui/AiSidebar'
 import AiComposerMenu from '../src/ui/AiComposerMenu'
 import WorkspaceResizeHandle, { initialSidebarWidth } from '../src/ui/WorkspaceResizeHandle'
+
+it.each([
+  { reference: 1, marker: '.editor-ai-added', reopen: '预览替换', result: 'Onebox 文档' },
+  { reference: null, marker: '.editor-ai-draft', reopen: '预览插入', result: 'onebox 文档\n\nOnebox' },
+])('previews a sidebar revision before saving (reference $reference)', async ({ reference, marker, reopen, result }) => {
+  let receive!: (event: AiEvent) => void
+  const mocks = [
+    vi.spyOn(ai, 'events').mockImplementation(async (callback) => { receive = callback; return () => {} }),
+    vi.spyOn(ai, 'account').mockResolvedValue({ email: '', plan: 'test' }),
+    vi.spyOn(ai, 'usage').mockResolvedValue({}),
+    vi.spyOn(ai, 'models').mockResolvedValue([{ model: 'test' }]),
+    vi.spyOn(ai, 'newThread').mockResolvedValue('thread'),
+    vi.spyOn(ai, 'closeThread').mockResolvedValue(undefined),
+  ]
+  const start = vi.spyOn(ai, 'start').mockResolvedValue('turn')
+  const host = document.createElement('div')
+  const page = document.createElement('div')
+  document.body.append(host, page)
+  const onUpdate = vi.fn()
+  const markdown = 'onebox 文档'
+  const handle = createEditor({ element: page, scrollRoot: page, markdown, onUpdate })
+  handle.editor.commands.setTextSelection({ from: 1, to: 7 })
+  const quote = reference ? captureAiReference(handle.editor, 'selection', '样例.md') : undefined
+  const dispose = render(() => createComponent(AiSidebar, {
+    open: true, loading: false, title: '样例.md',
+    history: { active: 0, next: 0, conversations: [] },
+    editor: () => handle.editor, quote, pickReference: async () => undefined,
+    onClose: () => {}, onQuoteConsumed: () => {},
+  }), host)
+  const action = (label: string) => Array.from(host.querySelectorAll('button'))
+    .find((button) => button.getAttribute('aria-label') === label || button.textContent === label)
+  try {
+    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="向 AI 提问"]')!
+    input.value = '改成 Onebox'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await vi.waitFor(() => expect(action('发送')?.disabled).toBe(false))
+    action('发送')!.click()
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    receive({ method: 'item/completed', params: {
+      threadId: 'thread', turnId: 'turn',
+      item: { id: 'revision', type: 'agentMessage', text: JSON.stringify({
+        answer: '已生成建议', revision: { reference, markdown: 'Onebox' },
+      }) },
+    } })
+    receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } })
+    expect(page.querySelector(marker)).not.toBeNull()
+    expect(handle.toMarkdown()).toBe(markdown)
+    expect(onUpdate).not.toHaveBeenCalled()
+
+    action('撤销预览')!.click()
+    expect(page.querySelector(marker)).toBeNull()
+    expect(onUpdate).not.toHaveBeenCalled()
+    action(reopen)!.click()
+    action('✓ 确认')!.click()
+    expect(page.querySelector(marker)).toBeNull()
+    expect(handle.toMarkdown()).toBe(result)
+    expect(onUpdate).toHaveBeenCalledOnce()
+    action('撤销')!.click()
+    expect(handle.toMarkdown()).toBe(markdown)
+    if (reference) {
+      action('查看建议')!.click()
+      action(reopen)!.click()
+      handle.editor.view.dispatch(handle.editor.state.tr.insertText('x', 2))
+      expect(page.querySelector(marker)).toBeNull()
+      expect(action('✓ 确认')).toBeUndefined()
+      expect(handle.toMarkdown()).toBe('oxnebox 文档')
+    }
+  } finally {
+    dispose()
+    handle.destroy()
+    host.remove()
+    page.remove()
+    for (const mock of [...mocks, start]) mock.mockRestore()
+  }
+})
 
 it('opens a fresh conversation and restores the previous transcript and draft', () => {
   const stopListening = vi.spyOn(ai, 'events').mockResolvedValue(() => {})

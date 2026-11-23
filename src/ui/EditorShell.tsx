@@ -1,15 +1,19 @@
 import type { Range } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
-import type { Node } from '@tiptap/pm/model'
-import { Selection } from '@tiptap/pm/state'
+import type { Node as DocumentNode } from '@tiptap/pm/model'
+import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state'
 import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount, Show } from 'solid-js'
 import { Portal } from 'solid-js/web'
+import { captureAiReference, highlightAiSource, type AiReference } from '../core/aiDocument'
 import {
   blockCommands, blockEditCommands, insertCommands, selectedBlock, slashTrigger, tableCommands,
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
+import { blockDropTarget, moveBlock } from '../core/blockMove'
 import { createEditor, type EditorHandle } from '../core/editor'
+import { ListRowsSelection, listTextSelectionRects } from '../core/listSelection'
 import BlockMenu from './BlockMenu'
+import InlineAiEditor from './InlineAiEditor'
 
 export type AttachmentKind = 'image' | 'file'
 
@@ -22,6 +26,8 @@ interface Popup {
   canEditBlock?: boolean
   quoteRange?: Range
 }
+
+type GripDrag = { pointer: number; selection: NodeSelection; startX: number; startY: number; moved: boolean }
 
 type Action = CommandItem | (MenuItem & { attachment: AttachmentKind }) | (MenuItem & { quote: true })
 
@@ -42,10 +48,11 @@ export default function EditorShell(props: {
   markdown: string
   onReady: (handle: EditorHandle) => void
   onDispose?: (handle: EditorHandle) => void
-  onUpdate: (doc: Node) => void
+  onUpdate: (doc: DocumentNode) => void
   onInsertAttachment?: (kind: AttachmentKind, range?: Range) => void
   onInsertFiles?: (files: File[]) => void
   onQuoteSelection?: (range?: Range) => void
+  inlineAi?: boolean
   readImage?: (href: string) => Promise<Blob | undefined>
   imageContext?: () => string | null
   openResource?: (href: string) => void
@@ -55,8 +62,17 @@ export default function EditorShell(props: {
   let popupElement: HTMLDivElement | undefined
   let handle: EditorHandle | undefined
   let dismissedSlash: number | undefined
+  let selectionRects: { selection: Selection; rects: DOMRect[] } | undefined
+  let selectionFrame = 0
+  let blockDrag: GripDrag | undefined
+  let blockScrollFrame = 0
+  let suppressGripClick = false
 
   const [popup, setPopup] = createSignal<Popup>()
+  const [selectionMenu, setSelectionMenu] = createSignal<{ x: number; y: number; selection: Selection }>()
+  const [inlineEdit, setInlineEdit] = createSignal<AiReference & { anchor: number }>()
+  const [blockGrip, setBlockGrip] = createSignal<{ x: number; y: number; selection: NodeSelection }>()
+  const [blockDrop, setBlockDrop] = createSignal<ReturnType<typeof blockDropTarget>>()
   const [highlighted, setHighlighted] = createSignal(0)
   const [keyboardHighlight, setKeyboardHighlight] = createSignal(true)
   const menuId = createUniqueId()
@@ -87,7 +103,169 @@ export default function EditorShell(props: {
     setPopup(undefined)
   }
 
+  const closeSelectionMenu = () => setSelectionMenu(undefined)
+
+  const resetSelectionMenu = () => {
+    selectionRects = undefined
+    closeSelectionMenu()
+  }
+
+  const closeInlineEdit = (restoreFocus: boolean) => {
+    setInlineEdit(undefined)
+    if (restoreFocus) handle?.editor.view.focus()
+  }
+
+  const startInlineEdit = (range: Range) => {
+    const editor = handle?.editor
+    if (!props.inlineAi || !editor?.isEditable || inlineEdit()) return
+    const reference = captureAiReference(editor, 'selection', '', range)
+    if (!reference || reference.anchor === undefined) return
+    closeSelectionMenu()
+    highlightAiSource(editor, reference.anchor)
+    setInlineEdit({ ...reference, anchor: reference.anchor })
+  }
+
+  const showSelectionMenu = (x: number, y: number, afterRelease = false) => {
+    const view = handle?.editor.view
+    if (!view?.editable || !view.hasFocus() || view.composing || !props.inlineAi || inlineEdit() || popup()) return
+    const { selection } = view.state
+    if (!(selection instanceof TextSelection || selection instanceof ListRowsSelection ||
+      (selection instanceof NodeSelection && selection.node.isBlock)) || selection.empty) return
+    if (selectionMenu()?.selection.eq(selection)) return
+    if (!selectionRects?.selection.eq(selection)) {
+      const native = window.getSelection()
+      if (selection instanceof TextSelection) {
+        if (!native?.rangeCount || native.isCollapsed || !view.dom.contains(native.anchorNode) ||
+          !view.dom.contains(native.focusNode)) return
+        selectionRects = { selection, rects: listTextSelectionRects(view) ?? Array.from(native.getRangeAt(0).getClientRects()) }
+      } else {
+        const first = view.nodeDOM(selection.from)
+        const last = selection instanceof ListRowsSelection ? view.nodeDOM(selection.last.pos) : first
+        if (!(first instanceof HTMLElement) || !(last instanceof HTMLElement)) return
+        const start = first.getBoundingClientRect()
+        const end = last.getBoundingClientRect()
+        selectionRects = { selection, rects: [new DOMRect(start.left, start.top, start.width, end.bottom - start.top)] }
+      }
+    }
+    const rects = selectionRects.rects.filter((rect) => rect.width > 0)
+    if (!rects.length || (!afterRelease && !rects.some((rect) =>
+      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom))) return
+    const bounds = scrollRoot.getBoundingClientRect()
+    let topEdge = rects[0].top
+    let bottomEdge = rects[0].bottom
+    for (const rect of rects) {
+      topEdge = Math.min(topEdge, rect.top)
+      bottomEdge = Math.max(bottomEdge, rect.bottom)
+    }
+    const above = topEdge - 38
+    const below = bottomEdge + 4
+    const nearEnd = Math.abs(y - bottomEdge) <= Math.abs(y - topEdge)
+    const canOpenAbove = above >= bounds.top + 4
+    const canOpenBelow = below + 32 <= bounds.bottom - 4
+    const top = canOpenBelow && (nearEnd || !canOpenAbove) ? below
+      : canOpenAbove ? above : Math.max(bounds.top + 4, Math.min(y + 8, bounds.bottom - 36))
+    setSelectionMenu({
+      x: Math.max(bounds.left + 4, Math.min(x - 64, bounds.right - 132)),
+      y: top,
+      selection,
+    })
+  }
+
+  const hoverSelection = (event: PointerEvent) => {
+    if (event.pointerType === 'mouse' && event.buttons === 0 && event.target instanceof Node &&
+      handle?.editor.view.dom.contains(event.target)) showSelectionMenu(event.clientX, event.clientY)
+  }
+
+  const hoverAfterSelection = (event: PointerEvent) => {
+    if (event.button !== 0) return
+    cancelAnimationFrame(selectionFrame)
+    // Mouseup and the editor's native selection sync complete after pointerup.
+    const show = () => showSelectionMenu(event.clientX, event.clientY, true)
+    selectionFrame = requestAnimationFrame(() => {
+      show()
+      if (!selectionMenu()) selectionFrame = requestAnimationFrame(show)
+    })
+  }
+
+  const positionBlockGrip = () => {
+    if (blockDrag) return
+    const view = handle?.editor.view
+    const selection = view?.state.selection
+    if (!view?.editable || !(selection instanceof NodeSelection) || !selection.node.isBlock) {
+      setBlockGrip(undefined)
+      return
+    }
+    const node = view.nodeDOM(selection.from)
+    if (!(node instanceof HTMLElement)) { setBlockGrip(undefined); return }
+    const row = node.getBoundingClientRect()
+    const visible = scrollRoot.getBoundingClientRect()
+    if (row.bottom < visible.top || row.top + 28 > visible.bottom) { setBlockGrip(undefined); return }
+    setBlockGrip({
+      x: Math.max(visible.left + 2, view.dom.getBoundingClientRect().left - 30),
+      y: Math.max(visible.top, row.top) + 2,
+      selection,
+    })
+  }
+
+  const endBlockDrag = () => {
+    cancelAnimationFrame(blockScrollFrame)
+    suppressGripClick = !!blockDrag?.moved
+    blockDrag = undefined
+    setBlockDrop(undefined)
+  }
+
+  const startBlockDrag = (event: PointerEvent & { currentTarget: HTMLButtonElement }, selection: NodeSelection) => {
+    const view = handle?.editor.view
+    if (event.button !== 0 || blockDrag || !view?.editable || view.state.selection !== selection) return
+    suppressGripClick = false
+    blockDrag = { pointer: event.pointerId, selection, startX: event.clientX, startY: event.clientY, moved: false }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const locateBlockDrop = (event: PointerEvent, selection: NodeSelection) => {
+    const view = handle?.editor.view
+    const bounds = scrollRoot.getBoundingClientRect()
+    if (view?.editable && view.state.selection === selection &&
+      event.clientX >= bounds.left && event.clientX <= bounds.right &&
+      event.clientY >= bounds.top && event.clientY <= bounds.bottom) {
+      return blockDropTarget(view, selection, event.clientY)
+    }
+  }
+
+  const previewBlockDrop = (event: PointerEvent) => {
+    const drag = blockDrag
+    if (!drag || event.pointerId !== drag.pointer) return
+    if (!drag.moved) {
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 5) return
+      drag.moved = true
+      closeMenu()
+      closeSelectionMenu()
+    }
+    setBlockDrop(locateBlockDrop(event, drag.selection))
+    cancelAnimationFrame(blockScrollFrame)
+    const bounds = scrollRoot.getBoundingClientRect()
+    if (event.clientX < bounds.left || event.clientX > bounds.right) return
+    const nearTop = event.clientY - bounds.top
+    const nearBottom = bounds.bottom - event.clientY
+    const scroll = nearTop >= 0 && nearTop < 30 ? -12 : nearBottom >= 0 && nearBottom < 30 ? 12 : 0
+    if (scroll) blockScrollFrame = requestAnimationFrame(() => {
+      const before = scrollRoot.scrollTop
+      scrollRoot.scrollTop += scroll
+      if (scrollRoot.scrollTop !== before) previewBlockDrop(event)
+    })
+  }
+
+  const finishBlockDrag = (event: PointerEvent) => {
+    const drag = blockDrag
+    if (!drag || event.pointerId !== drag.pointer) return
+    const target = drag.moved ? locateBlockDrop(event, drag.selection) : undefined
+    endBlockDrag()
+    if (target && handle) moveBlock(handle.editor.view, drag.selection, target.pos)
+    positionBlockGrip()
+  }
+
   const showMenu = (next: Popup) => {
+    closeSelectionMenu()
     if (!next.trigger || popup()?.trigger?.query !== next.trigger.query) {
       setKeyboardHighlight(true)
       setHighlighted(0)
@@ -139,6 +317,10 @@ export default function EditorShell(props: {
       },
       handleKeyDown(view, event) {
         if (!view.editable || view.composing || event.isComposing) return false
+        if (event.key === 'Escape' && selectionMenu()) {
+          closeSelectionMenu()
+          return true
+        }
         if ((event.metaKey || event.ctrlKey) && event.key === '/') {
           const { selection } = view.state
           const { left, bottom, top } = view.coordsAtPos(selection.head)
@@ -192,6 +374,10 @@ export default function EditorShell(props: {
     editor.on('transaction', ({ transaction }) => {
       const current = popup()
       if (!transaction.docChanged && !transaction.selectionSet) return
+      const selected = selectionMenu()?.selection ?? selectionRects?.selection
+      if (transaction.docChanged || (selected && !selected.eq(editor.state.selection))) resetSelectionMenu()
+      if (blockDrag) endBlockDrag()
+      positionBlockGrip()
       if (current && !current.trigger) {
         if (transaction.docChanged) closeMenu()
         return
@@ -209,14 +395,33 @@ export default function EditorShell(props: {
     })
 
     const closeOutside = (event: PointerEvent) => {
+      cancelAnimationFrame(selectionFrame)
       if (popup() && (!popupElement || !event.composedPath().includes(popupElement))) closeMenu()
+      if (selectionMenu() && !(event.target as Element | null)?.closest?.('.editor-selection-menu')) {
+        closeSelectionMenu()
+      }
     }
-    const closeOnScroll = () => { if (popup()) closeMenu() }
+    const closeOnScroll = () => {
+      cancelAnimationFrame(selectionFrame)
+      if (popup()) closeMenu()
+      resetSelectionMenu()
+      positionBlockGrip()
+    }
+    const layout = new ResizeObserver(() => {
+      resetSelectionMenu()
+      positionBlockGrip()
+    })
+    layout.observe(scrollRoot)
     document.addEventListener('pointerdown', closeOutside, true)
-    scrollRoot.addEventListener('scroll', closeOnScroll)
+    scrollRoot.addEventListener('scroll', closeOnScroll, true)
+    window.addEventListener('resize', closeOnScroll)
     onCleanup(() => {
       document.removeEventListener('pointerdown', closeOutside, true)
-      scrollRoot.removeEventListener('scroll', closeOnScroll)
+      scrollRoot.removeEventListener('scroll', closeOnScroll, true)
+      window.removeEventListener('resize', closeOnScroll)
+      layout.disconnect()
+      cancelAnimationFrame(selectionFrame)
+      endBlockDrag()
     })
     props.onReady(handle)
   })
@@ -224,6 +429,15 @@ export default function EditorShell(props: {
     if (!handle) return
     props.onDispose?.(handle)
     handle.destroy()
+  })
+
+  createEffect(() => {
+    props.imageContext?.()
+    props.inlineAi
+    closeInlineEdit(false)
+    if (blockDrag) endBlockDrag()
+    setBlockGrip(undefined)
+    resetSelectionMenu()
   })
 
   createEffect(() => {
@@ -239,9 +453,64 @@ export default function EditorShell(props: {
 
   return (
     <div class="editor-shell">
-      <div class="editor-scroll" ref={scrollRoot}>
+      <div class="editor-scroll" ref={scrollRoot} onPointerMove={hoverSelection} onPointerUp={hoverAfterSelection}>
         <div class="editor-mount" ref={element} />
       </div>
+      <Show when={blockGrip()}>
+        {(grip) => <Portal>
+          <button type="button" class="editor-block-grip" title="拖动以移动区块"
+            aria-label="区块操作，拖动以移动" style={{ left: `${grip().x}px`, top: `${grip().y}px` }}
+            onPointerDown={(event) => startBlockDrag(event, grip().selection)}
+            onPointerMove={previewBlockDrop} onPointerUp={finishBlockDrag}
+            onPointerCancel={endBlockDrag}
+            onLostPointerCapture={() => { if (blockDrag) endBlockDrag() }}
+            onClick={(event) => {
+              if (suppressGripClick && event.detail !== 0) return
+              const editor = handle?.editor
+              const { selection, x, y } = grip()
+              if (!editor?.isEditable || editor.state.selection !== selection) return
+              editor.view.focus()
+              showMenu({
+                x: x + 26, y: y + 28, above: y - 4, inTable: editor.isActive('table'), canEditBlock: true,
+                quoteRange: { from: selection.from, to: selection.to },
+              })
+            }}>
+            <span aria-hidden="true" />
+          </button>
+        </Portal>}
+      </Show>
+      <Show when={blockDrop()}>
+        {(target) => <Portal>
+          <div class="editor-block-drop" aria-hidden="true"
+            style={{ left: `${target().x}px`, top: `${target().y}px`, width: `${target().width}px` }} />
+        </Portal>}
+      </Show>
+      <Show when={props.inlineAi && selectionMenu()} keyed>
+        {(current) => (
+          <Portal>
+            <button type="button" class="editor-selection-menu" style={{ left: `${current.x}px`, top: `${current.y}px` }}
+              onMouseDown={(event) => { if (event.button === 0) event.preventDefault() }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return
+                closeSelectionMenu()
+                handle?.editor.view.focus()
+              }}
+              onClick={() => {
+                const view = handle?.editor.view
+                closeSelectionMenu()
+                if (!view?.editable || !view.state.selection.eq(current.selection)) return
+                const { from, to } = current.selection
+                startInlineEdit({ from, to })
+              }}>
+              <span aria-hidden="true">✨</span> 使用 AI 编辑
+            </button>
+          </Portal>
+        )}
+      </Show>
+      <Show when={inlineEdit()} keyed>
+        {(reference) => <Portal><InlineAiEditor editor={handle!.editor} reference={reference}
+          scrollRoot={scrollRoot} close={closeInlineEdit} /></Portal>}
+      </Show>
       <Show when={popup()}>
         {(current) => (
           <Portal><BlockMenu

@@ -3,10 +3,11 @@ import { batch, createEffect, createMemo, createSignal, For, Index, on, onCleanu
 import { createStore } from 'solid-js/store'
 import { aiAnswerHtml, aiChangeText, decodeAiAnswer, partialAiAnswer } from '../core/aiAnswer'
 import {
-  applyAiRevision, captureAiInsertion, captureAiReference, clearAiAnchors, jumpToAiReference, undoAiRevision,
-  type AiReference, type AiRevision, type AiUndo,
+  applyAiRevision, captureAiInsertion, captureAiReference, clearAiAnchors, clearAiRevisionPreview,
+  hasAiRevisionPreview, jumpToAiReference, showAiRevisionPreview, undoAiRevision,
+  type AiReference, type AiRevision, type AiRevisionMethod, type AiUndo,
 } from '../core/aiDocument'
-import { ai, type AiAccount, type AiEvent, type AiModel, type AiNetwork, type AiUsage } from '../io/ai'
+import { ai, type AiAccount, type AiEvent, type AiModel, type AiUsage } from '../io/ai'
 import AiComposerControls from './AiComposerControls'
 import AiComposerMenu, { type ComposerMenu } from './AiComposerMenu'
 import AiConversationMenu from './AiConversationMenu'
@@ -79,20 +80,19 @@ export default function AiSidebar(props: {
     const current = menu()
     return current === 'conversations' ? undefined : current
   }
-  const [network, setNetwork] = createSignal<AiNetwork>()
   const [accountError, setAccountError] = createSignal('')
   const [modelError, setModelError] = createSignal('')
   const [usageError, setUsageError] = createSignal('')
-  const [networkError, setNetworkError] = createSignal('')
   const [loadingAccount, setLoadingAccount] = createSignal(false)
   const [loadingModels, setLoadingModels] = createSignal(false)
   const [loadingUsage, setLoadingUsage] = createSignal(false)
-  const [savingNetwork, setSavingNetwork] = createSignal(false)
   const [login, setLogin] = createSignal<string>()
   const [signingIn, setSigningIn] = createSignal(false)
   const [draft, setDraft] = createSignal(initial?.draft ?? '')
   const [references, setReferences] = createSignal<AiReference[]>(initial?.references ?? [])
   const [sourcePreview, setSourcePreview] = createSignal<AiReference>()
+  const previewOwner = Symbol('sidebar-ai-preview')
+  const [activePreview, setActivePreview] = createSignal<{ index: number; method: AiRevisionMethod; editor: Editor }>()
   const [notice, setNotice] = createSignal('')
   const [working, setWorking] = createSignal(false)
   const [stopping, setStopping] = createSignal(false)
@@ -102,7 +102,7 @@ export default function AiSidebar(props: {
     title: excerpt(conversation.messages[0]?.text || conversation.draft) || '未发送的引用',
     updatedAt: conversation.updatedAt,
   })))
-  const canSend = () => !working() && !savingNetwork() && !!props.editor()
+  const canSend = () => !working() && !!props.editor()
     && !!account() && !!selectedModel() && !!draft().trim()
   let composer: HTMLTextAreaElement | undefined
   let log: HTMLDivElement | undefined
@@ -205,7 +205,7 @@ export default function AiSidebar(props: {
   }
 
   async function signIn() {
-    if (signingIn() || loadingAccount() || savingNetwork() || working()) return
+    if (signingIn() || loadingAccount() || working()) return
     setSigningIn(true)
     setAccountError('')
     try { setLogin(await ai.login()) }
@@ -228,33 +228,6 @@ export default function AiSidebar(props: {
     } catch (error) { setAccountError(errorText(error)) }
   }
 
-  async function readNetwork() {
-    if (savingNetwork()) return
-    const version = accountVersion
-    try {
-      const next = await ai.network()
-      if (!disposed && version === accountVersion && !savingNetwork()) {
-        setNetwork(next)
-        setNetworkError('')
-      }
-    } catch (error) {
-      if (!disposed && version === accountVersion && !savingNetwork()) setNetworkError(errorText(error))
-    }
-  }
-
-  async function setProxy(url: string | null) {
-    if (savingNetwork() || working() || signingIn() || loadingAccount()) return
-    setSavingNetwork(true)
-    setNetworkError('')
-    try {
-      setNetwork(await ai.setProxy(url))
-      thread = undefined
-      clearAccountData()
-      await refreshAccount()
-    } catch (error) { setNetworkError(errorText(error)) }
-    finally { setSavingNetwork(false) }
-  }
-
   function complete(current: Job, status: 'done' | 'stopped' | 'failed', error?: string) {
     if (job !== current) return
     job = undefined
@@ -268,6 +241,7 @@ export default function AiSidebar(props: {
       text: output.answer, revision: output.revision, status,
       error: error ?? (status === 'done' && !output.answer && !output.revision ? '没有收到回复，可以重试。' : undefined),
     })
+    if (output.revision && props.open) previewRevision(current.index)
     scrollLatest()
   }
 
@@ -425,6 +399,7 @@ export default function AiSidebar(props: {
   function send() {
     const editor = props.editor()
     if (!editor || !canSend()) return
+    clearRevisionPreview()
     const text = draft().trim()
     const request = { text, references: references(), insertion: captureAiInsertion(editor) }
     const index = messages.length
@@ -439,7 +414,8 @@ export default function AiSidebar(props: {
 
   function retry(index: number) {
     const message = messages[index]
-    if (!message || working() || savingNetwork() || !account() || !selectedModel()) return
+    if (!message || working() || !account() || !selectedModel()) return
+    clearRevisionPreview()
     setMessages(index, { text: '', status: 'working', revision: undefined, error: undefined })
     void generate(message.request, index)
   }
@@ -466,6 +442,7 @@ export default function AiSidebar(props: {
   }
 
   function showConversation(id: number, conversation?: Conversation) {
+    clearRevisionPreview()
     props.history.active = id
     batch(() => {
       setConversationId(id)
@@ -515,10 +492,48 @@ export default function AiSidebar(props: {
     return id == null ? undefined : message.request.references[id - 1]
   }
 
-  function apply(index: number, method: 'replace' | 'below') {
+  function clearRevisionPreview() {
+    const preview = activePreview()
+    if (!preview) return
+    setActivePreview(undefined)
+    clearAiRevisionPreview(preview.editor, previewOwner)
+  }
+
+  function previewRevision(index: number, requestedMethod?: AiRevisionMethod) {
     const editor = props.editor()
     const message = messages[index]
-    if (!editor || !message?.revision || message.change === 'applied') return
+    if (!editor || !message?.revision || message.change) return
+    const reference = changeReference(message)
+    const method = requestedMethod ?? (reference?.anchor && !reference.shortened ? 'replace' : 'below')
+    clearRevisionPreview()
+    try {
+      if (showAiRevisionPreview(editor, previewOwner, message.revision, method, reference, message.request.insertion)) {
+        setActivePreview({ index, method, editor })
+        setNotice('')
+        const marker = editor.view.dom.querySelector('.editor-ai-draft, .editor-ai-removed, .editor-ai-added')
+        marker?.scrollIntoView?.({ block: 'nearest' })
+        return
+      }
+      setNotice(method === 'replace' ? '无法预览替换。请检查原文或编辑建议。' : '无法预览插入。请检查插入位置或编辑建议。')
+    } catch { setNotice('无法预览这条 Markdown 建议。') }
+  }
+
+  function cancelRevisionPreview() {
+    clearRevisionPreview()
+    setNotice('已撤销预览。')
+  }
+
+  function confirmRevision(index: number) {
+    const preview = activePreview()
+    const message = messages[index]
+    if (!preview || preview.index !== index || !message?.revision || message.change) return
+    const { editor, method } = preview
+    const valid = editor === props.editor() && hasAiRevisionPreview(editor, previewOwner)
+    clearRevisionPreview()
+    if (!valid) {
+      setNotice('原文或预览已变化，请重新预览。')
+      return
+    }
     try {
       const undo = applyAiRevision(editor, message.revision, method, changeReference(message), message.request.insertion)
       if (!undo) {
@@ -547,9 +562,22 @@ export default function AiSidebar(props: {
   }
 
   createEffect(on(() => props.open, (open) => {
-    if (!open) { setMenu(undefined); return }
+    if (!open) { setMenu(undefined); clearRevisionPreview(); return }
     if (!initialized) void refreshAccount()
     queueMicrotask(scrollLatest)
+  }))
+  createEffect(on(props.editor, (editor) => {
+    if (activePreview()?.editor !== editor) clearRevisionPreview()
+  }))
+  createEffect(on(activePreview, (preview) => {
+    if (!preview) return
+    const validate = () => {
+      if (activePreview() !== preview || hasAiRevisionPreview(preview.editor, previewOwner)) return
+      clearRevisionPreview()
+      setNotice('原文或预览已变化，请重新预览。')
+    }
+    preview.editor.on('transaction', validate)
+    onCleanup(() => { preview.editor.off('transaction', validate) })
   }))
   createEffect(on(() => props.open && !props.loading, (ready) => {
     if (ready) queueMicrotask(() => {
@@ -573,6 +601,7 @@ export default function AiSidebar(props: {
     onCleanup(() => document.removeEventListener('pointerdown', closeOutside, true))
   })
   onCleanup(() => {
+    clearRevisionPreview()
     rememberConversation()
     disposed = true
     unlisten?.()
@@ -596,6 +625,7 @@ export default function AiSidebar(props: {
           event.currentTarget.querySelector<HTMLButtonElement>(`[data-ai-composer-menu="${menu()}"] > button`)?.focus({ preventScroll: true })
           setMenu(undefined)
         } else if (sourcePreview()) setSourcePreview(undefined)
+        else if (activePreview()) cancelRevisionPreview()
         else props.onClose()
       }}>
       <Show when={props.open}>
@@ -647,7 +677,8 @@ export default function AiSidebar(props: {
                 <Show when={message().revision}>
                   {(patch) => <div class="ai-change">
                     <div class="ai-change-title">
-                      <strong>{message().change === 'applied' ? '已应用到文档' : message().change === 'undone' ? '已撤销' : message().change === 'dismissed' ? '已放弃建议' : '建议变更'}</strong>
+                      <strong>{message().change === 'applied' ? '已应用到文档' : message().change === 'undone' ? '已撤销' : message().change === 'dismissed' ? '已放弃建议'
+                        : activePreview()?.index === index ? (activePreview()?.method === 'replace' ? '替换预览' : '插入预览') : '建议变更'}</strong>
                       <Show when={message().undo}><button type="button" class="ai-subtle" onClick={() => undo(index)}>撤销</button></Show>
                     </div>
                     <Show when={!message().change}>
@@ -661,17 +692,29 @@ export default function AiSidebar(props: {
                           <ChangeExcerpt before={changeReference(message())?.anchor ? changeReference(message())!.text : ''} after={patch().markdown} side="after" />
                         }>
                           <textarea aria-label="编辑建议的 Markdown" rows={4} value={patch().markdown} maxLength={120_000}
-                            onInput={(event) => setMessages(index, 'revision', { ...patch(), markdown: event.currentTarget.value })} />
+                            onInput={(event) => {
+                              if (activePreview()?.index === index) clearRevisionPreview()
+                              setMessages(index, 'revision', { ...patch(), markdown: event.currentTarget.value })
+                            }} />
                         </Show>
                       </div>
                       <div class="ai-row ai-change-actions">
-                        <Show when={changeReference(message())?.anchor && !changeReference(message())?.shortened}>
-                          <button type="button" class="ai-primary" onClick={() => apply(index, 'replace')}>替换原文</button>
+                        <Show when={activePreview()?.index === index}>
+                          <button type="button" class="ai-primary" onClick={() => confirmRevision(index)}>✓ 确认</button>
+                          <button type="button" class="ai-subtle" aria-label="撤销预览" onClick={cancelRevisionPreview}>↶ 撤销</button>
                         </Show>
-                        <button type="button" class="ai-subtle" onClick={() => apply(index, 'below')}>插入下方</button>
+                        <Show when={changeReference(message())?.anchor && !changeReference(message())?.shortened &&
+                          !(activePreview()?.index === index && activePreview()?.method === 'replace')}>
+                          <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'replace')}>预览替换</button>
+                        </Show>
+                        <Show when={!(activePreview()?.index === index && activePreview()?.method === 'below')}>
+                          <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'below')}>预览插入</button>
+                        </Show>
                         <button type="button" class="ai-subtle" aria-expanded={!!message().reviewing}
                           onClick={() => setMessages(index, 'reviewing', !message().reviewing)}>{message().reviewing ? '查看对照' : '编辑建议'}</button>
-                        <button type="button" class="ai-subtle" onClick={() => setMessages(index, { change: 'dismissed', reviewing: false })}>放弃</button>
+                        <Show when={activePreview()?.index !== index}>
+                          <button type="button" class="ai-subtle" onClick={() => setMessages(index, { change: 'dismissed', reviewing: false })}>放弃</button>
+                        </Show>
                       </div>
                     </Show>
                     <Show when={message().change === 'dismissed' || message().change === 'undone'}>
@@ -683,7 +726,7 @@ export default function AiSidebar(props: {
                   <div class="ai-row ai-reply-actions">
                     <Show when={message().text}><button type="button" class="ai-subtle" onClick={() => void copy(message().text)}>复制回复</button></Show>
                     <Show when={message().status === 'failed' || message().status === 'stopped' || message().error}>
-                      <button type="button" class="ai-subtle" disabled={working() || savingNetwork() || !selectedModel() || index !== messages.length - 1} onClick={() => retry(index)}>重试</button>
+                      <button type="button" class="ai-subtle" disabled={working() || !selectedModel() || index !== messages.length - 1} onClick={() => retry(index)}>重试</button>
                     </Show>
                   </div>
                 </Show>
@@ -746,15 +789,15 @@ export default function AiSidebar(props: {
               }}>选取 Markdown 文件…</button>
             </div>
           </AiComposerMenu>
-          <AiComposerControls account={account()} models={models()} model={selectedModel()} usage={usage()} network={network()}
+          <AiComposerControls account={account()} models={models()} model={selectedModel()} usage={usage()}
             effort={selectedEffort()} menu={composerMenu()} onMenu={setMenu} onChooseEffort={chooseEffort}
             loadingAccount={loadingAccount()} loadingModels={loadingModels()} loadingUsage={loadingUsage()}
-            working={working()} savingNetwork={savingNetwork()} signingIn={signingIn()} canCancelLogin={!!login()}
-            accountError={accountError()} modelError={modelError()} usageError={usageError()} networkError={networkError()}
-            onOpenSettings={() => void readNetwork()} onChooseModel={chooseModel}
+            working={working()} signingIn={signingIn()} canCancelLogin={!!login()}
+            accountError={accountError()} modelError={modelError()} usageError={usageError()}
+            onChooseModel={chooseModel}
             onSignIn={() => void signIn()} onCancelSignIn={() => void cancelSignIn()} onSignOut={() => void signOut()}
             onRefreshModels={() => void readModels()} onRefreshUsage={() => void readUsage()}
-            onRefreshAccount={() => void refreshAccount()} onSetProxy={(url) => void setProxy(url)} />
+            onRefreshAccount={() => void refreshAccount()} />
           <Show when={working()} fallback={
             <button class="ai-composer-trigger ai-send" type="submit" aria-label="发送" title="发送" disabled={!canSend()}>
               <span class="ai-send-symbol" aria-hidden="true" />

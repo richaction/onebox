@@ -16,6 +16,7 @@
       "title": "Onebox",
       "width": 1100,
       "height": 760,
+      "acceptFirstMouse": true,
       "dragDropEnabled": true
     }],
     "security": { "csp": null, "assetProtocol": { "enable": true, "scope": [] } }

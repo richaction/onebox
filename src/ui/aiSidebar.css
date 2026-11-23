@@ -662,31 +662,6 @@
 .ai-popup-hint, .ai-popup-error { margin: 5px 7px; overflow-wrap: anywhere; }
 .ai-popup-hint { color: var(--ob-text-secondary); }
 .ai-usage-popup .ai-quota { margin-inline: 7px; }
-.ai-network-settings { margin-block-start: 5px; padding-block-start: 3px; border-block-start: 1px solid var(--ob-border); }
-.ai-network-settings > summary {
-  display: flex;
-  justify-content: space-between;
-  gap: 5px;
-  padding: 5px 7px;
-  cursor: pointer;
-  list-style: none;
-}
-.ai-network-settings :is(p, label, select, input) { font: inherit; }
-.ai-network-settings > summary span:last-child, .ai-network-settings label { color: var(--ob-text-secondary); }
-.ai-network-settings label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 7px;
-}
-.ai-network-settings :is(select, input) {
-  padding: 4px;
-  border: 1px solid var(--ob-border);
-  border-radius: 4px;
-  background: var(--ob-bg);
-  color: var(--ob-text);
-}
-.ai-network-settings input { box-sizing: border-box; width: calc(100% - 14px); margin: 3px 7px; }
 
 .ai-notice { margin: 3px 4px 7px; overflow-wrap: anywhere; }
 .ai-references { display: grid; gap: 4px; max-height: 148px; overflow: auto; margin-block-end: 3px; }

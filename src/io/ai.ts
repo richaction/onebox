@@ -9,7 +9,6 @@ export type AiModel = {
   defaultReasoningEffort?: string | null
   supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[] | null
 }
-export type AiNetwork = { custom: string | null; source: 'custom' | 'system' | 'environment' | 'default'; endpoint: string | null }
 type UsageWindow = { usedPercent: number; windowDurationMins?: number | null; resetsAt?: number | null }
 export type AiUsage = { limitId?: string | null; primary?: UsageWindow | null; secondary?: UsageWindow | null }
 type AssistantItem = { type: string; id: string; text: string; phase?: string }
@@ -24,8 +23,6 @@ export type AiEvent =
 export const ai = {
   account: () => invoke<AiAccount | null>('ai_account'),
   models: () => invoke<AiModel[]>('ai_models'),
-  network: () => invoke<AiNetwork>('ai_network'),
-  setProxy: (custom: string | null) => invoke<AiNetwork>('ai_set_proxy', { custom }),
   async usage() {
     const usage = await invoke<{ rateLimits: AiUsage; rateLimitsByLimitId?: { codex?: AiUsage } }>('ai_usage')
     return usage.rateLimitsByLimitId?.codex ?? usage.rateLimits

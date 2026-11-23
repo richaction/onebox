@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import { diffChars } from 'diff'
 import type { AiRevision } from './aiDocument'
 
 const markdown = MarkdownIt({ html: false, linkify: false }).disable(['image', 'link', 'autolink'])
@@ -48,4 +49,11 @@ export function aiChangeText(before: string, after: string) {
     prefix: before.slice(0, start), suffix: tail ? before.slice(-tail) : '',
     removed: before.slice(start, before.length - tail), added: after.slice(start, after.length - tail),
   }
+}
+
+export function aiRevisionDiff(before: string, after: string) {
+  const parts = diffChars(before, after, { timeout: 18, maxEditLength: 2048 })
+  if (parts) return parts
+  const { prefix, removed, added, suffix } = aiChangeText(before, after)
+  return [{ value: prefix }, { value: removed, removed: true }, { value: added, added: true }, { value: suffix }]
 }

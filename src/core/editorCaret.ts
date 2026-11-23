@@ -1,6 +1,7 @@
 import { closeHistory } from '@tiptap/pm/history'
-import { Selection, TextSelection } from '@tiptap/pm/state'
+import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
+import { selectedBlock } from './blockCommands'
 
 export function isDisplayMath(node: import('@tiptap/pm/model').Node) {
   return node.type.name === 'paragraph' && node.childCount === 1
@@ -52,28 +53,60 @@ export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRo
   } else if (event.clientY < bounds.top) {
     view.dispatch(view.state.tr.setSelection(Selection.atStart(doc)))
   } else {
+    const selectingBlock = event.clientX < bounds.left
     const point = view.posAtCoords({
-      left: Math.max(bounds.left + 1, Math.min(event.clientX, bounds.right - 1)),
+      // Sample inside the block instead of in the list's indentation.
+      left: selectingBlock ? bounds.left + bounds.width / 2
+        : Math.max(bounds.left + 1, Math.min(event.clientX, bounds.right - 1)),
       top: event.clientY,
     })
     if (!point) return
-    const pos = doc.resolve(point.pos)
-    let selection = TextSelection.between(pos, pos)
-    if (!pos.parent.inlineContent) {
-      const before = Selection.findFrom(pos, -1, true)
-      const after = Selection.findFrom(pos, 1, true)
-      if (before && after) {
-        const distance = (candidate: Selection) => {
-          const rect = view.coordsAtPos(candidate.head)
-          const vertical = Math.max(rect.top - event.clientY, event.clientY - rect.bottom, 0)
-          return vertical
-        }
-        selection = distance(before) <= distance(after) ? before : after
-      }
-    }
+    const selection = (selectingBlock ? blockAtGutterPoint(view, event.clientY, point) : undefined)
+      ?? nearestCaret(view, point.pos, event.clientY)
     view.dispatch(view.state.tr.setSelection(selection))
   }
   event.preventDefault()
   event.stopPropagation()
   view.focus()
+}
+
+export function blockAtGutterPoint(view: EditorView, y: number, point?: { pos: number; inside: number }) {
+  if (!point) {
+    const bounds = view.dom.getBoundingClientRect()
+    if (y < bounds.top || y >= bounds.bottom) return
+    point = view.posAtCoords({ left: bounds.left + bounds.width / 2, top: y }) ?? undefined
+  }
+  if (!point) return
+  const direct = point.inside >= 0 ? directBlockHit(view, point.inside) : undefined
+  if (direct) return direct
+  const block = selectedBlock(nearestCaret(view, point.pos, y))
+  if (block && NodeSelection.isSelectable(block.node)) return NodeSelection.create(view.state.doc, block.from)
+}
+
+function directBlockHit(view: EditorView, inside: number) {
+  const { doc } = view.state
+  const $inside = doc.resolve(inside)
+  const node = $inside.nodeAfter
+  if (node?.isBlock && NodeSelection.isSelectable(node) &&
+    (node.isAtom || node.type.name === 'codeBlock' || node.type.name === 'listItem' || isDisplayMath(node))) {
+    return NodeSelection.create(doc, inside)
+  }
+  // A displayed formula is rendered as an inline atom inside its own paragraph.
+  if ($inside.depth && isDisplayMath($inside.parent)) return NodeSelection.create(doc, $inside.before())
+}
+
+function nearestCaret(view: EditorView, position: number, y: number) {
+  const pos = view.state.doc.resolve(position)
+  if (!pos.parent.inlineContent) {
+    const before = Selection.findFrom(pos, -1, true)
+    const after = Selection.findFrom(pos, 1, true)
+    if (before && after) {
+      const distance = (candidate: Selection) => {
+        const rect = view.coordsAtPos(candidate.head)
+        return Math.max(rect.top - y, y - rect.bottom, 0)
+      }
+      return distance(before) <= distance(after) ? before : after
+    }
+  }
+  return TextSelection.between(pos, pos)
 }

@@ -5,6 +5,7 @@ import {
   applyAiRevision, captureAiInsertion, captureAiReference, jumpToAiReference, undoAiRevision,
 } from '../src/core/aiDocument'
 import { createEditor, type EditorHandle } from '../src/core/editor'
+import { ListRowsSelection } from '../src/core/listSelection'
 
 let handle: EditorHandle | undefined
 let root: HTMLDivElement | undefined
@@ -61,6 +62,24 @@ describe('AI changes in Markdown', () => {
     expect(jumpToAiReference(editor, ref)).toBe(true)
     expect(applyAiRevision(editor, { markdown: 'the original passage', reference: 1 }, 'replace', ref, insertion)).toBeDefined()
     expect(handle!.toMarkdown()).toBe('Later Please Keep the original passage. Another sentence.')
+  })
+
+  it('replaces selected list rows without losing the containing list or neighboring tasks', () => {
+    const editor = mount('- [ ] first\n- [x] second\n- [ ] third')
+    const { doc, tr } = editor.state
+    const items: number[] = []
+    doc.descendants((node, pos) => {
+      if (node.type.name === 'listItem') items.push(pos)
+    })
+    editor.view.dispatch(tr.setSelection(ListRowsSelection.between(doc.resolve(items[0]), doc.resolve(items[1]))!))
+    const reference = captureAiReference(editor, 'selection', 'Draft.md')!
+    expect(reference.text).toMatch(/^[*-] \[x\] second$/m)
+    expect(applyAiRevision(editor, { markdown: 'plain prose', reference: 1 }, 'replace', reference, 0)).toBeUndefined()
+    expect(applyAiRevision(editor, { markdown: '- [ ] one\n- [x] two', reference: 1 }, 'replace', reference, 0)).toBeDefined()
+    const markdown = handle!.toMarkdown()
+    expect(markdown).toMatch(/^[*-] \[ \] one$/m)
+    expect(markdown).toMatch(/^[*-] \[x\] two$/m)
+    expect(markdown).toMatch(/^[*-] \[ \] third$/m)
   })
 
   it('preserves a manually edited passage and does not undo a proposal after another edit inside it', () => {

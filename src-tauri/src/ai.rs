@@ -1,4 +1,4 @@
-use crate::ai_network::{self, NetworkInfo};
+use crate::ai_network;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -27,7 +27,6 @@ struct Client {
     pending: Pending,
     next: AtomicU64,
     workspace: PathBuf,
-    network: NetworkInfo,
     live_events: Arc<AtomicBool>,
 }
 
@@ -171,8 +170,7 @@ impl Client {
                 command.env(key, value);
             }
         }
-        let network = ai_network::load(&home);
-        network.apply(&mut command);
+        ai_network::Network::resolve().apply(&mut command);
         let mut child = command
             .env("CODEX_HOME", &home)
             .current_dir(&workspace)
@@ -201,7 +199,6 @@ impl Client {
             pending: Pending::default(),
             next: AtomicU64::new(1),
             workspace,
-            network: network.info,
             live_events: Arc::new(AtomicBool::new(true)),
         });
         let (event_app, input, pending) =
@@ -321,38 +318,6 @@ pub async fn ai_models(app: AppHandle) -> Reply {
         }
         Ok(json!(models))
     }).await
-}
-
-#[tauri::command]
-pub async fn ai_network(app: AppHandle) -> Result<NetworkInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Ai>();
-        let current = state.0.lock().map_err(|_| DISCONNECTED.to_owned())?;
-        if let Some(client) = current.as_ref() {
-            return Ok(client.network.clone());
-        }
-        Ok(ai_network::load(&codex_home(&app)?).info)
-    })
-    .await
-    .map_err(|_| DISCONNECTED.to_owned())?
-}
-
-#[tauri::command]
-pub async fn ai_set_proxy(app: AppHandle, custom: Option<String>) -> Result<NetworkInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Ai>();
-        let mut current = state.0.lock().map_err(|_| DISCONNECTED.to_owned())?;
-        let network = ai_network::save(&codex_home(&app)?, custom.as_deref())?;
-        if let Some(client) = current.take() {
-            client.live_events.store(false, Ordering::Relaxed);
-            if let Ok(mut child) = client.child.lock() {
-                let _ = child.kill();
-            }
-        }
-        Ok(network.info)
-    })
-    .await
-    .map_err(|_| DISCONNECTED.to_owned())?
 }
 
 #[tauri::command]

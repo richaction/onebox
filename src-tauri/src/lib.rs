@@ -107,8 +107,6 @@ pub fn run() {
             ai::ai_account,
             ai::ai_usage,
             ai::ai_models,
-            ai::ai_network,
-            ai::ai_set_proxy,
             ai::ai_login,
             ai::ai_cancel_login,
             ai::ai_logout,

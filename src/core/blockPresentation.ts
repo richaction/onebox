@@ -1,5 +1,6 @@
 import type { EditorView } from '@tiptap/pm/view'
 import { codeLanguage, codeLanguageIds } from './codeLanguages'
+import { codeLanguageMenu } from './codeLanguageMenu'
 import type { createCodeHighlight } from './codeHighlight'
 import { richLanguage, watchRichBlock } from './richBlock'
 import { continueAfterBlock, isDisplayMath } from './editorCaret'
@@ -40,7 +41,7 @@ export function keepTableCaretVisible(view: EditorView) {
 }
 
 export function createBlockPresentation(highlight: ReturnType<typeof createCodeHighlight>) {
-  const languageSelects = new Set<HTMLSelectElement>()
+  const languageMenus = new Set<ReturnType<typeof codeLanguageMenu>>()
   const mermaidEditors = new Set<ReturnType<typeof mountMermaidEditor>>()
   const present: PresentBlock = (node, rendered, view, getPos) => {
     const { dom, contentDOM } = rendered
@@ -128,37 +129,40 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     toolbar.contentEditable = 'false'
     const picker = document.createElement('div')
     picker.className = 'code-language-picker'
-    const select = document.createElement('select')
-    select.className = 'code-language'
-    select.setAttribute('aria-label', '代码语言')
-    select.disabled = !view.editable
-    if (info) select.title = info
-    for (const { id, label } of languageChoices) {
-      const option = document.createElement('option')
-      option.value = id
-      option.textContent = label
-      select.append(option)
-    }
     const lowerName = language.name.toLowerCase()
     const selected = selectableIds.has(lowerName) ? lowerName
       : language.id ?? (language.plain ? '' : language.name)
-    if (selected && !selectableIds.has(selected)) {
-      const option = document.createElement('option')
-      option.value = selected
-      option.textContent = language.label
-      select.append(option)
-    }
-    select.value = selected
-    picker.append(select)
-    languageSelects.add(select)
+    const selectedLanguage = languageChoices.find(({ id }) => id === selected) ?? { id: selected, label: language.label }
+    const options = selectableIds.has(selected) ? languageChoices : [...languageChoices, selectedLanguage]
+    const menu = codeLanguageMenu(document, options, selectedLanguage, (id) => {
+      const pos = getPos()
+      if (id === selected || !view.editable || pos === undefined || view.state.doc.nodeAt(pos) !== current) return
+      const suffix = info.slice(language.name.length)
+      const nextInfo = (id || (suffix ? 'text' : '')) + suffix
+      view.dispatch(view.state.tr.setNodeAttribute(pos, 'language', nextInfo || null))
+      const block = view.nodeDOM(pos)
+      if (block instanceof HTMLElement) block.querySelector<HTMLButtonElement>('.code-language')?.focus({ preventScroll: true })
+    })
+    menu.trigger.disabled = !view.editable
+    picker.append(menu.trigger)
+    languageMenus.add(menu)
 
     const actions = document.createElement('div')
     actions.className = 'code-actions'
     const copy = document.createElement('button')
     copy.type = 'button'
-    copy.textContent = '复制'
+    copy.className = 'code-copy'
+    copy.title = '复制代码'
+    copy.setAttribute('aria-label', copy.title)
     copy.hidden = !document.defaultView?.navigator.clipboard?.writeText
     actions.append(copy)
+    const next = document.createElement('button')
+    next.type = 'button'
+    next.className = 'code-next'
+    next.textContent = '↵'
+    next.title = '在代码块后继续写正文'
+    next.setAttribute('aria-label', next.title)
+    actions.append(next)
     toolbar.append(picker, actions)
     const continueButton = document.createElement('button')
     continueButton.type = 'button'
@@ -166,7 +170,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     continueButton.contentEditable = 'false'
     continueButton.title = '在代码块后继续写正文'
     continueButton.setAttribute('aria-label', continueButton.title)
-    continueButton.onclick = () => {
+    next.onclick = continueButton.onclick = () => {
       const pos = getPos()
       if (pos !== undefined) continueAfterBlock(view, pos)
     }
@@ -211,24 +215,6 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     let current = node
     let copyStatus: ReturnType<typeof setTimeout> | undefined
     let disposed = false
-    select.onchange = () => {
-      if (select.value === selected) return
-      const pos = getPos()
-      if (!view.editable || pos === undefined || view.state.doc.nodeAt(pos) !== current) {
-        select.value = selected
-        return
-      }
-      // Fence info may contain attributes after the language. Keep them when switching syntax.
-      const suffix = info.slice(language.name.length)
-      const nextInfo = (select.value || (suffix ? 'text' : '')) + suffix
-      const focused = document.activeElement === select
-      const tr = view.state.tr.setNodeAttribute(pos, 'language', nextInfo || null)
-      view.dispatch(tr)
-      if (focused) {
-        const block = view.nodeDOM(pos) as HTMLElement | null
-        block?.querySelector<HTMLSelectElement>('.code-language')?.focus({ preventScroll: true })
-      }
-    }
     actions.onmousedown = (event) => event.preventDefault()
     copy.onclick = async () => {
       let status = '已复制'
@@ -239,8 +225,14 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       }
       if (disposed) return
       clearTimeout(copyStatus)
-      copy.textContent = status
-      copyStatus = setTimeout(() => { copy.textContent = '复制' }, 1_200)
+      copy.dataset.result = status === '已复制' ? 'success' : 'error'
+      copy.title = status
+      copy.setAttribute('aria-label', status)
+      copyStatus = setTimeout(() => {
+        delete copy.dataset.result
+        copy.title = '复制代码'
+        copy.setAttribute('aria-label', copy.title)
+      }, 1_200)
     }
 
     const syntax = rich ? undefined : highlight?.watch(frame, contentDOM, node)
@@ -256,7 +248,8 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
         || (event.target as Element)?.closest?.('.rich-preview') != null || mermaidEditor?.stopEvent(event) === true,
       destroy() {
         disposed = true
-        languageSelects.delete(select)
+        menu.close()
+        languageMenus.delete(menu)
         if (mermaidEditor) mermaidEditors.delete(mermaidEditor)
         clearTimeout(copyStatus)
         syntax?.destroy()
@@ -267,7 +260,10 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
   return {
     present,
     setEditable(editable: boolean) {
-      for (const select of languageSelects) select.disabled = !editable
+      for (const menu of languageMenus) {
+        menu.trigger.disabled = !editable
+        if (!editable) menu.close()
+      }
       for (const editor of mermaidEditors) editor.refreshButton()
     },
   }
