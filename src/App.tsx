@@ -13,13 +13,15 @@ import { schema } from './core/schema'
 import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type PreviewEntry, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
+import { captureAiReference, type AiReference } from './core/aiDocument'
+import AiSidebar, { type AiConversationHistory } from './ui/AiSidebar'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
 import PreviewLoading, { createLoadingHint } from './ui/PreviewLoading'
 import FileName, { splitName, type TitleEdit } from './ui/FileName'
 import WorkspaceSidebar, { type WorkspaceSelection } from './ui/WorkspaceSidebar'
 import WorkspaceSelectionPreview from './ui/WorkspaceSelectionPreview'
-import WorkspaceResizeHandle, { initialWorkspaceWidth } from './ui/WorkspaceResizeHandle'
+import WorkspaceResizeHandle, { initialSidebarWidth } from './ui/WorkspaceResizeHandle'
 
 const SAVE_DEBOUNCE_MS = 800
 const TITLE_SAVE_DELAY_MS = 700
@@ -49,6 +51,8 @@ export default function App() {
   const mac = desktop && /Mac OS X/u.test(navigator.userAgent)
   let handle: EditorHandle | undefined
   let sidebarToggle: HTMLButtonElement | undefined
+  let aiToggle: HTMLButtonElement | undefined
+  const aiHistoryByDocument = new Map<string, AiConversationHistory>()
   let timer: ReturnType<typeof setTimeout> | undefined
   let autoSaveHintTimer: ReturnType<typeof setTimeout> | undefined
   let savedDoc: Node | undefined = restored?.savedDoc
@@ -80,7 +84,10 @@ export default function App() {
   const [pickedDocument, setPickedDocument] = createSignal<WorkspaceEntry>()
   const [restoringWorkspace, setRestoringWorkspace] = createSignal(desktop && !restored)
   const [sidebarVisible, setSidebarVisible] = createSignal(restored?.sidebarVisible ?? true)
-  const [sidebarWidth, setSidebarWidth] = createSignal(initialWorkspaceWidth())
+  const [titleBarButtonCenter, setTitleBarButtonCenter] = createSignal<string>()
+  const [aiOpen, setAiOpen] = createSignal(false)
+  const [aiQuote, setAiQuote] = createSignal<{ path: string; reference: AiReference }>()
+  const [sidebarWidth, setSidebarWidth] = createSignal(initialSidebarWidth('workspace'))
   const [resizingSidebar, setResizingSidebar] = createSignal(false)
   const [workspaceRevision, setWorkspaceRevision] = createSignal(0)
   const [workspaceSelection, setWorkspaceSelection] = createSignal<WorkspaceSelection>()
@@ -114,6 +121,38 @@ export default function App() {
       sidebarToggle?.focus({ preventScroll: true })
     }
     setSidebarVisible((visible) => !visible)
+  }
+
+  const openAi = (range?: Range) => {
+    const document = path()
+    if (!document || preview()) return
+    setAiOpen(true)
+    const editor = handle?.editor
+    if (!editor || loading()) return
+    const reference = captureAiReference(editor, 'selection', nameOf(document), range)
+    if (reference) setAiQuote({ path: document, reference })
+  }
+  const closeAi = () => {
+    setAiOpen(false)
+    aiToggle?.focus({ preventScroll: true })
+  }
+  const aiHistory = (file: string) => {
+    const previous = aiHistoryByDocument.get(file)
+    if (previous) return previous
+    const history: AiConversationHistory = { active: 0, next: 0, conversations: [] }
+    aiHistoryByDocument.set(file, history)
+    return history
+  }
+  const pickAiReference = async (): Promise<AiReference | undefined> => {
+    const document = await open({ multiple: false, filters: MARKDOWN_FILTERS, defaultPath: workspace()?.root })
+    if (typeof document !== 'string') return
+    if (document === path() && handle) return captureAiReference(handle.editor, 'page', nameOf(document))
+    const text = await tauriFileSystem.readText(document)
+    if (!text.trim()) throw new Error('这个 Markdown 文件没有可引用的文字。')
+    return {
+      label: nameOf(document), text: text.slice(0, 24_000), external: true,
+      shortened: text.length > 24_000 ? true : undefined,
+    }
   }
 
   const editorIsEditable = () => !developmentPreparing && !emptyAfterDeletion() && (!desktop || (!!path() && !readonly()))
@@ -862,6 +901,11 @@ export default function App() {
 
   onMount(() => {
     if (!desktop) return
+    if (mac) {
+      void invoke<number | null>('title_bar_button_center').then((center) => {
+        if (!disposed && center !== null && center > 0 && Number.isFinite(center)) setTitleBarButtonCenter(`${center}px`)
+      }).catch(() => {})
+    }
     if (!restored) {
       void desktopWorkspace.restoreRoot().then(async (current) => {
         if (disposed) return
@@ -1081,7 +1125,8 @@ export default function App() {
       style={{ '--workspace-preferred-width': `${sidebarWidth()}px` }}>
       <Show when={desktop}>
         <header class="window-bar" classList={{ 'window-bar-mac': mac }} inert={selectionFilePreviewOpen()}
-          data-tauri-drag-region="">
+          style={{ '--traffic-light-center': titleBarButtonCenter() }}>
+          <div class="window-drag-region" data-tauri-drag-region="" aria-hidden="true" />
           <button type="button" class="sidebar-toggle" ref={sidebarToggle}
             aria-label={sidebarLabel()} aria-expanded={sidebarVisible()} aria-controls="workspace-sidebar"
             title={`${sidebarLabel()}（${mac ? '⌘' : 'Ctrl+'}\\）`} onClick={toggleSidebar}>
@@ -1098,36 +1143,55 @@ export default function App() {
           </div>
         </Show>
         <Show when={desktop && sidebarVisible() && !selectionFilePreviewOpen()}>
-          <WorkspaceResizeHandle width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
+          <WorkspaceResizeHandle sidebar="workspace" width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
         </Show>
         <div class="editor-content">
           <div class="editor-current-content" inert={!!selectionPreview()}
             classList={{ 'editor-current-content-covered': !!selectionPreview() }}>
             <div class="editor-document" inert={!!preview() || !!openingEntry() || emptyAfterDeletion()}
               hidden={!!preview() || !!openingEntry() || emptyAfterDeletion()}>
-              <Show when={path()}>
-                <header class="file-preview-toolbar">
-                  <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
-                  <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
-                </header>
+              <div class="editor-document-main">
+                <Show when={path()}>
+                  <header class="file-preview-toolbar">
+                    <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
+                    <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
+                    <Show when={desktop}>
+                      <div class="file-preview-actions ai-toggle-slot">
+                        <button type="button" class="ai-toggle" ref={aiToggle} aria-expanded={aiOpen()}
+                          aria-label="AI 侧栏"
+                          aria-controls="onebox-ai-sidebar"
+                          onClick={() => aiOpen() ? closeAi() : openAi()}>
+                          <span class="ai-toggle-spark" aria-hidden="true">✨</span>AI
+                        </button>
+                      </div>
+                    </Show>
+                  </header>
+                </Show>
+                <EditorShell
+                  markdown=""
+                  onReady={onReady}
+                  onDispose={onEditorDispose}
+                  onUpdate={onUpdate}
+                  onQuoteSelection={desktop && path() ? openAi : undefined}
+                  onInsertAttachment={desktop ? pickAttachment : undefined}
+                  onInsertFiles={desktop ? insertFiles : undefined}
+                  imageContext={path}
+                  readImage={desktop ? (href) => {
+                    const document = path()
+                    return document ? desktopAttachments.readImage(document, href) : Promise.resolve(undefined)
+                  } : undefined}
+                  openResource={desktop ? (href) => {
+                    const document = path()
+                    if (document) void desktopAttachments.open(document, href).catch(() => setFailure('附件操作失败'))
+                  } : undefined}
+                />
+              </div>
+              <Show when={desktop && path()} keyed>
+                {(document) => <AiSidebar open={aiOpen()} loading={loading()} title={nameOf(document)} history={aiHistory(document)}
+                  editor={() => loading() ? undefined : handle?.editor}
+                  quote={aiQuote()?.path === document ? aiQuote()?.reference : undefined}
+                  pickReference={pickAiReference} onQuoteConsumed={() => setAiQuote(undefined)} onClose={closeAi} />}
               </Show>
-              <EditorShell
-                markdown=""
-                onReady={onReady}
-                onDispose={onEditorDispose}
-                onUpdate={onUpdate}
-                onInsertAttachment={desktop ? pickAttachment : undefined}
-                onInsertFiles={desktop ? insertFiles : undefined}
-                imageContext={path}
-                readImage={desktop ? (href) => {
-                  const document = path()
-                  return document ? desktopAttachments.readImage(document, href) : Promise.resolve(undefined)
-                } : undefined}
-                openResource={desktop ? (href) => {
-                  const document = path()
-                  if (document) void desktopAttachments.open(document, href).catch(() => setFailure('附件操作失败'))
-                } : undefined}
-              />
             </div>
             <Show when={!openingEntry() && preview()}>
               <FilePreview root={preview()?.workspaceRoot} entry={preview()}

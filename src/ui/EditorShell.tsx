@@ -3,6 +3,7 @@ import { closeHistory } from '@tiptap/pm/history'
 import type { Node } from '@tiptap/pm/model'
 import { Selection } from '@tiptap/pm/state'
 import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount, Show } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import {
   blockCommands, blockEditCommands, insertCommands, selectedBlock, slashTrigger, tableCommands,
   type CommandItem, type MenuItem,
@@ -19,9 +20,12 @@ interface Popup {
   trigger?: NonNullable<ReturnType<typeof slashTrigger>>
   inTable: boolean
   canEditBlock?: boolean
+  quoteRange?: Range
 }
 
-type Action = CommandItem | (MenuItem & { attachment: AttachmentKind })
+type Action = CommandItem | (MenuItem & { attachment: AttachmentKind }) | (MenuItem & { quote: true })
+
+const quoteAction: Action = { label: '引用到 AI', search: 'AI 引用', icon: '✦', quote: true }
 
 const attachmentItems: readonly Action[] = [
   {
@@ -41,6 +45,7 @@ export default function EditorShell(props: {
   onUpdate: (doc: Node) => void
   onInsertAttachment?: (kind: AttachmentKind, range?: Range) => void
   onInsertFiles?: (files: File[]) => void
+  onQuoteSelection?: (range?: Range) => void
   readImage?: (href: string) => Promise<Blob | undefined>
   imageContext?: () => string | null
   openResource?: (href: string) => void
@@ -53,6 +58,7 @@ export default function EditorShell(props: {
 
   const [popup, setPopup] = createSignal<Popup>()
   const [highlighted, setHighlighted] = createSignal(0)
+  const [keyboardHighlight, setKeyboardHighlight] = createSignal(true)
   const menuId = createUniqueId()
   const items = createMemo(() => {
     const current = popup()
@@ -65,6 +71,7 @@ export default function EditorShell(props: {
         ['插入内容', insertCommands],
         ['媒体与附件', props.onInsertAttachment ? attachmentItems : []],
       ]
+    if (current.quoteRange && props.onQuoteSelection) sections.unshift(['AI', [quoteAction]])
     const query = current.trigger?.query.toLowerCase() ?? ''
     return sections.flatMap(([section, commands]) => {
       const matches = commands.filter((item) =>
@@ -81,7 +88,10 @@ export default function EditorShell(props: {
   }
 
   const showMenu = (next: Popup) => {
-    if (!next.trigger || popup()?.trigger?.query !== next.trigger.query) setHighlighted(0)
+    if (!next.trigger || popup()?.trigger?.query !== next.trigger.query) {
+      setKeyboardHighlight(true)
+      setHighlighted(0)
+    }
     setPopup(next)
   }
 
@@ -91,6 +101,7 @@ export default function EditorShell(props: {
     const editor = handle?.editor
     if (!current || !item || !editor?.isEditable) return
     closeMenu()
+    if ('quote' in item) { props.onQuoteSelection?.(current.quoteRange); return }
     if ('attachment' in item) {
       props.onInsertAttachment?.(item.attachment, current.trigger)
       return
@@ -146,6 +157,7 @@ export default function EditorShell(props: {
           case 'ArrowDown':
           case 'ArrowUp':
             if (!count) return false
+            setKeyboardHighlight(true)
             setHighlighted((index) => (index + (event.key === 'ArrowDown' ? 1 : count - 1)) % count)
             return true
           case 'Enter':
@@ -164,11 +176,13 @@ export default function EditorShell(props: {
         if (selection.empty || point.pos < selection.from || point.pos > selection.to) {
           view.dispatch(view.state.tr.setSelection(Selection.near(doc.resolve(point.pos))))
         }
-        view.focus()
+        if (!view.hasFocus()) view.focus()
         event.preventDefault()
+        const selected = view.state.selection
         showMenu({
           x: event.clientX, y: event.clientY, above: event.clientY, inTable: handle.editor.isActive('table'),
           canEditBlock: !!selectedBlock(view.state.selection),
+          quoteRange: selected.empty ? undefined : { from: selected.from, to: selected.to },
         })
         return true
       },
@@ -179,7 +193,7 @@ export default function EditorShell(props: {
       const current = popup()
       if (!transaction.docChanged && !transaction.selectionSet) return
       if (current && !current.trigger) {
-        closeMenu()
+        if (transaction.docChanged) closeMenu()
         return
       }
       const trigger = editor.isEditable && editor.isFocused && !editor.view.composing
@@ -195,13 +209,13 @@ export default function EditorShell(props: {
     })
 
     const closeOutside = (event: PointerEvent) => {
-      if (popup() && !popupElement?.contains(event.target as globalThis.Node)) closeMenu()
+      if (popup() && (!popupElement || !event.composedPath().includes(popupElement))) closeMenu()
     }
     const closeOnScroll = () => { if (popup()) closeMenu() }
-    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('pointerdown', closeOutside, true)
     scrollRoot.addEventListener('scroll', closeOnScroll)
     onCleanup(() => {
-      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('pointerdown', closeOutside, true)
       scrollRoot.removeEventListener('scroll', closeOnScroll)
     })
     props.onReady(handle)
@@ -230,17 +244,18 @@ export default function EditorShell(props: {
       </div>
       <Show when={popup()}>
         {(current) => (
-          <BlockMenu
+          <Portal><BlockMenu
             id={menuId}
             anchor={current()}
             query={current().trigger?.query}
             items={items()}
             active={highlighted()}
-            onHighlight={setHighlighted}
+            keyboardHighlight={keyboardHighlight()}
+            onHighlight={(index) => { setKeyboardHighlight(false); setHighlighted(index) }}
             onChoose={runItem}
             onClose={closeMenu}
             ref={(el) => { popupElement = el }}
-          />
+          /></Portal>
         )}
       </Show>
     </div>

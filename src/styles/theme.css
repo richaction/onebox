@@ -18,7 +18,17 @@
   --ob-bg-hover: light-dark(rgb(55 53 47 / 0.06), rgb(255 255 255 / 0.055));
   --ob-bg-active: light-dark(rgb(55 53 47 / 0.1), rgb(255 255 255 / 0.1));
   --ob-border: light-dark(rgb(55 53 47 / 0.16), rgb(255 255 255 / 0.13));
+  --ob-focus: light-dark(#797772, #a8a6a1);
   --ob-scrollbar: light-dark(rgb(55 53 47 / 0.2), rgb(255 255 255 / 0.2));
+}
+
+:where(button, input, select, textarea, summary, a[href], [tabindex]):focus {
+  outline: none;
+}
+
+:where(button, input, select, textarea, summary, a[href], [tabindex]):focus-visible {
+  outline: 1px solid var(--ob-focus);
+  outline-offset: 1px;
 }
 
 @media (max-width: 600px) {

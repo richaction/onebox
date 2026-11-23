@@ -8,8 +8,7 @@
       "dragDropEnabled": false,
       "titleBarStyle": "Overlay",
       "hiddenTitle": true,
-      "acceptFirstMouse": true,
-      "trafficLightPosition": { "x": 15, "y": 24 }
+      "acceptFirstMouse": true
     }],
     "trayIcon": {
       "iconPath": "icons/onebox-menubar.png",

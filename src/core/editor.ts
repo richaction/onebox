@@ -4,6 +4,7 @@ import type { Node } from '@tiptap/pm/model'
 import { EditorState, Plugin } from '@tiptap/pm/state'
 import type { EditorProps } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
+import { aiDocumentPlugin } from './aiDocument'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
 import { createCodeHighlight } from './codeHighlight'
@@ -60,6 +61,7 @@ export function createEditor(opts: {
       // Tiptap 在创建 EditorView 时会覆盖 editorProps.nodeViews。
       return [
         createVisibilityPlugin(),
+        aiDocumentPlugin(),
         new Plugin({
           props: { nodeViews: blockNodeViews(heights, () => observer, presentation.present) },
           view(view) {

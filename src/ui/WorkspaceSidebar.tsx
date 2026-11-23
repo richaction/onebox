@@ -823,7 +823,7 @@ export default function WorkspaceSidebar(props: {
     window.addEventListener('pointerup', releasePointer)
     window.addEventListener('pointercancel', clearDrag)
     window.addEventListener('blur', clearDrag)
-    window.addEventListener('click', preventDropClick, true)
+    tree.addEventListener('click', preventDropClick, true)
     window.addEventListener('keydown', cancelDrag)
     onCleanup(() => {
       clearTimeout(openTimer)
@@ -832,7 +832,7 @@ export default function WorkspaceSidebar(props: {
       window.removeEventListener('pointerup', releasePointer)
       window.removeEventListener('pointercancel', clearDrag)
       window.removeEventListener('blur', clearDrag)
-      window.removeEventListener('click', preventDropClick, true)
+      tree.removeEventListener('click', preventDropClick, true)
       window.removeEventListener('keydown', cancelDrag)
     })
   })
@@ -844,26 +844,6 @@ export default function WorkspaceSidebar(props: {
       <button type="button" class="workspace-empty" onClick={() => void load(state.path, true)}>读取失败，重试</button>
     </Show>
   )
-
-  const FolderBranch = (folder: { path: string }) => {
-    const opened = () => expanded().has(folder.path)
-    const [mounted, setMounted] = createSignal(opened())
-    createEffect(() => {
-      if (opened()) {
-        setMounted(true)
-        return
-      }
-      const timer = setTimeout(() => setMounted(false), 180)
-      onCleanup(() => clearTimeout(timer))
-    })
-    return (
-      <div class="workspace-branch" classList={{ 'is-expanded': opened() }} inert={!opened()}>
-        <div class="workspace-branch-content">
-          <Show when={opened() || mounted()}><Rows path={folder.path} /></Show>
-        </div>
-      </div>
-    )
-  }
 
   const EntryIcons = ({ entry }: { entry: WorkspaceEntry }) => (
     <>
@@ -962,8 +942,8 @@ export default function WorkspaceSidebar(props: {
                 />
               </Show>
             </div>
-            <Show when={entry.directory}>
-              <FolderBranch path={entry.path} />
+            <Show when={entry.directory && expanded().has(entry.path)}>
+              <Rows path={entry.path} />
             </Show>
           </li>
           <Show when={draft()?.after === entry.path ? draft() : undefined} keyed>

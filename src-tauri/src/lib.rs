@@ -1,3 +1,5 @@
+mod ai;
+mod ai_network;
 mod attachments;
 mod development;
 mod fs;
@@ -20,6 +22,46 @@ use tauri::{
 
 #[cfg(target_os = "macos")]
 const QUIT: &str = "onebox-quit";
+
+#[tauri::command]
+async fn title_bar_button_center(window: tauri::WebviewWindow) -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSView, NSWindow, NSWindowButton};
+        use objc2_foundation::NSPoint;
+
+        let (send, receive) = tokio::sync::oneshot::channel();
+        window
+            .with_webview(move |webview| {
+                // Both handles are borrowed for the duration of the main-thread callback.
+                let center = (|| {
+                    let window = unsafe { webview.ns_window().cast::<NSWindow>().as_ref()? };
+                    let view = unsafe { webview.inner().cast::<NSView>().as_ref()? };
+                    let button = window.standardWindowButton(NSWindowButton::CloseButton)?;
+                    if button.isHiddenOrHasHiddenAncestor() {
+                        return None;
+                    }
+                    let bounds = button.bounds();
+                    let midpoint = NSPoint::new(
+                        bounds.origin.x + bounds.size.width / 2.0,
+                        bounds.origin.y + bounds.size.height / 2.0,
+                    );
+                    let point = button.convertPoint_toView(midpoint, Some(view));
+                    let bounds = view.bounds();
+                    let y = point.y - bounds.origin.y;
+                    Some(if view.isFlipped() { y } else { bounds.size.height - y })
+                })();
+                let _ = send.send(center);
+            })
+            .ok()?;
+        receive.await.ok().flatten()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        None
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn editor_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
@@ -57,9 +99,23 @@ pub fn run() {
     let builder = builder
         .manage(std::sync::Mutex::new(markdown::PendingDocument::default()))
         .manage(wps_preview::TemporaryPreviews::default())
+        .manage(ai::Ai::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            title_bar_button_center,
+            ai::ai_account,
+            ai::ai_usage,
+            ai::ai_models,
+            ai::ai_network,
+            ai::ai_set_proxy,
+            ai::ai_login,
+            ai::ai_cancel_login,
+            ai::ai_logout,
+            ai::ai_new_thread,
+            ai::ai_start_turn,
+            ai::ai_stop_turn,
+            ai::ai_close_thread,
             development::remember_document,
             development::restore_document,
             development::focus_window,

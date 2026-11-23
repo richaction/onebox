@@ -47,7 +47,13 @@ body { background: var(--ob-bg-sidebar); color: var(--ob-text); font-family: var
   --file-viewer-button-color: var(--ob-text-secondary);
   --file-viewer-button-hover-bg: var(--ob-bg-hover);
   --file-viewer-button-hover-color: var(--ob-text);
+  --file-viewer-focus-ring: var(--ob-focus);
   --file-viewer-font: 14px / 1.45 var(--ob-font-sans);
+}
+
+#viewer :is(.image-stage img, .image-lightbox button):focus-visible {
+  outline: 1px solid var(--ob-focus);
+  outline-offset: 2px;
 }
 
 #viewer .file-viewer-web-content,

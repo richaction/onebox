@@ -17,6 +17,7 @@ export default function BlockMenu(props: {
   query?: string
   items: { item: MenuItem; section?: string }[]
   active: number
+  keyboardHighlight: boolean
   onHighlight: (index: number) => void
   onChoose: (index: number) => void
   onClose: () => void
@@ -56,6 +57,7 @@ export default function BlockMenu(props: {
   })
 
   createEffect(() => {
+    if (!props.keyboardHighlight) return
     props.items
     const row = results.querySelector<HTMLElement>(`[data-index="${props.active}"]`)
     if (props.active === 0) results.scrollTop = 0
@@ -76,7 +78,7 @@ export default function BlockMenu(props: {
         bottom: layout().openUp ? `${window.innerHeight - props.anchor.above}px` : undefined,
         '--block-menu-max-height': `${layout().heightLimit}px`,
       }}
-      onMouseDown={(event) => event.preventDefault()}
+      onMouseDown={(event) => { if (event.button === 0) event.preventDefault() }}
     >
       <div class="block-menu">
         <Show when={props.query !== undefined}>
@@ -104,7 +106,7 @@ export default function BlockMenu(props: {
                   data-index={index()}
                   aria-selected={index() === props.active}
                   classList={{ 'block-menu-item': true, highlighted: index() === props.active }}
-                  onPointerMove={(event) => { if (event.pointerType === 'mouse') props.onHighlight(index()) }}
+                  onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlight(index()) }}
                   onClick={() => props.onChoose(index())}
                 >
                   <span class="block-menu-icon" aria-hidden="true">{item.icon}</span>
