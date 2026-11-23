@@ -261,6 +261,18 @@ it('uses the same menu for right click and overflow, with inline creation and co
     }
     expect(onCreate).not.toHaveBeenCalled()
 
+    host.querySelector<HTMLButtonElement>('[aria-label="工作区操作"]')!.click()
+    menuItems().find((button) => button.textContent === '新建文件…')!.click()
+    const emptyDraft = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
+    const target = rowButton(entry.path)
+    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    target.focus()
+    expect(host.contains(emptyDraft)).toBe(true)
+    target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    target.click()
+    expect(onOpen).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(host.contains(emptyDraft)).toBe(false))
+
     more.click()
     menuItems().find((button) => button.textContent === '新建文件…')!.click()
     const named = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
@@ -279,7 +291,12 @@ it('uses the same menu for right click and overflow, with inline creation and co
     await Promise.resolve()
 
     more.click()
-    menuItems().find((button) => button.textContent === '删除…')!.click()
+    const trash = menuItems().find((button) => button.textContent === '删除…')!
+    trash.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    window.dispatchEvent(new Event('resize'))
+    expect(menuItems()).toContain(trash)
+    trash.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    trash.click()
     expect(onTrash).not.toHaveBeenCalled()
     host.querySelector<HTMLButtonElement>('.workspace-trash-confirm')!.click()
     expect(onTrash).toHaveBeenCalledWith(entry)

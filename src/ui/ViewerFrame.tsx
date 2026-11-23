@@ -10,6 +10,7 @@ export default function ViewerFrame(props: {
   entry: WorkspaceEntry
   onSaveHint: () => void
   onClose: () => void
+  onInteract: () => void
   onSettled: (ready: boolean) => void
   imageCommand?: { action: ImagePreviewAction }
   onImageState: (state?: ImagePreviewState) => void
@@ -86,6 +87,9 @@ export default function ViewerFrame(props: {
           break
         case 'onebox-preview-close':
           props.onClose()
+          break
+        case 'onebox-preview-interact':
+          props.onInteract()
           break
         case 'onebox-preview-save-hint':
           props.onSaveHint()

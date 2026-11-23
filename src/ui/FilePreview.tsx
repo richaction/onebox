@@ -110,6 +110,10 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
     if (visible) focusMenuItem()
   }
 
+  const dismissOpenWith = () => {
+    if (openWithMenu.matches(':popover-open')) openWithMenu.hidePopover()
+  }
+
   const openWith = (application?: string) => {
     if (openWithMenu.matches(':popover-open')) {
       openWithMenu.hidePopover()
@@ -217,6 +221,7 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
       </header>
       <Show when={requested()} keyed>{(frame) => (
           <ViewerFrame root={frame.root} entry={frame.entry} onClose={closePreview} onSaveHint={props.onSaveHint}
+            onInteract={dismissOpenWith}
             onSettled={(ready) => batch(() => {
               frame.ready[1](ready)
               if (!ready) frame.outline[1](false)

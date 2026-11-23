@@ -36,6 +36,10 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
     list.className = 'code-language-options'
     list.setAttribute('role', 'listbox')
     list.setAttribute('aria-label', '代码语言')
+    // Safari may blur the search input without moving focus to the clicked button.
+    list.onmousedown = (event) => {
+      if (event.button === 0 && (event.target as Element).closest('button')) event.preventDefault()
+    }
     menu.append(search, list)
     const bounds = trigger.getBoundingClientRect()
     const viewport = document.documentElement
@@ -74,8 +78,10 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
       }
     }
     search.oninput = render
+    let pressedPointer: number | undefined
     menu.addEventListener('focusout', () => queueMicrotask(() => {
-      if (popup === menu && document.activeElement !== trigger && !menu.contains(document.activeElement)) close()
+      if (pressedPointer === undefined && popup === menu && document.activeElement !== trigger &&
+        !menu.contains(document.activeElement)) close()
     }))
     menu.onkeydown = (event) => {
       if (event.isComposing) return
@@ -91,23 +97,36 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
       if (event.key === 'ArrowUp' && index === 0) search.focus()
       else options[Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)))]?.focus()
     }
-    const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menu.contains(event.target) && !trigger.contains(event.target)) close()
+    const press = (event: PointerEvent) => {
+      const path = event.composedPath()
+      if (path.includes(menu)) {
+        if (event.button === 0) pressedPointer = event.pointerId
+      } else if (!path.includes(trigger)) close()
+    }
+    const release = (event: PointerEvent) => {
+      if (pressedPointer !== event.pointerId) return
+      pressedPointer = undefined
+      if (event.type === 'pointercancel' || !event.composedPath().includes(menu)) close()
     }
     const scrolled = (event: Event) => {
-      if (!(event.target instanceof Node) || !menu.contains(event.target)) close()
+      if (pressedPointer === undefined && !(event.target instanceof Node && menu.contains(event.target))) close()
     }
-    document.addEventListener('pointerdown', outside, true)
+    document.addEventListener('pointerdown', press, true)
+    document.addEventListener('pointerup', release, true)
+    document.addEventListener('pointercancel', release, true)
     document.addEventListener('scroll', scrolled, true)
     closeListeners = () => {
-      document.removeEventListener('pointerdown', outside, true)
+      document.removeEventListener('pointerdown', press, true)
+      document.removeEventListener('pointerup', release, true)
+      document.removeEventListener('pointercancel', release, true)
       document.removeEventListener('scroll', scrolled, true)
     }
     popup = menu
     trigger.setAttribute('aria-expanded', 'true')
     render()
     document.body.append(menu)
-    list.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' })
+    const selected = list.querySelector('[aria-selected="true"]')
+    if (selected) list.scrollTop = Math.max(0, selected.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom)
     search.focus({ preventScroll: true })
   }
 

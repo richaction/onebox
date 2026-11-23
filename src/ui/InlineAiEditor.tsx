@@ -195,11 +195,11 @@ export default function InlineAiEditor(props: {
     if (!range) { setLayout(undefined); props.close(false); return }
     const root = props.scrollRoot
     const viewport = root.getBoundingClientRect()
-    const body = props.editor.view.dom.getBoundingClientRect()
+    const content = props.editor.view.dom.getBoundingClientRect()
     const start = props.editor.view.coordsAtPos(range.from, 1)
     const end = props.editor.view.coordsAtPos(range.to, -1)
-    const left = Math.max(viewport.left + 8, body.left)
-    const width = Math.min(560, Math.max(0, Math.min(viewport.right - 8, body.right) - left))
+    const left = Math.max(viewport.left, content.left)
+    const width = Math.max(0, Math.min(viewport.right, content.right) - left)
     const height = panel.offsetHeight || 36
     const below = end.bottom + 6
     const above = start.top - height - 6
@@ -224,13 +224,16 @@ export default function InlineAiEditor(props: {
     window.addEventListener('resize', schedule)
     const doc = panel.ownerDocument
     const closeOutside = (event: MouseEvent) => {
-      if (event.button !== 0) return
-      const path = event.composedPath()
-      if (path.includes(panel) || path.some((node) => node instanceof Element && node.matches('.editor-selection-menu'))) return
+      if (event.button !== 0 || event.composedPath().includes(panel)) return
+      if (event.type === 'pointerdown') {
+        if (!inPlace()) props.close(false)
+        return
+      }
+      // Removing the in-document diff can reflow the text under the pointer.
       clearTimeout(outsideClose)
-      // Let the clicked control or editor position receive its own click first.
-      outsideClose = setTimeout(() => { if (!disposed) props.close(false) }, 0)
+      outsideClose = setTimeout(() => props.close(false), 0)
     }
+    doc.addEventListener('pointerdown', closeOutside, true)
     doc.addEventListener('click', closeOutside, true)
     position()
     const previousFocus = doc.activeElement
@@ -251,6 +254,7 @@ export default function InlineAiEditor(props: {
       props.editor.off('transaction', schedule)
       props.scrollRoot.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
+      doc.removeEventListener('pointerdown', closeOutside, true)
       doc.removeEventListener('click', closeOutside, true)
     })
   })
@@ -295,7 +299,7 @@ export default function InlineAiEditor(props: {
         <span class="editor-inline-ai-status">修改建议已就绪</span>
       </Show>
       <Show when={!working() && !suggestion() && !signedOut()}>
-        <button type="submit" class="editor-inline-ai-action editor-inline-ai-apply" aria-label="发送修改要求"
+        <button type="submit" class="editor-inline-ai-action editor-inline-ai-send" aria-label="发送修改要求"
           title="发送修改要求" disabled={!prompt().trim()}><ActionIcon name="send" /></button>
       </Show>
       <Show when={working() || suggestion()}>

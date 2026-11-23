@@ -168,8 +168,9 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     continueButton.type = 'button'
     continueButton.className = 'code-continue'
     continueButton.contentEditable = 'false'
-    continueButton.title = '在代码块后继续写正文'
-    continueButton.setAttribute('aria-label', continueButton.title)
+    continueButton.tabIndex = -1
+    continueButton.setAttribute('aria-hidden', 'true')
+    continueButton.onmousedown = (event) => { if (event.button === 0) event.preventDefault() }
     next.onclick = continueButton.onclick = () => {
       const pos = getPos()
       if (pos !== undefined) continueAfterBlock(view, pos)

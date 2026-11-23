@@ -1,5 +1,5 @@
 import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
-import { NameField } from './FileName'
+import { NameField, onInlineNameBlur } from './FileName'
 import { createStore, reconcile } from 'solid-js/store'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
 
@@ -79,16 +79,28 @@ function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; clos
     menu.style.left = `${Math.max(8, Math.min(props.at.x, window.innerWidth - bounds.width - 8))}px`
     menu.style.top = `${Math.max(8, Math.min(props.at.y, window.innerHeight - bounds.height - 8))}px`
     buttons()[0]?.focus({ preventScroll: true })
+    let pointer: number | undefined
     const outside = (event: PointerEvent) => {
-      if (!menu.contains(event.target as Node)) props.close(false)
+      if (!event.composedPath().includes(menu)) props.close(false)
+      else if (event.button === 0) pointer = event.pointerId
+    }
+    const release = (event: PointerEvent) => {
+      if (event.pointerId !== pointer) return
+      pointer = undefined
+      if (event.type === 'pointercancel' || !event.composedPath().includes(menu)) props.close(false)
     }
     const away = () => props.close(false)
+    const resize = () => { if (pointer === undefined) away() }
     document.addEventListener('pointerdown', outside)
-    window.addEventListener('resize', away)
+    document.addEventListener('pointerup', release, true)
+    document.addEventListener('pointercancel', release, true)
+    window.addEventListener('resize', resize)
     window.addEventListener('blur', away)
     onCleanup(() => {
       document.removeEventListener('pointerdown', outside)
-      window.removeEventListener('resize', away)
+      document.removeEventListener('pointerup', release, true)
+      document.removeEventListener('pointercancel', release, true)
+      window.removeEventListener('resize', resize)
       window.removeEventListener('blur', away)
     })
   })
@@ -980,6 +992,11 @@ export default function WorkspaceSidebar(props: {
     onMount(() => {
       field.focus({ preventScroll: true })
       field.scrollIntoView({ block: 'nearest' })
+      onInlineNameBlur(field, () => {
+        if (!pending() && !field.value.trim()) {
+          setCreation((current) => current === draft ? undefined : current)
+        }
+      })
     })
     return (
       <li>
@@ -987,11 +1004,6 @@ export default function WorkspaceSidebar(props: {
           <span class="workspace-entry-icon" classList={{ 'is-folder': draft.directory, 'is-document': !draft.directory }} aria-hidden="true" />
           <input ref={field} aria-label={label} placeholder={draft.directory ? label : '文件名.md'}
             aria-invalid={!!issue()} readOnly={pending()} onInput={() => setIssue(undefined)}
-            onBlur={() => {
-              if (!pending() && !field.value.trim()) {
-                setCreation((current) => current === draft ? undefined : current)
-              }
-            }}
             onContextMenu={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
               if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return

@@ -255,6 +255,9 @@ const blockNavigation = (event: MouseEvent) => {
 }
 document.addEventListener('click', blockNavigation, true)
 document.addEventListener('auxclick', blockNavigation, true)
+document.addEventListener('pointerdown', (event) => {
+  if (event.button === 0) parent.postMessage('onebox-preview-interact', '*')
+}, { capture: true, passive: true })
 window.addEventListener('keydown', (event) => {
   if (event.defaultPrevented) return
   if (event.key === 'Escape') parent.postMessage('onebox-preview-close', '*')

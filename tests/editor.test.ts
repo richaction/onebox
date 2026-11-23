@@ -78,19 +78,31 @@ it('opens the in-document AI editor on first click and applies only after approv
         vi.useRealTimers()
       }
       native.mockRestore()
-      const bounds = new DOMRect(0, 0, 320, 220)
-      vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(bounds)
-      vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue(bounds)
+      const contentBounds = vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(56, 24, 708, 180))
+      const scrollBounds = vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 820, 220))
       vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 80, top: 60, bottom: 80 })
       const retryFocus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus').mockImplementationOnce(() => {})
       try {
-        menu()!.click()
+        const button = menu()!
+        button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+        scroll.dispatchEvent(new Event('scroll'))
+        expect(menu()).toBe(button)
+        button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+        button.click()
         await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('修改要求'))
         expect(retryFocus.mock.calls.length).toBeGreaterThan(1)
       } finally { retryFocus.mockRestore() }
       const input = document.querySelector<HTMLTextAreaElement>('[aria-label="修改要求"]')!
+      const panel = input.closest<HTMLElement>('.editor-inline-ai')!
       expect(input).not.toBeNull()
       expect(document.activeElement).toBe(input)
+      expect(panel.style.left).toBe('56px')
+      expect(panel.style.width).toBe('708px')
+      contentBounds.mockReturnValue(new DOMRect(22, 24, 276, 180))
+      scrollBounds.mockReturnValue(new DOMRect(0, 0, 320, 220))
+      window.dispatchEvent(new Event('resize'))
+      await vi.waitFor(() => expect(panel.style.width).toBe('276px'))
+      expect(panel.style.left).toBe('22px')
       expect(document.querySelector('.editor-inline-ai-dismiss')).toBeNull()
       expect(onQuoteSelection).not.toHaveBeenCalled()
       expect(menu()).toBeNull()
@@ -98,6 +110,7 @@ it('opens the in-document AI editor on first click and applies only after approv
       input.dispatchEvent(new Event('input', { bubbles: true }))
       document.querySelector<HTMLButtonElement>('[aria-label="发送修改要求"]')!.click()
       expect(document.body.textContent).toContain('正在工作')
+      expect(panel.style.width).toBe('276px')
       expect(document.querySelector('.editor-inline-ai-loading')).not.toBeNull()
       expect(document.querySelector('[aria-label="停止生成"]')?.textContent).toBe('')
       await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
@@ -110,9 +123,12 @@ it('opens the in-document AI editor on first click and applies only after approv
       receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } })
       expect(document.querySelector('.editor-inline-ai-loading')).toBeNull()
       expect(document.querySelector('[aria-label="确认修改"]')).not.toBeNull()
+      expect(panel.style.width).toBe('276px')
       expect(view.dom.querySelector('.editor-ai-added')?.textContent).toBe('O')
       expect(view.dom.querySelector('.editor-ai-removed')?.textContent).toBe('o')
       expect(mounted.toMarkdown()).toBe('onebox sample text')
+      host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+      expect(view.dom.querySelector('.editor-ai-added')?.textContent).toBe('O')
       document.querySelector<HTMLButtonElement>('.editor-inline-ai-apply')!.click()
       expect(mounted.toMarkdown()).toBe('Onebox sample text')
       expect(document.querySelector('.editor-inline-ai')).toBeNull()
@@ -132,8 +148,12 @@ it('opens the in-document AI editor on first click and applies only after approv
       } finally { restoredNative.mockRestore() }
       menu()!.click()
       expect(document.querySelector('.editor-inline-ai')).not.toBeNull()
+      const outsideClick = vi.fn()
+      host.addEventListener('click', outsideClick)
+      expect(host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))).toBe(true)
+      expect(document.querySelector('.editor-inline-ai')).toBeNull()
       host.click()
-      await vi.waitFor(() => expect(document.querySelector('.editor-inline-ai')).toBeNull())
+      expect(outsideClick).toHaveBeenCalledOnce()
     } finally {
       native.mockRestore()
       focus.mockRestore()
@@ -142,6 +162,31 @@ it('opens the in-document AI editor on first click and applies only after approv
     dispose()
     host.remove()
     for (const mock of [...mocks, send]) mock.mockRestore()
+  }
+})
+
+it('keeps a pressed block-menu item mounted until the click after a scroll', () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'paragraph', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
+  }), host)
+  try {
+    const { view } = mounted.editor
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 })
+    view.dom.querySelector('p')!.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }))
+    const item = [...document.querySelectorAll<HTMLButtonElement>('.block-menu-item')]
+      .find((button) => button.textContent?.includes('一级标题'))!
+    item.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    host.querySelector('.editor-scroll')!.dispatchEvent(new Event('scroll'))
+    expect(item.isConnected).toBe(true)
+    item.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    item.click()
+    expect(mounted.toMarkdown()).toBe('# paragraph')
+  } finally {
+    dispose()
+    host.remove()
   }
 })
 
@@ -474,6 +519,19 @@ describe('createEditor', () => {
     expect(onUpdate).not.toHaveBeenCalled()
   })
 
+  it('inserts a paragraph between adjacent code blocks only when their gap is clicked', () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('```js\na\n```\n\n```js\nb\n```')
+    const { view } = handle.editor
+    expect(view.state.doc.childCount).toBe(2)
+    const gap = element.querySelector<HTMLButtonElement>('.code-continue')!
+    expect(gap.tabIndex).toBe(-1)
+    gap.click()
+    expect(view.state.doc.childCount).toBe(3)
+    expect(view.state.doc.child(1).type.name).toBe('paragraph')
+    expect(view.state.selection.$head.parent).toBe(view.state.doc.child(1))
+  })
+
   it('keeps editor-only code and table controls outside exported content', () => {
     const { handle, element } = mount()
     handle.loadMarkdown('> ```python\n> print("hello")\n> ```')
@@ -570,6 +628,23 @@ describe('createEditor', () => {
     choose('')
     expect(select().dataset.languageId).toBe('')
     expect(handle.toMarkdown()).toBe('> ```text title=demo\n> fn main() {}\n> ```')
+  })
+
+  it('preserves a pressed language option across search focus loss and editor scrolling', async () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('```java\nexample\n```')
+    element.querySelector<HTMLButtonElement>('.code-language')!.click()
+    const search = document.querySelector<HTMLInputElement>('[aria-label="搜索语言"]')!
+    const option = document.querySelector<HTMLButtonElement>('.code-language-options [data-language-id="python"]')!
+    option.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    expect(option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))).toBe(false)
+    search.blur()
+    await Promise.resolve()
+    scrollRoot!.dispatchEvent(new Event('scroll'))
+    expect(option.isConnected).toBe(true)
+    option.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    option.click()
+    expect(handle.toMarkdown()).toBe('```python\nexample\n```')
   })
 
   it('appends viewport groups and exports the underlying Markdown blocks', () => {

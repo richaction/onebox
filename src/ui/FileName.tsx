@@ -1,9 +1,45 @@
-import { createSignal, onMount, Show } from 'solid-js'
+import { createSignal, onCleanup, onMount, Show } from 'solid-js'
 
 export function splitName(name: string, directory?: boolean) {
   const dot = name.lastIndexOf('.')
   return directory || dot <= 0 ? { stem: name, suffix: '' }
     : { stem: name.slice(0, dot), suffix: name.slice(dot) }
+}
+
+export function onInlineNameBlur(input: HTMLInputElement, commit: () => void) {
+  const doc = input.ownerDocument
+  const window = doc.defaultView!
+  let pointer: number | undefined
+  let pending = false
+  let timer: number | undefined
+  const press = (event: PointerEvent) => {
+    if (event.button === 0 && doc.activeElement === input && event.target !== input) pointer = event.pointerId
+  }
+  const finish = () => {
+    pointer = undefined
+    if (!pending) return
+    pending = false
+    // A blur during mousedown must not move the row under the next mouseup and click.
+    timer = window.setTimeout(() => { if (doc.activeElement !== input) commit() }, 0)
+  }
+  const release = (event: PointerEvent) => { if (event.pointerId === pointer) finish() }
+  const blur = () => {
+    if (pointer === undefined) commit()
+    else pending = true
+  }
+  input.addEventListener('blur', blur)
+  doc.addEventListener('pointerdown', press, true)
+  doc.addEventListener('pointerup', release, true)
+  doc.addEventListener('pointercancel', release, true)
+  window.addEventListener('blur', finish)
+  onCleanup(() => {
+    window.clearTimeout(timer)
+    input.removeEventListener('blur', blur)
+    doc.removeEventListener('pointerdown', press, true)
+    doc.removeEventListener('pointerup', release, true)
+    doc.removeEventListener('pointercancel', release, true)
+    window.removeEventListener('blur', finish)
+  })
 }
 
 export function NameField(props: {
@@ -20,6 +56,7 @@ export function NameField(props: {
   onMount(() => {
     input.focus({ preventScroll: true })
     input.setSelectionRange(stem.length, stem.length)
+    onInlineNameBlur(input, () => { if (!pending() && !error()) void submit() })
   })
 
   const submit = async () => {
@@ -57,7 +94,6 @@ export function NameField(props: {
               setDraft(event.currentTarget.value)
               setError(undefined)
             }}
-            onBlur={() => { if (!pending() && !error()) void submit() }}
             onKeyDown={(event) => {
               if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
               event.preventDefault()

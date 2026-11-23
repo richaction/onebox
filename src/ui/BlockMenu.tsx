@@ -18,6 +18,7 @@ export default function BlockMenu(props: {
   items: { item: MenuItem; section?: string }[]
   active: number
   keyboardHighlight: boolean
+  isPressing: () => boolean
   onHighlight: (index: number) => void
   onChoose: (index: number) => void
   onClose: () => void
@@ -44,7 +45,7 @@ export default function BlockMenu(props: {
   })
 
   onMount(() => {
-    const resize = () => setViewport(viewportBounds())
+    const resize = () => { if (!props.isPressing()) setViewport(viewportBounds()) }
     const visual = window.visualViewport
     window.addEventListener('resize', resize)
     visual?.addEventListener('resize', resize)

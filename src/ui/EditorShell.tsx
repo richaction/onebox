@@ -64,6 +64,7 @@ export default function EditorShell(props: {
   let dismissedSlash: number | undefined
   let selectionRects: { selection: Selection; rects: DOMRect[] } | undefined
   let selectionFrame = 0
+  let menuPress: { pointer: number; menu: 'block' | 'selection' } | undefined
   let blockDrag: GripDrag | undefined
   let blockScrollFrame = 0
   let suppressGripClick = false
@@ -100,10 +101,14 @@ export default function EditorShell(props: {
 
   const closeMenu = () => {
     dismissedSlash = popup()?.trigger?.from
+    if (menuPress?.menu === 'block') menuPress = undefined
     setPopup(undefined)
   }
 
-  const closeSelectionMenu = () => setSelectionMenu(undefined)
+  const closeSelectionMenu = () => {
+    if (menuPress?.menu === 'selection') menuPress = undefined
+    setSelectionMenu(undefined)
+  }
 
   const resetSelectionMenu = () => {
     selectionRects = undefined
@@ -177,7 +182,7 @@ export default function EditorShell(props: {
   }
 
   const hoverAfterSelection = (event: PointerEvent) => {
-    if (event.button !== 0) return
+    if (event.button !== 0 || (event.target as Element | null)?.closest?.('button, input, textarea, [contenteditable="false"]')) return
     cancelAnimationFrame(selectionFrame)
     // Mouseup and the editor's native selection sync complete after pointerup.
     const show = () => showSelectionMenu(event.clientX, event.clientY, true)
@@ -394,31 +399,56 @@ export default function EditorShell(props: {
       }
     })
 
+    const menuAt = (event: PointerEvent) => {
+      const path = event.composedPath()
+      if (popup() && popupElement && path.includes(popupElement)) return 'block'
+      if (selectionMenu() && path.some((node) => node instanceof Element && node.matches('.editor-selection-menu'))) return 'selection'
+    }
     const closeOutside = (event: PointerEvent) => {
       cancelAnimationFrame(selectionFrame)
-      if (popup() && (!popupElement || !event.composedPath().includes(popupElement))) closeMenu()
-      if (selectionMenu() && !(event.target as Element | null)?.closest?.('.editor-selection-menu')) {
-        closeSelectionMenu()
-      }
+      const menu = menuAt(event)
+      if (popup() && menu !== 'block') closeMenu()
+      if (selectionMenu() && menu !== 'selection') closeSelectionMenu()
+      if (menu && event.button === 0) menuPress = { pointer: event.pointerId, menu }
+    }
+    const releaseMenu = (event: PointerEvent) => {
+      if (event.pointerId !== menuPress?.pointer) return
+      const { menu } = menuPress
+      menuPress = undefined
+      if (event.type === 'pointerup' && menuAt(event) === menu) return
+      if (menu === 'block') closeMenu()
+      else resetSelectionMenu()
+    }
+    const closeOnBlur = () => {
+      if (popup()) closeMenu()
+      resetSelectionMenu()
+    }
+    const updateLayout = () => {
+      // Keep the button mounted through the native click, even if scrolling or resizing occurs during the press.
+      selectionRects = undefined
+      if (menuPress?.menu !== 'selection') closeSelectionMenu()
+      positionBlockGrip()
     }
     const closeOnScroll = () => {
       cancelAnimationFrame(selectionFrame)
-      if (popup()) closeMenu()
-      resetSelectionMenu()
-      positionBlockGrip()
+      if (popup() && menuPress?.menu !== 'block') closeMenu()
+      updateLayout()
     }
-    const layout = new ResizeObserver(() => {
-      resetSelectionMenu()
-      positionBlockGrip()
-    })
+    const layout = new ResizeObserver(updateLayout)
     layout.observe(scrollRoot)
     document.addEventListener('pointerdown', closeOutside, true)
+    document.addEventListener('pointerup', releaseMenu, true)
+    document.addEventListener('pointercancel', releaseMenu, true)
     scrollRoot.addEventListener('scroll', closeOnScroll, true)
     window.addEventListener('resize', closeOnScroll)
+    window.addEventListener('blur', closeOnBlur)
     onCleanup(() => {
       document.removeEventListener('pointerdown', closeOutside, true)
+      document.removeEventListener('pointerup', releaseMenu, true)
+      document.removeEventListener('pointercancel', releaseMenu, true)
       scrollRoot.removeEventListener('scroll', closeOnScroll, true)
       window.removeEventListener('resize', closeOnScroll)
+      window.removeEventListener('blur', closeOnBlur)
       layout.disconnect()
       cancelAnimationFrame(selectionFrame)
       endBlockDrag()
@@ -520,6 +550,7 @@ export default function EditorShell(props: {
             items={items()}
             active={highlighted()}
             keyboardHighlight={keyboardHighlight()}
+            isPressing={() => menuPress?.menu === 'block'}
             onHighlight={(index) => { setKeyboardHighlight(false); setHighlighted(index) }}
             onChoose={runItem}
             onClose={closeMenu}
