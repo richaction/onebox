@@ -25,15 +25,14 @@ export default function ViewerFrame(props: {
   let sent = false
   let savingArchiveEntry = false
   let url: string | undefined
-  let renderName = props.entry.name
-  let temporaryPath: string | undefined
+  const name = props.entry.name
 
   createEffect(on(() => props.imageCommand, (command) => {
     if (command && visible()) frame.contentWindow?.postMessage({ type: 'onebox-preview-image-command', ...command }, '*')
   }, { defer: true }))
 
   createEffect(on(() => props.pdfOutlineOpen, (open) => {
-    if (visible() && /\.pdf$/iu.test(renderName)) frame.contentWindow?.postMessage({ type: 'onebox-preview-pdf-outline', open }, '*')
+    if (visible() && /\.pdf$/iu.test(name)) frame.contentWindow?.postMessage({ type: 'onebox-preview-pdf-outline', open }, '*')
   }, { defer: true }))
 
   onMount(() => {
@@ -48,7 +47,7 @@ export default function ViewerFrame(props: {
     const send = () => {
       if (disposed || !connected || !url || sent) return
       sent = true
-      frame.contentWindow?.postMessage({ type: 'onebox-preview-source', url, name: renderName }, '*')
+      frame.contentWindow?.postMessage({ type: 'onebox-preview-source', url, name }, '*')
     }
     const saveArchiveEntry = async (name: unknown, bytes: unknown) => {
       if (savingArchiveEntry || typeof name !== 'string' || !(bytes instanceof ArrayBuffer) ||
@@ -97,21 +96,9 @@ export default function ViewerFrame(props: {
       }
     }
     window.addEventListener('message', receive)
-    const releaseTemporary = () => {
-      if (!temporaryPath) return
-      void desktopWorkspace.releasePreview(temporaryPath).catch(() => {})
-      temporaryPath = undefined
-    }
-    void desktopWorkspace.preparePreview(props.root, props.entry.path).then((preview) => {
-      if (typeof preview !== 'string') {
-        temporaryPath = preview.path
-        renderName = preview.convertedName
-      }
-      if (disposed) {
-        releaseTemporary()
-        return
-      }
-      url = convertFileSrc(typeof preview === 'string' ? preview : preview.path)
+    void desktopWorkspace.preparePreview(props.root, props.entry.path).then((path) => {
+      if (disposed) return
+      url = convertFileSrc(path)
       send()
     }).catch((error: unknown) => {
       if (!disposed) finish(typeof error === 'string' ? error : '无法读取此文件')
@@ -120,7 +107,6 @@ export default function ViewerFrame(props: {
       disposed = true
       clearTimeout(timeout)
       window.removeEventListener('message', receive)
-      releaseTemporary()
     })
   })
 

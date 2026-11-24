@@ -73,8 +73,7 @@ export const desktopWorkspace = {
   fileApplications: (root: string | undefined, path: string, onList: (result: FileApplications) => void) =>
     invoke<Record<string, string>>('workspace_file_applications', { root, path, onList: new Channel(onList) }),
   preparePreview: (root: string | undefined, path: string) =>
-    invoke<string | { path: string; convertedName: string }>('workspace_preview', { root, path }),
-  releasePreview: (path: string) => invoke<void>('release_workspace_preview', { path }),
+    invoke<string>('workspace_preview', { root, path }),
   entries: (root: string, folder: string) =>
     invoke<WorkspaceEntry[]>('workspace_entries', { root, folder }),
   async watchDirectories(paths: string[], onEvent: (event: WorkspaceWatchEvent) => void) {

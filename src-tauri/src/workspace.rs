@@ -2,7 +2,6 @@ use crate::{
     attachments::{copy_with_hash, document_name, normalize, relative_href, FILE_OPERATION},
     fs::{selected_path, write_file},
     workspace_links::{links, rebased_link, rewrite},
-    wps_preview::{self, TemporaryPreviews},
 };
 use serde::Serialize;
 use std::{
@@ -748,6 +747,24 @@ fn preview_file(root: Option<&Path>, entry: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn internal_preview_file(root: Option<&Path>, entry: &Path) -> Result<PathBuf, String> {
+    let path = preview_file(root, entry)?;
+    let unsupported = [entry, path.as_path()].iter().any(|candidate| {
+        candidate
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                ["wps", "et", "dps", "wpt", "ett", "dpt"]
+                    .iter()
+                    .any(|format| extension.eq_ignore_ascii_case(format))
+            })
+    });
+    if unsupported {
+        return Err("无法预览此文件。可以使用「打开方式」。".into());
+    }
+    Ok(path)
+}
+
 #[tauri::command]
 pub(crate) async fn reveal_workspace_location(
     app: AppHandle,
@@ -1030,7 +1047,7 @@ pub(crate) async fn workspace_preview(
     app: AppHandle,
     root: Option<String>,
     path: String,
-) -> Result<WorkspacePreview, String> {
+) -> Result<PathBuf, String> {
     let settings = workspace_preference(&app)?;
     let root = root.map(|root| selected_path(&app, root)).transpose()?;
     let entry = selected_path(&app, path)?;
@@ -1041,47 +1058,14 @@ pub(crate) async fn workspace_preview(
                 return Err("请先打开此工作区".into());
             }
         }
-        let path = preview_file(root.as_deref(), &entry)?;
-        let Some(format) = wps_preview::format(&path) else {
-            app.asset_protocol_scope()
-                .allow_file(&path)
-                .map_err(|err| err.to_string())?;
-            return Ok(WorkspacePreview::Original(path));
-        };
-        let (converted, scratch) = wps_preview::convert(&path, format)?;
-        let converted_name = converted
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("无法准备 WPS 预览。")?
-            .to_owned();
+        let path = internal_preview_file(root.as_deref(), &entry)?;
         app.asset_protocol_scope()
-            .allow_file(&converted)
+            .allow_file(&path)
             .map_err(|err| err.to_string())?;
-        app.state::<TemporaryPreviews>()
-            .retain(converted.clone(), scratch)?;
-        Ok(WorkspacePreview::Converted {
-            path: converted,
-            converted_name,
-        })
+        Ok(path)
     })
     .await
     .map_err(|err| err.to_string())?
-}
-
-#[derive(Serialize)]
-#[serde(untagged, rename_all_fields = "camelCase")]
-pub(crate) enum WorkspacePreview {
-    Original(PathBuf),
-    Converted {
-        path: PathBuf,
-        converted_name: String,
-    },
-}
-
-#[tauri::command]
-pub(crate) async fn release_workspace_preview(app: AppHandle, path: PathBuf) {
-    let _ =
-        tokio::task::spawn_blocking(move || app.state::<TemporaryPreviews>().release(&path)).await;
 }
 
 #[tauri::command]
@@ -1763,6 +1747,22 @@ mod tests {
         ).unwrap();
         assert_eq!(renamed_case.destination, root.join("新统计.V2.XLSX"));
         assert!(fs::read_dir(root).unwrap().any(|entry| entry.unwrap().file_name() == "新统计.V2.XLSX"));
+    }
+
+    #[test]
+    fn wps_formats_can_be_opened_externally_but_not_previewed() {
+        let directory = tempfile::tempdir().unwrap();
+        for extension in ["wps", "ET", "dps", "wpt", "ett", "dpt"] {
+            let file = directory.path().join(format!("示例.{extension}"));
+            fs::write(&file, "sample").unwrap();
+            assert!(internal_preview_file(None, &file).is_err(), "{extension}");
+            assert_eq!(preview_file(None, &file).unwrap(), file.canonicalize().unwrap());
+        }
+        for extension in ["doc", "docx", "xls", "xlsx", "ppt", "pptx"] {
+            let file = directory.path().join(format!("示例.{extension}"));
+            fs::write(&file, "sample").unwrap();
+            assert_eq!(internal_preview_file(None, &file).unwrap(), file.canonicalize().unwrap());
+        }
     }
 
     #[test]
