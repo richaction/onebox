@@ -68,7 +68,7 @@ function ItemPreview(props: {
           <Show when={source()} fallback={
             <span class="workspace-entry-icon" classList={{ 'is-document': props.entry.markdown }} />
           }>
-            {(url) => <img src={url()} alt="" decoding="async" onError={() => setSource(undefined)} />}
+            {(url) => <img src={url()} alt="" draggable={false} decoding="async" onError={() => setSource(undefined)} />}
           </Show>
         </span>
         <span class="selection-preview-description">

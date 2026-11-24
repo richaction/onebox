@@ -1,11 +1,12 @@
 import type { ChainedCommands, Editor } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
 import { Selection, TextSelection, type Selection as EditorSelection } from '@tiptap/pm/state'
-import { createSignal, For, Match, Show, Switch } from 'solid-js'
+import { createMemo, createSignal, For, Match, Show, Switch } from 'solid-js'
 import { blockCommands } from '../core/blockCommands'
 
 export const selectionToolbarWidth = 214
 export const selectionToolbarHeight = 128
+export const selectionToolbarFormat = 'onebox:selection-toolbar-format'
 
 type Action = (chain: ChainedCommands) => ChainedCommands
 type Panel = 'main' | 'blocks' | 'link' | 'more'
@@ -50,17 +51,23 @@ export default function SelectionToolbar(props: {
   maxHeight: number
   ref: (element: HTMLDivElement) => void
   onClose: () => void
-  onAiEdit?: () => boolean
+  onAiEdit?: (event: MouseEvent) => boolean
 }) {
   const [panel, setPanel] = createSignal<Panel>('main')
   const [linkError, setLinkError] = createSignal(false)
   const [copyError, setCopyError] = createSignal(false)
   const [aiError, setAiError] = createSignal(false)
   const editor = props.editor
-  const textSelection = asText(props.selection)
-  const canMark = !!textSelection && !textSelection.empty && !editor.isActive('codeBlock')
-  const latex = canMark && textSelection.$from.sameParent(textSelection.$to)
-    ? editor.state.doc.textBetween(textSelection.from, textSelection.to).trim() : ''
+  const textSelection = createMemo(() => asText(props.selection))
+  const canMark = () => {
+    const selection = textSelection()
+    return !!selection && !selection.empty && !editor.isActive('codeBlock')
+  }
+  const latex = createMemo(() => {
+    const selection = textSelection()
+    return selection && canMark() && selection.$from.sameParent(selection.$to)
+      ? selection.$from.doc.textBetween(selection.from, selection.to).trim() : ''
+  })
   const activeBlock = blockTypes.find(({ active }) => active(editor))
   const inQuote = editor.isActive('blockquote')
   const listType = editor.isActive('orderedList') ? 'orderedList' : editor.isActive('bulletList') ? 'bulletList' : undefined
@@ -69,19 +76,23 @@ export default function SelectionToolbar(props: {
     ? (activeBlock?.icon.startsWith('H') ? `折叠${activeBlock.label}` : '折叠区块') : activeBlock?.label
   const valid = () => editor.isEditable && editor.state.doc === props.selection.$from.doc
 
-  const run = (action: Action) => {
-    if (!valid() || !textSelection) return false
-    const result = action(editor.chain().focus(undefined, { scrollIntoView: false }).command(({ tr }) => {
+  const run = (action: Action, keepOpen = false) => {
+    const selection = textSelection()
+    if (!valid() || !selection) return false
+    const result = action(editor.chain().command(({ tr }) => {
       closeHistory(tr)
+      if (keepOpen) tr.setMeta(selectionToolbarFormat, true)
+      tr.setSelection(selection)
       return true
-    }).setTextSelection({ from: textSelection.from, to: textSelection.to })).run()
-    if (result) props.onClose()
+    })).run()
+    if (result && !keepOpen) { props.onClose(); editor.view.focus() }
     return result
   }
 
   const math = (display: boolean) => {
-    if (!latex || !textSelection) return
-    const formula = { type: 'math', attrs: { latex, display } }
+    const source = latex()
+    if (!source) return
+    const formula = { type: 'math', attrs: { latex: source, display } }
     run((chain) => chain.insertContent(display ? { type: 'paragraph', content: [formula] } : formula))
   }
 
@@ -96,9 +107,10 @@ export default function SelectionToolbar(props: {
     catch { setCopyError(true) }
   }
 
-  const iconButton = (label: string, symbol: string, activate: () => void, disabled = false, pressed?: boolean) => (
+  const iconButton = (label: string, symbol: string, activate: () => void, disabled?: () => boolean, mark?: string) => (
     <button type="button" class="selection-toolbar-icon" title={label} aria-label={label}
-      aria-pressed={pressed} data-action={label} disabled={disabled} onClick={activate}>{symbol}</button>
+      aria-pressed={mark ? !!textSelection() && editor.isActive(mark) : undefined}
+      data-action={label} disabled={disabled?.()} onClick={activate}>{symbol}</button>
   )
 
   return <div class="editor-selection-menu" role="group" aria-label="选区操作" ref={props.ref}
@@ -123,17 +135,17 @@ export default function SelectionToolbar(props: {
     <div class="selection-toolbar-content"><Switch>
       <Match when={panel() === 'main'}>
         <button type="button" class="selection-toolbar-row" aria-label="转换区块" aria-expanded="false"
-          disabled={!textSelection} onClick={() => setPanel('blocks')}>
+          disabled={!textSelection()} onClick={() => setPanel('blocks')}>
           <span aria-hidden="true">{activeBlock?.icon ?? 'T'}</span><strong>{typeLabel ?? '转换区块'}</strong><i aria-hidden="true">›</i>
         </button>
         <div class="selection-toolbar-marks" role="group" aria-label="文字格式">
           <For each={inlineMarks}>{(item) => iconButton(item.name, item.symbol, () =>
-            run((chain) => chain.toggleMark(item.mark)), !canMark, editor.isActive(item.mark))}</For>
-          {iconButton('清除格式', 'Tₓ', () => run((chain) => chain.unsetAllMarks()), !canMark)}
-          {iconButton('链接', '↗', () => { setLinkError(false); setPanel('link') }, !canMark, editor.isActive('link'))}
-          {iconButton('删除线', 'S', () => run((chain) => chain.toggleStrike()), !canMark, editor.isActive('strike'))}
-          {iconButton('行内代码', '‹/›', () => run((chain) => chain.toggleCode()), !canMark, editor.isActive('code'))}
-          {iconButton('行内公式', '√x', () => math(false), !latex)}
+            run((chain) => chain.toggleMark(item.mark), true), () => !canMark(), item.mark)}</For>
+          {iconButton('清除格式', 'Tₓ', () => run((chain) => chain.unsetAllMarks(), true), () => !canMark())}
+          {iconButton('链接', '↗', () => { setLinkError(false); setPanel('link') }, () => !canMark(), 'link')}
+          {iconButton('删除线', 'S', () => run((chain) => chain.toggleStrike(), true), () => !canMark(), 'strike')}
+          {iconButton('行内代码', '‹/›', () => run((chain) => chain.toggleCode(), true), () => !canMark(), 'code')}
+          {iconButton('行内公式', '√x', () => math(false), () => !latex())}
           {iconButton('更多操作', '⋯', () => { setCopyError(false); setPanel('more') })}
         </div>
       </Match>
@@ -151,7 +163,7 @@ export default function SelectionToolbar(props: {
               else run(item.run)
             }}><span aria-hidden="true">{item.icon}</span>{item.label}<Show when={item === activeBlock}><i aria-hidden="true">✓</i></Show></button>
           )}</For>
-          <button type="button" class="selection-toolbar-row" disabled={!latex} onClick={() => math(true)}>
+          <button type="button" class="selection-toolbar-row" disabled={!latex()} onClick={() => math(true)}>
             <span aria-hidden="true">∑</span>公式区块
           </button>
           <button type="button" class="selection-toolbar-row" aria-pressed={quoteVariant === 'note'}
@@ -164,7 +176,7 @@ export default function SelectionToolbar(props: {
               <span aria-hidden="true">▸H{level}</span>折叠标题 {level}
             </button>
           )}</For>
-          <button type="button" class="selection-toolbar-row" disabled={!canMark} onClick={() => { setLinkError(false); setPanel('link') }}>
+          <button type="button" class="selection-toolbar-row" disabled={!canMark()} onClick={() => { setLinkError(false); setPanel('link') }}>
             <span aria-hidden="true">↗</span>页面链接
           </button>
         </div>
@@ -190,8 +202,8 @@ export default function SelectionToolbar(props: {
     </Switch></div>
     <Show when={props.onAiEdit}>
       <Show when={aiError()}><p class="selection-toolbar-error" role="status">该选区没有可供 AI 编辑的内容</p></Show>
-      <button type="button" class="selection-toolbar-row selection-toolbar-ai" onClick={() => {
-        if (valid() && props.onAiEdit?.() === false) setAiError(true)
+      <button type="button" class="selection-toolbar-row selection-toolbar-ai" onClick={(event) => {
+        if (!valid() || !props.onAiEdit?.(event)) setAiError(true)
       }}><span aria-hidden="true">✨</span>使用 AI 编辑</button>
     </Show>
   </div>

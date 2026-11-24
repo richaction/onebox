@@ -1,4 +1,5 @@
 import type { MathfieldElement } from 'mathlive'
+import { reachesDragThreshold } from './buttonClickTolerance'
 
 export function bindMathPointer(
   field: MathfieldElement,
@@ -31,8 +32,7 @@ export function bindMathPointer(
 
   field.addEventListener('pointermove', (event) => {
     if (!press || press.id !== event.pointerId) return
-    const distance = Math.hypot(event.clientX - press.x, event.clientY - press.y)
-    if (!press.dragging && distance < (event.pointerType === 'touch' ? 18 : 8)) return
+    if (!press.dragging && !reachesDragThreshold(event.clientX - press.x, event.clientY - press.y, event.pointerType)) return
     press.dragging = true
     const head = field.getOffsetFromPoint(event.clientX, event.clientY)
     if (head >= 0 && head !== field.position) extend(press.anchor, head)

@@ -1,4 +1,4 @@
-import { createUniqueId, Show, type JSX } from 'solid-js'
+import { createEffect, createUniqueId, Show, type JSX } from 'solid-js'
 
 export type ComposerMenu = 'quote' | 'usage' | 'model'
 
@@ -14,11 +14,12 @@ export default function AiComposerMenu(props: {
 }) {
   const popupId = createUniqueId()
   let openedByHover = false
+  createEffect(() => { if (!props.open) openedByHover = false })
 
   return (
     <div class={`ai-composer-menu ai-${props.kind}-menu`} data-ai-composer-menu={props.kind}
       onPointerEnter={(event) => {
-        if (!props.onHover || event.pointerType !== 'mouse' || props.open) return
+        if (!props.onHover || event.pointerType !== 'mouse' || event.buttons || props.open) return
         openedByHover = true
         props.onHover()
       }}
@@ -37,7 +38,10 @@ export default function AiComposerMenu(props: {
       <button class={`ai-composer-trigger ai-${props.kind}-trigger`} type="button"
         aria-label={props.label} title={props.kind === 'quote' ? props.label : undefined}
         aria-expanded={props.open} aria-controls={popupId}
-        onClick={(event) => { if (!openedByHover || !props.open || event.detail === 0) props.onToggle() }}>
+        onClick={(event) => {
+          if (openedByHover && props.open && event.detail > 0) openedByHover = false
+          else props.onToggle()
+        }}>
         {props.trigger}
       </button>
       <Show when={props.open}>

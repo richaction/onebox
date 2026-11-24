@@ -10,11 +10,18 @@ it('saves the document title after a click moves focus to another control', asyn
   const target = document.createElement('button')
   document.body.append(host, target)
   const save = vi.fn()
+  const addListener = window.addEventListener.bind(window)
+  let attachedAfterMount = false
+  const listeners = vi.spyOn(window, 'addEventListener').mockImplementation((type, listener, options) => {
+    if (type === 'blur') attachedAfterMount = host.querySelector('input')?.isConnected === true
+    addListener(type, listener, options)
+  })
   const dismiss = render(() => createComponent(FileName, {
     name: 'note.md',
     edit: { stem: 'renamed', onInput: () => {}, onPause: () => {}, onSave: save, onCancel: () => {} },
   }), host)
   try {
+    expect(attachedAfterMount).toBe(true)
     const click = vi.fn(() => expect(save).not.toHaveBeenCalled())
     target.addEventListener('click', click)
     host.querySelector('input')!.focus()
@@ -28,6 +35,7 @@ it('saves the document title after a click moves focus to another control', asyn
     await vi.waitFor(() => expect(save).toHaveBeenCalledOnce())
   } finally {
     dismiss()
+    listeners.mockRestore()
     host.remove()
     target.remove()
   }
@@ -247,6 +255,20 @@ it('uses the same menu for right click and overflow, with inline creation and co
     }
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(entry)
 
+    // AppKit can report detail=2 on the first click of an adjacent row.
+    rowButton(folder.path).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    rowButton(entry.path).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }))
+    rowButton(entry.path).dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }))
+    expect(onOpen).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('.filename-field input')).toBeNull()
+
+    more.click()
+    more.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1 }))
+    window.dispatchEvent(new Event('resize'))
+    more.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 1 }))
+    more.click()
+    expect(menuItems()).toHaveLength(0)
+
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))
     const rightClickLabels = menuItems().map((button) => button.textContent)
     more.click()
@@ -299,12 +321,13 @@ it('uses the same menu for right click and overflow, with inline creation and co
     menuItems().find((button) => button.textContent === '新建文件…')!.click()
     const emptyDraft = host.querySelector<HTMLInputElement>('input[aria-label="文件名称"]')!
     const target = rowButton(entry.path)
+    onOpen.mockClear()
     target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
     target.focus()
     expect(host.contains(emptyDraft)).toBe(true)
     target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
     target.click()
-    expect(onOpen).toHaveBeenCalledTimes(2)
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(entry)
     await vi.waitFor(() => expect(host.contains(emptyDraft)).toBe(false))
 
     more.click()

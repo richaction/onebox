@@ -33,9 +33,9 @@ it('keeps the pressed button captured through slight motion and releases it for 
   withButton(({ capture, release, pointer }) => {
     pointer('pointerdown', 20)
     expect(capture).toHaveBeenCalledExactlyOnceWith(1)
-    pointer('pointermove', 27)
+    pointer('pointermove', 29)
     expect(release).not.toHaveBeenCalled()
-    pointer('pointermove', 28)
+    pointer('pointermove', 30)
     expect(release).toHaveBeenCalledExactlyOnceWith(1)
   })
 })

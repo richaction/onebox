@@ -144,7 +144,7 @@ export default function FileName(props: { name: string; edit?: TitleEdit }) {
         <label class="filename-inline" title={props.name}>
           <span class="filename-inline-stem">
             <span aria-hidden="true">{stem() || ' '}</span>
-            <input ref={(input) => onInlineNameBlur(input, () => props.edit?.onSave())}
+            <input ref={(input) => onMount(() => onInlineNameBlur(input, () => props.edit?.onSave()))}
               value={stem()} type="text" autocomplete="off" spellcheck={false}
               aria-label="文件名" aria-invalid={!!props.edit?.error}
               onCompositionStart={() => props.edit?.onPause()}

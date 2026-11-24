@@ -3,7 +3,9 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-j
 import { aiRevisionDiff, decodeAiAnswer } from '../core/aiAnswer'
 import { aiReferenceRange, applyAiRevision, clearAiSource, previewAiChanges, type AiReference, type AiRevision } from '../core/aiDocument'
 import { ai, type AiEvent } from '../io/ai'
+import { reachesDragThreshold } from '../core/buttonClickTolerance'
 
+export type OpeningClick = Pick<MouseEvent, 'clientX' | 'clientY' | 'timeStamp'>
 type EditJob = { thread?: string; turn?: string; chunks: Map<string, string>; final?: string }
 
 const actionPaths = {
@@ -23,6 +25,7 @@ function ActionIcon(props: { name: keyof typeof actionPaths }) {
 export default function InlineAiEditor(props: {
   editor: Editor
   reference: AiReference & { anchor: number }
+  openingClick?: OpeningClick
   scrollRoot: HTMLElement
   close: (restoreFocus: boolean) => void
 }) {
@@ -204,10 +207,7 @@ export default function InlineAiEditor(props: {
     const below = end.bottom + 6
     const above = start.top - height - 6
     const preferAbove = above >= viewport.top + 6 && (suggestion() || below + height > viewport.bottom)
-    const top = Math.max(viewport.top + 6, Math.min(
-      preferAbove ? above : below,
-      viewport.bottom - height - 6,
-    ))
+    const top = Math.max(viewport.top + 6, Math.min(preferAbove ? above : below, viewport.bottom - height - 6))
     setLayout({ left, top, width })
   }
   const schedule = () => {
@@ -223,12 +223,30 @@ export default function InlineAiEditor(props: {
     props.scrollRoot.addEventListener('scroll', schedule, true)
     window.addEventListener('resize', schedule)
     const doc = panel.ownerDocument
+    let pressedInside = false
+    let openingClick = props.openingClick
+    let repeat = false
     const closeOutside = (event: MouseEvent) => {
-      if (event.button !== 0 || event.composedPath().includes(panel)) return
+      if (event.button !== 0) return
+      const inside = event.composedPath().includes(panel)
       if (event.type === 'pointerdown') {
-        if (!inPlace()) props.close(false)
+        // The menu has moved away. Consume only an immediate second press at the opening point.
+        repeat = !!openingClick && !inside && event.timeStamp - openingClick.timeStamp <= 500 &&
+          !reachesDragThreshold(event.clientX - openingClick.clientX, event.clientY - openingClick.clientY)
+        openingClick = undefined
+        pressedInside = inside
+        if (repeat) { event.preventDefault(); event.stopPropagation(); return }
+        if (!inside && !inPlace()) props.close(false)
         return
       }
+      if (repeat && event.detail > 0) {
+        repeat = false
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+      // A press on the panel border can end with a native click on a common ancestor.
+      if (inside || (event.detail > 0 && pressedInside)) return
       // Removing the in-document diff can reflow the text under the pointer.
       clearTimeout(outsideClose)
       outsideClose = setTimeout(() => props.close(false), 0)

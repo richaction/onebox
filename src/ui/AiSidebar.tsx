@@ -76,10 +76,6 @@ export default function AiSidebar(props: {
     return model?.supportedReasoningEfforts?.find((option) => option.reasoningEffort === efforts[model.model])?.reasoningEffort
   })
   const [menu, setMenu] = createSignal<ComposerMenu | 'conversations'>()
-  const composerMenu = () => {
-    const current = menu()
-    return current === 'conversations' ? undefined : current
-  }
   const [accountError, setAccountError] = createSignal('')
   const [modelError, setModelError] = createSignal('')
   const [usageError, setUsageError] = createSignal('')
@@ -790,7 +786,7 @@ export default function AiSidebar(props: {
             </div>
           </AiComposerMenu>
           <AiComposerControls account={account()} models={models()} model={selectedModel()} usage={usage()}
-            effort={selectedEffort()} menu={composerMenu()} onMenu={setMenu} onChooseEffort={chooseEffort}
+            effort={selectedEffort()} menu={menu()} onMenu={setMenu} onChooseEffort={chooseEffort}
             loadingAccount={loadingAccount()} loadingModels={loadingModels()} loadingUsage={loadingUsage()}
             working={working()} signingIn={signingIn()} canCancelLogin={!!login()}
             accountError={accountError()} modelError={modelError()} usageError={usageError()}

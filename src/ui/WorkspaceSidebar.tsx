@@ -2,6 +2,7 @@ import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMo
 import { NameField, onInlineNameBlur } from './FileName'
 import { createStore, reconcile } from 'solid-js/store'
 import { trackMenuPress } from '../core/menuPress'
+import { reachesDragThreshold } from '../core/buttonClickTolerance'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
 
 interface Directory {
@@ -34,6 +35,7 @@ interface SidebarContext {
   x: number
   y: number
   trigger: HTMLElement
+  toggle?: HTMLElement
   entry?: WorkspaceEntry
 }
 
@@ -82,12 +84,13 @@ function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; clos
     buttons()[0]?.focus({ preventScroll: true })
     const pointer = trackMenuPress(menu.ownerDocument, () => props.close(false))
     const outside = (event: PointerEvent) => {
-      const inside = event.composedPath().includes(menu)
-      pointer.start(event, inside ? menu : undefined)
-      if (!inside) props.close(false)
+      const path = event.composedPath()
+      const target = path.includes(menu) ? menu : props.at.toggle && path.includes(props.at.toggle) ? props.at.toggle : undefined
+      pointer.start(event, target)
+      if (!target) props.close(false)
     }
     const away = () => props.close(false)
-    const resize = () => { if (!pointer.active(menu)) away() }
+    const resize = () => { if (!pointer.active(menu) && !pointer.active(props.at.toggle)) away() }
     document.addEventListener('pointerdown', outside, true)
     window.addEventListener('resize', resize)
     window.addEventListener('blur', away)
@@ -187,6 +190,7 @@ export default function WorkspaceSidebar(props: {
   let tree!: HTMLElement
   let selectionAnchor: string | undefined
   let controlClick: string | undefined
+  let firstClickedPath: string | undefined
   let systemCopy = Promise.resolve()
   let systemClipboardChangeCount: number | undefined
   let clipboardHintTimer: ReturnType<typeof setTimeout> | undefined
@@ -421,19 +425,22 @@ export default function WorkspaceSidebar(props: {
     event.stopPropagation()
     if (event.type === 'contextmenu' && entry?.path === controlClick && controlClick !== undefined) return
     if (moving() || pasting() || props.restoring) return
+    const target = event.target as HTMLElement
+    const trigger = target.closest('button') ?? (event.currentTarget as HTMLElement)
+    const toggle = event.type === 'click' ? trigger : undefined
+    if (toggle && context()?.toggle === toggle) { closeContext(true); return }
     if (entry && !entry.directory && entry.accessible !== false && !selection().has(entry.path)) {
       selectionAnchor = entry.path
       setKeepOverview(false)
       setSelection(new Set([entry.path]))
     }
-    const target = event.target as HTMLElement
-    const trigger = target.closest('button') ?? (event.currentTarget as HTMLElement)
     const bounds = trigger.getBoundingClientRect()
     const pointer = 'clientX' in event && event.type === 'contextmenu' && (event.clientX || event.clientY) ? event : undefined
     setContext({
       x: pointer?.clientX ?? bounds.left,
       y: pointer?.clientY ?? bounds.bottom + 4,
       trigger,
+      toggle,
       entry,
     })
   }
@@ -760,7 +767,7 @@ export default function WorkspaceSidebar(props: {
     if (moving() || pasting() || event.button !== 0 || event.pointerType === 'touch' ||
       event.shiftKey || event.metaKey || event.ctrlKey) return
     if (entry.accessible === false) return
-    if (renaming() === entry.path || (event.target as Element).closest('.workspace-row-action')) return
+    if (!button || button.disabled) return
     press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, row: event.currentTarget as HTMLElement, entry }
   }
 
@@ -790,7 +797,7 @@ export default function WorkspaceSidebar(props: {
       const row = press.row.getBoundingClientRect()
       const stillOnRow = event.clientY >= row.top && event.clientY < row.bottom
         && event.clientX >= row.left && event.clientX < row.right
-      if (stillOnRow || Math.hypot(event.clientX - press.x, event.clientY - press.y) < 10) return
+      if (stillOnRow || !reachesDragThreshold(event.clientX - press.x, event.clientY - press.y, event.pointerType)) return
       setDragged(press.entry)
       setError(undefined)
     }
@@ -921,7 +928,9 @@ export default function WorkspaceSidebar(props: {
                   aria-pressed={entry.directory ? undefined : selection().has(entry.path)}
                   aria-busy={props.pending === entry.path || undefined}
                   onClick={(event) => {
-                    if (event.detail > 1 || (event.ctrlKey && controlClick === entry.path)) return
+                    // AppKit may continue a multi-click sequence across adjacent rows.
+                    if (event.detail === 1) firstClickedPath = entry.path
+                    if ((event.detail > 1 && firstClickedPath === entry.path) || (event.ctrlKey && controlClick === entry.path)) return
                     const modified = event.shiftKey || event.metaKey || event.ctrlKey
                     if (entry.directory && modified) return
                     event.currentTarget.focus({ preventScroll: true })
@@ -933,7 +942,7 @@ export default function WorkspaceSidebar(props: {
                     }
                   }}
                   onDblClick={(event) => {
-                    if (!event.shiftKey && !event.metaKey && !event.ctrlKey) setRenaming(entry.path)
+                    if (firstClickedPath === entry.path && !event.shiftKey && !event.metaKey && !event.ctrlKey) setRenaming(entry.path)
                   }}
                 >
                   <EntryIcons entry={entry} />

@@ -1277,15 +1277,24 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 4px;
+  padding: 5px;
   overflow: hidden;
-  border: 1px solid var(--ob-border);
   border-radius: 9px;
   background: var(--ob-bg-overlay);
   color: var(--ob-text);
   font: 13px/1.35 var(--ob-font-sans);
   user-select: none;
   box-shadow: var(--ob-shadow-menu);
+}
+
+/* Draw the frame over the controls so a press on the footer edge reaches its button. */
+.editor-selection-menu::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--ob-border);
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .selection-toolbar-content {
@@ -1309,9 +1318,15 @@ body {
   cursor: pointer;
 }
 
-.editor-selection-menu button:enabled:is(:hover, :focus-visible, [aria-pressed='true']) {
+.editor-selection-menu button:enabled:is(:hover, :focus-visible) {
   background: var(--ob-bg-hover);
-  outline: none;
+}
+.editor-selection-menu button:enabled[aria-pressed='true'] {
+  background: var(--ob-selection);
+}
+.editor-selection-menu button:focus-visible {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: -2px;
 }
 .editor-selection-menu button:disabled { opacity: .4; cursor: default; }
 .editor-selection-menu .selection-toolbar-row {
@@ -1328,7 +1343,6 @@ body {
 .selection-toolbar-marks {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 1px;
   padding-block: 3px;
   border-block-start: 1px solid var(--ob-border);
 }
@@ -1340,9 +1354,11 @@ body {
 .selection-toolbar-icon[data-action='行内代码'] { font: 13px var(--ob-font-mono); }
 .selection-toolbar-options { display: grid; gap: 1px; }
 .editor-selection-menu .selection-toolbar-ai {
+  margin: -3px -5px -5px;
+  min-block-size: 36px;
+  padding: 6px 11px 8px;
   border-block-start: 1px solid var(--ob-border);
-  border-start-start-radius: 0;
-  border-start-end-radius: 0;
+  border-radius: 0;
   background: var(--ob-bg-overlay);
 }
 .selection-toolbar-link { display: flex; gap: 3px; padding: 2px; }
@@ -2548,7 +2564,7 @@ img.ProseMirror-selectednode {
   color: var(--ob-text);
   background: var(--ob-bg-overlay);
   border: 1px solid var(--ob-border);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: 0 2px 8px rgb(0 0 0 / 5%);
   font-family: var(--ob-font-sans);
   font-size: 13px;
@@ -2559,11 +2575,15 @@ img.ProseMirror-selectednode {
   gap: 5px;
   align-items: center;
   box-sizing: border-box;
-  min-height: 29px;
+  min-height: 33px;
   padding: 2px 5px 2px 8px;
 }
 
-.editor-inline-ai-bar:has(textarea:not([hidden])) { cursor: text; }
+.editor-inline-ai-bar:has(textarea:not([hidden])) {
+  min-height: 42px;
+  padding-inline: 10px;
+  cursor: text;
+}
 
 .editor-inline-ai-spark,
 .editor-inline-ai-loading {

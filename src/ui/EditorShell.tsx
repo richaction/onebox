@@ -10,13 +10,13 @@ import {
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
 import { blockDropTarget, moveBlock } from '../core/blockMove'
-import { buttonClickTolerance } from '../core/buttonClickTolerance'
+import { reachesDragThreshold } from '../core/buttonClickTolerance'
 import { createEditor, type EditorHandle } from '../core/editor'
 import { ListRowsSelection, listTextSelectionRects } from '../core/listSelection'
 import { trackMenuPress } from '../core/menuPress'
 import BlockMenu from './BlockMenu'
-import InlineAiEditor from './InlineAiEditor'
-import SelectionToolbar, { selectionToolbarHeight, selectionToolbarWidth } from './SelectionToolbar'
+import InlineAiEditor, { type OpeningClick } from './InlineAiEditor'
+import SelectionToolbar, { selectionToolbarFormat, selectionToolbarHeight, selectionToolbarWidth } from './SelectionToolbar'
 
 export type AttachmentKind = 'image' | 'file'
 
@@ -78,7 +78,7 @@ export default function EditorShell(props: {
   const [selectionMenu, setSelectionMenu] = createSignal<{
     x: number; y: number; above: boolean; width: number; maxHeight: number; selection: Selection
   }>()
-  const [inlineEdit, setInlineEdit] = createSignal<AiReference & { anchor: number }>()
+  const [inlineEdit, setInlineEdit] = createSignal<{ reference: AiReference & { anchor: number }; openingClick?: OpeningClick }>()
   const [blockGrip, setBlockGrip] = createSignal<{ x: number; y: number; selection: NodeSelection }>()
   const [blockDrop, setBlockDrop] = createSignal<ReturnType<typeof blockDropTarget>>()
   const [highlighted, setHighlighted] = createSignal(0)
@@ -127,18 +127,20 @@ export default function EditorShell(props: {
     if (restoreFocus) handle?.editor.view.focus()
   }
 
-  const startInlineEdit = (range: Range) => {
+  const startInlineEdit = (range: Range, event: MouseEvent) => {
     const editor = handle?.editor
     if (!props.inlineAi || !editor?.isEditable || inlineEdit()) return false
     const reference = captureAiReference(editor, 'selection', '', range)
     if (!reference || reference.anchor === undefined) return false
     closeSelectionMenu()
     highlightAiSource(editor, reference.anchor)
-    setInlineEdit({ ...reference, anchor: reference.anchor })
+    const { clientX, clientY, timeStamp } = event
+    setInlineEdit({ reference: { ...reference, anchor: reference.anchor },
+      openingClick: event.detail > 0 ? { clientX, clientY, timeStamp } : undefined })
     return true
   }
 
-  const showSelectionMenu = (x: number, y: number, edgeTolerance = 0) => {
+  const showSelectionMenu = (x: number, y: number, afterSelection = false) => {
     const view = handle?.editor.view
     if (!view?.editable || !view.hasFocus() || view.composing || inlineEdit() || popup()) return
     const { selection } = view.state
@@ -161,7 +163,8 @@ export default function EditorShell(props: {
       }
     }
     const rects = selectionRects.rects.filter((rect) => rect.width > 0)
-    if (!rects.some((rect) => x >= rect.left - edgeTolerance && x <= rect.right + edgeTolerance &&
+    if (!rects.length) return
+    if (!afterSelection && !rects.some((rect) => x >= rect.left && x <= rect.right &&
       y >= rect.top && y <= rect.bottom)) return
     const bounds = scrollRoot.getBoundingClientRect()
     let topEdge = rects[0].top
@@ -198,8 +201,8 @@ export default function EditorShell(props: {
   const hoverAfterSelection = (event: PointerEvent) => {
     if (event.button !== 0 || (event.target as Element | null)?.closest?.('button, input, textarea, [contenteditable="false"]')) return
     cancelAnimationFrame(selectionFrame)
-    // Native selection snaps to character boundaries after pointerup.
-    const show = () => showSelectionMenu(event.clientX, event.clientY, 2)
+    // A drag can end past the last selected glyph, especially with wide characters.
+    const show = () => showSelectionMenu(event.clientX, event.clientY, true)
     selectionFrame = requestAnimationFrame(() => {
       show()
       if (!selectionMenu()) selectionFrame = requestAnimationFrame(show)
@@ -255,8 +258,7 @@ export default function EditorShell(props: {
     const drag = blockDrag
     if (!drag || event.pointerId !== drag.pointer) return
     if (!drag.moved) {
-      const dragDistance = event.pointerType === 'touch' ? 18 : buttonClickTolerance
-      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < dragDistance) return
+      if (!reachesDragThreshold(event.clientX - drag.startX, event.clientY - drag.startY, event.pointerType)) return
       drag.moved = true
       closeMenu()
       closeSelectionMenu()
@@ -403,9 +405,14 @@ export default function EditorShell(props: {
     editor.on('transaction', ({ transaction }) => {
       const current = popup()
       if (!transaction.docChanged && !transaction.selectionSet) return
-      const selected = selectionMenu()?.selection ?? selectionRects?.selection
+      const menu = selectionMenu()
+      const selection = editor.state.selection
+      const selected = menu?.selection ?? selectionRects?.selection
       const selectionInUse = menuPress.active(selectionElement) || selectionElement?.contains(document.activeElement)
-      if (transaction.docChanged || (selected && !selected.eq(editor.state.selection) && !selectionInUse)) {
+      if (transaction.docChanged && menu && transaction.getMeta(selectionToolbarFormat) && !selection.empty) {
+        selectionRects = undefined
+        setSelectionMenu({ ...menu, selection })
+      } else if (transaction.docChanged || (selected && !selected.eq(selection) && !selectionInUse)) {
         resetSelectionMenu()
       }
       if (blockDrag) endBlockDrag()
@@ -455,7 +462,7 @@ export default function EditorShell(props: {
       updateLayout()
     }
     const layout = new ResizeObserver(updateLayout)
-    layout.observe(scrollRoot)
+    layout.observe(scrollRoot, { box: 'border-box' })
     document.addEventListener('pointerdown', closeOutside, true)
     scrollRoot.addEventListener('scroll', closeOnScroll, true)
     window.addEventListener('resize', closeOnScroll)
@@ -533,20 +540,20 @@ export default function EditorShell(props: {
             style={{ left: `${target().x}px`, top: `${target().y}px`, width: `${target().width}px` }} />
         </Portal>}
       </Show>
-      <Show when={selectionMenu()} keyed>
+      <Show when={selectionMenu()}>
         {(current) => (
           <Portal>
-            <SelectionToolbar {...current} editor={handle!.editor} onClose={closeSelectionMenu}
+            <SelectionToolbar {...current()} editor={handle!.editor} onClose={closeSelectionMenu}
               ref={(element) => { selectionElement = element }}
-              onAiEdit={props.inlineAi ? () => {
-                const { from, to } = current.selection
-                return startInlineEdit({ from, to })
+              onAiEdit={props.inlineAi ? (event) => {
+                const { from, to } = current().selection
+                return startInlineEdit({ from, to }, event)
               } : undefined} />
           </Portal>
         )}
       </Show>
       <Show when={inlineEdit()} keyed>
-        {(reference) => <Portal><InlineAiEditor editor={handle!.editor} reference={reference}
+        {(edit) => <Portal><InlineAiEditor editor={handle!.editor} reference={edit.reference} openingClick={edit.openingClick}
           scrollRoot={scrollRoot} close={closeInlineEdit} /></Portal>}
       </Show>
       <Show when={popup()}>

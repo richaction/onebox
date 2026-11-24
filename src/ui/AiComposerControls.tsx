@@ -50,7 +50,7 @@ export default function AiComposerControls(props: {
   canCancelLogin: boolean
   working: boolean
   effort?: string
-  menu?: ComposerMenu
+  menu?: ComposerMenu | 'conversations'
   accountError: string
   modelError: string
   usageError: string
@@ -89,7 +89,7 @@ export default function AiComposerControls(props: {
   return (
     <div class="ai-composer-settings">
       <AiComposerMenu kind="usage" open={props.menu === 'usage'} label={usageLabel()}
-        onHover={() => open('usage')} onToggle={() => toggle('usage')} onDismiss={() => dismiss('usage')}
+        onHover={props.menu ? undefined : () => open('usage')} onToggle={() => toggle('usage')} onDismiss={() => dismiss('usage')}
         trigger={<Battery level={quota().limiting?.remaining} />}>
         <section aria-label="用量详情">
           <strong>Codex 用量</strong>

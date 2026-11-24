@@ -12,7 +12,7 @@ function AppIcon(props: { src?: string | null }) {
   return (
     <span class="file-open-with-icon" aria-hidden="true">
       <Show when={props.src} fallback={<span class="file-open-with-generic" />}>
-        {(src) => <img src={src()} alt="" />}
+        {(src) => <img src={src()} alt="" draggable={false} />}
       </Show>
     </span>
   )

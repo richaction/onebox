@@ -114,6 +114,7 @@ it('opens the in-document AI editor on first click and applies only after approv
       expect(sendButton.disabled).toBe(true)
       expect(panel.style.left).toBe('56px')
       expect(panel.style.width).toBe('708px')
+      expect(panel.style.top).toBe('86px')
       contentBounds.mockReturnValue(new DOMRect(22, 24, 276, 180))
       scrollBounds.mockReturnValue(new DOMRect(0, 0, 320, 220))
       window.dispatchEvent(new Event('resize'))
@@ -159,7 +160,7 @@ it('opens the in-document AI editor on first click and applies only after approv
       })
       try {
         scroll.dispatchEvent(new PointerEvent('pointerup', {
-          bubbles: true, pointerType: 'mouse', clientX: 45, clientY: 75, button: 0,
+          bubbles: true, pointerType: 'mouse', clientX: 87, clientY: 75, button: 0,
         }))
         await vi.waitFor(() => expect(menu()).not.toBeNull())
       } finally { restoredNative.mockRestore() }
@@ -211,7 +212,7 @@ it('keeps a block-menu item mounted and applies it to the block where the menu o
   }
 })
 
-it('opens text formatting and lets the block submenu convert a selected line', () => {
+it('keeps the toolbar after formatting so AI edit and block conversion can follow', async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   let mounted!: EditorHandle
@@ -220,9 +221,11 @@ it('opens text formatting and lets the block submenu convert a selected line', (
   }), host)
   const { view } = mounted.editor
   const focus = vi.spyOn(view, 'hasFocus').mockReturnValue(true)
+  const coords = vi.spyOn(view, 'coordsAtPos').mockImplementation((pos) =>
+    pos === 1 ? { left: 20, right: 20, top: 60, bottom: 80 } : { left: 100, right: 100, top: 104, bottom: 124 })
   const menu = () => document.querySelector<HTMLElement>('.editor-selection-menu')!
   const open = () => {
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 8)))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 8, 1)))
     const paragraph = view.dom.querySelector('p')!
     const text = paragraph.querySelector('u')?.firstChild ?? paragraph.firstChild
     const native = vi.spyOn(window, 'getSelection').mockReturnValue({ anchorNode: text, focusNode: text, rangeCount: 1, isCollapsed: false,
@@ -236,11 +239,53 @@ it('opens text formatting and lets the block submenu convert a selected line', (
     open()
     expect(menu().lastElementChild?.textContent).toContain('使用 AI 编辑')
     expect(menu().textContent).not.toMatch(/评论|技能/)
-    menu().querySelector<HTMLButtonElement>('[aria-label="下划线"]')!.click()
+    const toolbar = menu()
+    const aiButton = toolbar.querySelector<HTMLButtonElement>('.selection-toolbar-ai')!
+    vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 600))
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(80, 40, 650, 400))
+    const underline = toolbar.querySelector<HTMLButtonElement>('[aria-label="下划线"]')!
+    underline.click()
     expect(mounted.toMarkdown()).toBe('<u>example</u>')
-    expect(menu()).toBeNull()
+    expect(menu()).toBe(toolbar)
+    expect(underline.getAttribute('aria-pressed')).toBe('true')
+
+    const bold = toolbar.querySelector<HTMLButtonElement>('[aria-label="粗体"]')!
+    bold.click()
+    expect(menu()).toBe(toolbar)
+    expect(bold.getAttribute('aria-pressed')).toBe('true')
+    const italic = toolbar.querySelector<HTMLButtonElement>('[aria-label="斜体"]')!
+    for (const button of [italic, bold, italic, bold]) button.click()
+    expect(bold.getAttribute('aria-pressed')).toBe('true')
+    expect(italic.getAttribute('aria-pressed')).toBe('false')
+    expect(mounted.editor.state.selection.anchor).toBe(8)
+    expect(mounted.editor.state.selection.head).toBe(1)
+    expect(menu().querySelector('.selection-toolbar-ai')).toBe(aiButton)
+    const formatted = mounted.toMarkdown()
+    aiButton.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 110, clientY: 190 }))
+    const input = document.querySelector<HTMLTextAreaElement>('[aria-label="修改要求"]')!
+    expect(input).not.toBeNull()
+    const panel = input.closest<HTMLElement>('.editor-inline-ai')!
+    expect(panel.style.top).toBe('130px')
+    expect(panel.style.left).toBe('80px')
+    expect(panel.style.width).toBe('650px')
+    const repeat = { bubbles: true, cancelable: true, detail: 2, clientX: 113, clientY: 191 }
+    expect(host.dispatchEvent(new PointerEvent('pointerdown', repeat))).toBe(false)
+    expect(host.dispatchEvent(new MouseEvent('click', repeat))).toBe(false)
+    expect(input.isConnected).toBe(true)
+    expect(document.activeElement).toBe(input)
+    input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+    host.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    vi.spyOn(panel, 'offsetHeight', 'get').mockReturnValue(44)
+    coords.mockReturnValue({ left: 100, right: 100, top: 550, bottom: 570 })
+    window.dispatchEvent(new Event('resize'))
+    await vi.waitFor(() => expect(panel.style.top).toBe('500px'))
+    expect(input.isConnected).toBe(true)
+    expect(mounted.toMarkdown()).toBe(formatted)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 
     open()
+    menu().querySelector<HTMLButtonElement>('[aria-label="粗体"]')!.click()
+    expect(mounted.toMarkdown()).toBe('<u>example</u>')
     menu().querySelector<HTMLButtonElement>('[aria-label="转换区块"]')!.click()
     const blocks = menu().querySelector('[aria-label="区块类型"]')!
     const fold = [...blocks.querySelectorAll('button')].find((button) => button.textContent?.includes('折叠标题 2'))!
@@ -734,6 +779,14 @@ describe('createEditor', () => {
     expect(option.isConnected).toBe(true)
     option.click()
     expect(handle.toMarkdown()).toBe('```python\nexample\n```')
+    const trigger = element.querySelector<HTMLButtonElement>('.code-language')!
+    trigger.click()
+    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    document.querySelector<HTMLInputElement>('[aria-label="搜索语言"]')!.blur()
+    await Promise.resolve()
+    trigger.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    trigger.click()
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('appends viewport groups and exports the underlying Markdown blocks', () => {

@@ -4,6 +4,7 @@ import type { Node } from '@tiptap/pm/model'
 import { EditorState, NodeSelection, Plugin, TextSelection, type Selection } from '@tiptap/pm/state'
 import type { EditorProps, EditorView } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
+import { reachesDragThreshold } from './buttonClickTolerance'
 import { aiDocumentPlugin, aiInlineSourcePlugin } from './aiDocument'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
@@ -223,7 +224,7 @@ export function createEditor(opts: {
   for (const child of editor.view.dom.children) observer.observe(child)
   let listDrag: { selection: NodeSelection; y: number } | undefined
   const updateMousePress = (event: MouseEvent) => {
-    if (mousePress && (Math.abs(event.clientX - mousePress.x) > 4 || Math.abs(event.clientY - mousePress.y) > 4)) {
+    if (mousePress && reachesDragThreshold(event.clientX - mousePress.x, event.clientY - mousePress.y)) {
       mousePress.dragged = true
     }
   }
@@ -255,7 +256,7 @@ export function createEditor(opts: {
       listDrag = undefined
       return
     }
-    if (Math.abs(event.clientY - listDrag.y) < 4 && editor.state.selection === listDrag.selection) return
+    if (editor.state.selection === listDrag.selection && !reachesDragThreshold(0, event.clientY - listDrag.y)) return
     const target = blockAtGutterPoint(editor.view, event.clientY)
     if (!target) return
     const selected = ListRowsSelection.between(listDrag.selection.$from, target.$from)

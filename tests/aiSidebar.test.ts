@@ -163,10 +163,18 @@ it('opens composer menus while a document loads', () => {
     const usage = host.querySelector<HTMLButtonElement>('.ai-usage-trigger')!
     const usageMenu = usage.parentElement!
     usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))
+    expect(host.querySelector('.ai-quote-popup')).not.toBeNull()
+    host.querySelector<HTMLButtonElement>('[aria-label="添加引用"]')!.click()
+    usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))
     expect(host.querySelector('.ai-usage-popup')).not.toBeNull()
+    usageMenu.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))
+    expect(host.querySelector('.ai-usage-popup')).toBeNull()
+    usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))
     usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
     expect(host.querySelector('.ai-usage-popup')).not.toBeNull()
     usageMenu.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))
+    expect(host.querySelector('.ai-usage-popup')).not.toBeNull()
+    usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
     expect(host.querySelector('.ai-usage-popup')).toBeNull()
     usage.click()
     expect(host.querySelector('.ai-usage-popup')).not.toBeNull()

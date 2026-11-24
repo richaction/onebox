@@ -82,7 +82,7 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
     search.oninput = render
     const pointer = trackMenuPress(document, () => close())
     menu.addEventListener('focusout', () => queueMicrotask(() => {
-      if (!pointer.active(menu) && popup === menu && document.activeElement !== trigger &&
+      if (!pointer.active(menu) && !pointer.active(trigger) && popup === menu && document.activeElement !== trigger &&
         !menu.contains(document.activeElement)) close()
     }))
     menu.onkeydown = (event) => {
@@ -101,11 +101,11 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
     }
     const press = (event: PointerEvent) => {
       const path = event.composedPath()
-      pointer.start(event, path.includes(menu) ? menu : undefined)
+      pointer.start(event, path.includes(menu) ? menu : path.includes(trigger) ? trigger : undefined)
       if (!path.includes(menu) && !path.includes(trigger)) close()
     }
     const scrolled = (event: Event) => {
-      if (!pointer.active(menu) && !(event.target instanceof Node && menu.contains(event.target))) close()
+      if (!pointer.active(menu) && !pointer.active(trigger) && !(event.target instanceof Node && menu.contains(event.target))) close()
     }
     const away = () => close()
     document.addEventListener('pointerdown', press, true)

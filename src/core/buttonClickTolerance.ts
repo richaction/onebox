@@ -1,4 +1,6 @@
-export const buttonClickTolerance = 8
+export function reachesDragThreshold(dx: number, dy: number, pointerType = 'mouse') {
+  return Math.hypot(dx, dy) >= (pointerType === 'touch' ? 18 : 10)
+}
 
 export function enableButtonClickTolerance(document: Document) {
   const window = document.defaultView!
@@ -7,7 +9,7 @@ export function enableButtonClickTolerance(document: Document) {
   let canceled: Press | undefined
 
   const outsideTolerance = (event: PointerEvent, current: Press) =>
-    Math.hypot(event.clientX - current.x, event.clientY - current.y) >= buttonClickTolerance
+    reachesDragThreshold(event.clientX - current.x, event.clientY - current.y, event.pointerType)
 
   function releaseCapture() {
     const current = press

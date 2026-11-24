@@ -26,6 +26,9 @@
   outline: none;
 }
 
+/* A decorative icon must not start a native image drag before its button gets click. */
+button img:not([draggable='true']) { -webkit-user-drag: none; }
+
 :where(button, input, select, textarea, summary, a[href], [tabindex]):focus-visible {
   outline: 1px solid var(--ob-focus);
   outline-offset: 1px;
