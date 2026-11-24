@@ -1,4 +1,4 @@
-import { createEffect, createUniqueId, Show, type JSX } from 'solid-js'
+import { createUniqueId, Show, type JSX } from 'solid-js'
 
 export type ComposerMenu = 'quote' | 'usage' | 'model'
 
@@ -8,26 +8,13 @@ export default function AiComposerMenu(props: {
   open: boolean
   onToggle: () => void
   onDismiss: () => void
-  onHover?: () => void
   trigger: JSX.Element
   children: JSX.Element
 }) {
   const popupId = createUniqueId()
-  let openedByHover = false
-  createEffect(() => { if (!props.open) openedByHover = false })
 
   return (
     <div class={`ai-composer-menu ai-${props.kind}-menu`} data-ai-composer-menu={props.kind}
-      onPointerEnter={(event) => {
-        if (!props.onHover || event.pointerType !== 'mouse' || event.buttons || props.open) return
-        openedByHover = true
-        props.onHover()
-      }}
-      onPointerLeave={(event) => {
-        if (event.pointerType !== 'mouse' || !openedByHover) return
-        openedByHover = false
-        props.onDismiss()
-      }}
       onKeyDown={(event) => {
         if (event.key !== 'Tab' || !props.open) return
         const menu = event.currentTarget
@@ -38,10 +25,7 @@ export default function AiComposerMenu(props: {
       <button class={`ai-composer-trigger ai-${props.kind}-trigger`} type="button"
         aria-label={props.label} title={props.kind === 'quote' ? props.label : undefined}
         aria-expanded={props.open} aria-controls={popupId}
-        onClick={(event) => {
-          if (openedByHover && props.open && event.detail > 0) openedByHover = false
-          else props.onToggle()
-        }}>
+        onClick={props.onToggle}>
         {props.trigger}
       </button>
       <Show when={props.open}>

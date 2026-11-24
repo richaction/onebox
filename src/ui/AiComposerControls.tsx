@@ -89,7 +89,7 @@ export default function AiComposerControls(props: {
   return (
     <div class="ai-composer-settings">
       <AiComposerMenu kind="usage" open={props.menu === 'usage'} label={usageLabel()}
-        onHover={props.menu ? undefined : () => open('usage')} onToggle={() => toggle('usage')} onDismiss={() => dismiss('usage')}
+        onToggle={() => toggle('usage')} onDismiss={() => dismiss('usage')}
         trigger={<Battery level={quota().limiting?.remaining} />}>
         <section aria-label="用量详情">
           <strong>Codex 用量</strong>
