@@ -87,8 +87,11 @@ export function aiInlineSourcePlugin() {
 }
 
 export function highlightAiSource(editor: Editor, anchor: number) {
-  const { selection, tr } = editor.state
-  const cursor = Selection.findFrom(selection.$to, -1, true) ?? Selection.findFrom(selection.$to, 1, true)
+  const { doc, tr } = editor.state
+  const range = resolve(editor, anchor)
+  if (!range) return
+  const end = doc.resolve(range.to)
+  const cursor = Selection.findFrom(end, -1, true) ?? Selection.findFrom(end, 1, true)
   if (cursor) tr.setSelection(cursor)
   editor.view.dispatch(tr.setMeta(inlineSource, { owner: anchor, anchor } satisfies InlineSource).setMeta('addToHistory', false))
 }

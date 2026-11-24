@@ -48,22 +48,26 @@ export default function SelectionToolbar(props: {
   above: boolean
   width: number
   maxHeight: number
+  ref: (element: HTMLDivElement) => void
   onClose: () => void
-  onAiEdit?: () => void
+  onAiEdit?: () => boolean
 }) {
   const [panel, setPanel] = createSignal<Panel>('main')
   const [linkError, setLinkError] = createSignal(false)
   const [copyError, setCopyError] = createSignal(false)
+  const [aiError, setAiError] = createSignal(false)
   const editor = props.editor
   const textSelection = asText(props.selection)
   const canMark = !!textSelection && !textSelection.empty && !editor.isActive('codeBlock')
   const latex = canMark && textSelection.$from.sameParent(textSelection.$to)
     ? editor.state.doc.textBetween(textSelection.from, textSelection.to).trim() : ''
   const activeBlock = blockTypes.find(({ active }) => active(editor))
+  const inQuote = editor.isActive('blockquote')
+  const listType = editor.isActive('orderedList') ? 'orderedList' : editor.isActive('bulletList') ? 'bulletList' : undefined
   const quoteVariant = editor.getAttributes('blockquote').variant
   const typeLabel = quoteVariant === 'note' ? '标注' : quoteVariant === 'fold'
     ? (activeBlock?.icon.startsWith('H') ? `折叠${activeBlock.label}` : '折叠区块') : activeBlock?.label
-  const valid = () => editor.isEditable && editor.state.selection.eq(props.selection)
+  const valid = () => editor.isEditable && editor.state.doc === props.selection.$from.doc
 
   const run = (action: Action) => {
     if (!valid() || !textSelection) return false
@@ -81,7 +85,7 @@ export default function SelectionToolbar(props: {
     run((chain) => chain.insertContent(display ? { type: 'paragraph', content: [formula] } : formula))
   }
 
-  const quote = (chain: ChainedCommands, variant: 'note' | 'fold' | null) => editor.isActive('blockquote')
+  const quote = (chain: ChainedCommands, variant: 'note' | 'fold' | null) => inQuote
     ? chain.updateAttributes('blockquote', { variant }) : chain.wrapIn('blockquote', { variant })
 
   const copy = async () => {
@@ -97,7 +101,7 @@ export default function SelectionToolbar(props: {
       aria-pressed={pressed} data-action={label} disabled={disabled} onClick={activate}>{symbol}</button>
   )
 
-  return <div class="editor-selection-menu" role="group" aria-label="选区操作"
+  return <div class="editor-selection-menu" role="group" aria-label="选区操作" ref={props.ref}
     style={{ left: `${props.x}px`, width: `${props.width}px`, 'max-height': `${props.maxHeight}px`,
       top: props.above ? undefined : `${props.y}px`, bottom: props.above ? `${window.innerHeight - props.y}px` : undefined }}
     onMouseDown={(event) => {
@@ -116,7 +120,7 @@ export default function SelectionToolbar(props: {
         editor.view.focus()
       }}><span aria-hidden="true">‹</span><strong>{panel() === 'blocks' ? '转换区块' : panel() === 'link' ? '链接' : '更多操作'}</strong></button>
     </Show>
-    <Switch>
+    <div class="selection-toolbar-content"><Switch>
       <Match when={panel() === 'main'}>
         <button type="button" class="selection-toolbar-row" aria-label="转换区块" aria-expanded="false"
           disabled={!textSelection} onClick={() => setPanel('blocks')}>
@@ -142,7 +146,7 @@ export default function SelectionToolbar(props: {
               else if (item.icon === '❝') run((chain) => quote(chain, null))
               else if (item.icon === '☷' || item.icon === '≡') {
                 const type = item.icon === '☷' ? 'bulletList' : 'orderedList'
-                run((chain) => (editor.isActive(type) ? chain : item.run(chain)).updateAttributes('listItem', { checked: null }))
+                run((chain) => (listType === type ? chain : item.run(chain)).updateAttributes('listItem', { checked: null }))
               }
               else run(item.run)
             }}><span aria-hidden="true">{item.icon}</span>{item.label}<Show when={item === activeBlock}><i aria-hidden="true">✓</i></Show></button>
@@ -183,10 +187,11 @@ export default function SelectionToolbar(props: {
         <button type="button" class="selection-toolbar-row" onClick={() => void copy()}><span aria-hidden="true">⧉</span>复制为 Markdown</button>
         <Show when={copyError()}><p class="selection-toolbar-error" role="alert">复制失败</p></Show>
       </Match>
-    </Switch>
+    </Switch></div>
     <Show when={props.onAiEdit}>
+      <Show when={aiError()}><p class="selection-toolbar-error" role="status">该选区没有可供 AI 编辑的内容</p></Show>
       <button type="button" class="selection-toolbar-row selection-toolbar-ai" onClick={() => {
-        if (valid()) props.onAiEdit?.()
+        if (valid() && props.onAiEdit?.() === false) setAiError(true)
       }}><span aria-hidden="true">✨</span>使用 AI 编辑</button>
     </Show>
   </div>

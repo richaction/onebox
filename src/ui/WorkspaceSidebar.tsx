@@ -1,6 +1,7 @@
 import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { NameField, onInlineNameBlur } from './FileName'
 import { createStore, reconcile } from 'solid-js/store'
+import { trackMenuPress } from '../core/menuPress'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
 
 interface Directory {
@@ -79,27 +80,20 @@ function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; clos
     menu.style.left = `${Math.max(8, Math.min(props.at.x, window.innerWidth - bounds.width - 8))}px`
     menu.style.top = `${Math.max(8, Math.min(props.at.y, window.innerHeight - bounds.height - 8))}px`
     buttons()[0]?.focus({ preventScroll: true })
-    let pointer: number | undefined
+    const pointer = trackMenuPress(menu.ownerDocument, () => props.close(false))
     const outside = (event: PointerEvent) => {
-      if (!event.composedPath().includes(menu)) props.close(false)
-      else if (event.button === 0) pointer = event.pointerId
-    }
-    const release = (event: PointerEvent) => {
-      if (event.pointerId !== pointer) return
-      pointer = undefined
-      if (event.type === 'pointercancel' || !event.composedPath().includes(menu)) props.close(false)
+      const inside = event.composedPath().includes(menu)
+      pointer.start(event, inside ? menu : undefined)
+      if (!inside) props.close(false)
     }
     const away = () => props.close(false)
-    const resize = () => { if (pointer === undefined) away() }
-    document.addEventListener('pointerdown', outside)
-    document.addEventListener('pointerup', release, true)
-    document.addEventListener('pointercancel', release, true)
+    const resize = () => { if (!pointer.active(menu)) away() }
+    document.addEventListener('pointerdown', outside, true)
     window.addEventListener('resize', resize)
     window.addEventListener('blur', away)
     onCleanup(() => {
-      document.removeEventListener('pointerdown', outside)
-      document.removeEventListener('pointerup', release, true)
-      document.removeEventListener('pointercancel', release, true)
+      document.removeEventListener('pointerdown', outside, true)
+      pointer.destroy()
       window.removeEventListener('resize', resize)
       window.removeEventListener('blur', away)
     })

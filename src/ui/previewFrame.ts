@@ -1,7 +1,11 @@
 import type { ViewerController, ViewerOptions, mountViewer } from '@file-viewer/web-full'
+import { enableButtonClickTolerance } from '../core/buttonClickTolerance'
 import { customizeArchivePreview } from './archivePreview'
 import { createImageZoom, imageFit, isImagePreview, type ImagePreviewState } from './previewImage'
 import './previewFrame.css'
+
+const disableButtonClickTolerance = enableButtonClickTolerance(document)
+import.meta.hot?.dispose(disableButtonClickTolerance)
 
 const runtime = (window as Window & {
   FlyfishFileViewerWebFull?: { mountViewer: typeof mountViewer }

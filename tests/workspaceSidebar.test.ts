@@ -2,7 +2,36 @@ import { createComponent, createSignal } from 'solid-js'
 import { render } from 'solid-js/web'
 import { expect, it, vi } from 'vitest'
 import WorkspaceSidebar, { type WorkspaceSelection } from '../src/ui/WorkspaceSidebar'
+import FileName from '../src/ui/FileName'
 import { desktopWorkspace } from '../src/io/tauri'
+
+it('saves the document title after a click moves focus to another control', async () => {
+  const host = document.createElement('div')
+  const target = document.createElement('button')
+  document.body.append(host, target)
+  const save = vi.fn()
+  const dismiss = render(() => createComponent(FileName, {
+    name: 'note.md',
+    edit: { stem: 'renamed', onInput: () => {}, onPause: () => {}, onSave: save, onCancel: () => {} },
+  }), host)
+  try {
+    const click = vi.fn(() => expect(save).not.toHaveBeenCalled())
+    target.addEventListener('click', click)
+    host.querySelector('input')!.focus()
+    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    target.focus()
+    target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(save).not.toHaveBeenCalled()
+    target.click()
+    expect(click).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce())
+  } finally {
+    dismiss()
+    host.remove()
+    target.remove()
+  }
+})
 
 it('keeps the sidebar steady on open and remembers contextual placement after remount', async () => {
   const root = '/pin-test'
@@ -238,7 +267,12 @@ it('uses the same menu for right click and overflow, with inline creation and co
     await vi.waitFor(() => expect(row.classList.contains('workspace-row-cut')).toBe(false))
     clipboard.mockRestore()
     more.click()
-    menuItems().find((button) => button.textContent === '重命名…')!.click()
+    const rename = menuItems().find((button) => button.textContent === '重命名…')!
+    rename.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    rename.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    window.dispatchEvent(new Event('resize'))
+    expect(rename.isConnected).toBe(true)
+    rename.click()
     const name = host.querySelector<HTMLInputElement>('.filename-field input')!
     expect(name.value).toBe('note')
     expect(name.closest('.filename-field')?.querySelector('.filename-field-suffix')?.textContent).toBe('.md')

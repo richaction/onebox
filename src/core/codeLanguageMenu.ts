@@ -1,3 +1,5 @@
+import { trackMenuPress } from './menuPress'
+
 type Language = { id: string; label: string }
 
 export function codeLanguageMenu(document: Document, languages: readonly Language[], current: Language,
@@ -78,9 +80,9 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
       }
     }
     search.oninput = render
-    let pressedPointer: number | undefined
+    const pointer = trackMenuPress(document, () => close())
     menu.addEventListener('focusout', () => queueMicrotask(() => {
-      if (pressedPointer === undefined && popup === menu && document.activeElement !== trigger &&
+      if (!pointer.active(menu) && popup === menu && document.activeElement !== trigger &&
         !menu.contains(document.activeElement)) close()
     }))
     menu.onkeydown = (event) => {
@@ -99,27 +101,21 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
     }
     const press = (event: PointerEvent) => {
       const path = event.composedPath()
-      if (path.includes(menu)) {
-        if (event.button === 0) pressedPointer = event.pointerId
-      } else if (!path.includes(trigger)) close()
-    }
-    const release = (event: PointerEvent) => {
-      if (pressedPointer !== event.pointerId) return
-      pressedPointer = undefined
-      if (event.type === 'pointercancel' || !event.composedPath().includes(menu)) close()
+      pointer.start(event, path.includes(menu) ? menu : undefined)
+      if (!path.includes(menu) && !path.includes(trigger)) close()
     }
     const scrolled = (event: Event) => {
-      if (pressedPointer === undefined && !(event.target instanceof Node && menu.contains(event.target))) close()
+      if (!pointer.active(menu) && !(event.target instanceof Node && menu.contains(event.target))) close()
     }
+    const away = () => close()
     document.addEventListener('pointerdown', press, true)
-    document.addEventListener('pointerup', release, true)
-    document.addEventListener('pointercancel', release, true)
     document.addEventListener('scroll', scrolled, true)
+    document.defaultView?.addEventListener('blur', away)
     closeListeners = () => {
       document.removeEventListener('pointerdown', press, true)
-      document.removeEventListener('pointerup', release, true)
-      document.removeEventListener('pointercancel', release, true)
       document.removeEventListener('scroll', scrolled, true)
+      document.defaultView?.removeEventListener('blur', away)
+      pointer.destroy()
     }
     popup = menu
     trigger.setAttribute('aria-expanded', 'true')

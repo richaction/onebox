@@ -10,34 +10,52 @@ export function onInlineNameBlur(input: HTMLInputElement, commit: () => void) {
   const doc = input.ownerDocument
   const window = doc.defaultView!
   let pointer: number | undefined
+  let released = false
   let pending = false
+  let releaseTimer: number | undefined
   let timer: number | undefined
   const press = (event: PointerEvent) => {
-    if (event.button === 0 && doc.activeElement === input && event.target !== input) pointer = event.pointerId
+    if (event.button !== 0 || doc.activeElement !== input || event.target === input) return
+    window.clearTimeout(releaseTimer)
+    pointer = event.pointerId
+    released = false
   }
   const finish = () => {
+    window.clearTimeout(releaseTimer)
     pointer = undefined
+    released = false
     if (!pending) return
     pending = false
     // A blur during mousedown must not move the row under the next mouseup and click.
+    window.clearTimeout(timer)
     timer = window.setTimeout(() => { if (doc.activeElement !== input) commit() }, 0)
   }
-  const release = (event: PointerEvent) => { if (event.pointerId === pointer) finish() }
+  const release = (event: PointerEvent) => {
+    if (pointer === undefined || event.pointerId !== pointer || released) return
+    if (event.type === 'pointercancel') { finish(); return }
+    released = true
+    releaseTimer = window.setTimeout(finish, 400)
+  }
+  const click = () => { if (released) finish() }
   const blur = () => {
-    if (pointer === undefined) commit()
-    else pending = true
+    if (pointer !== undefined) { pending = true; return }
+    window.clearTimeout(timer)
+    commit()
   }
   input.addEventListener('blur', blur)
   doc.addEventListener('pointerdown', press, true)
   doc.addEventListener('pointerup', release, true)
   doc.addEventListener('pointercancel', release, true)
+  doc.addEventListener('click', click, true)
   window.addEventListener('blur', finish)
   onCleanup(() => {
+    window.clearTimeout(releaseTimer)
     window.clearTimeout(timer)
     input.removeEventListener('blur', blur)
     doc.removeEventListener('pointerdown', press, true)
     doc.removeEventListener('pointerup', release, true)
     doc.removeEventListener('pointercancel', release, true)
+    doc.removeEventListener('click', click, true)
     window.removeEventListener('blur', finish)
   })
 }
@@ -126,12 +144,12 @@ export default function FileName(props: { name: string; edit?: TitleEdit }) {
         <label class="filename-inline" title={props.name}>
           <span class="filename-inline-stem">
             <span aria-hidden="true">{stem() || ' '}</span>
-            <input value={stem()} type="text" autocomplete="off" spellcheck={false}
+            <input ref={(input) => onInlineNameBlur(input, () => props.edit?.onSave())}
+              value={stem()} type="text" autocomplete="off" spellcheck={false}
               aria-label="文件名" aria-invalid={!!props.edit?.error}
               onCompositionStart={() => props.edit?.onPause()}
               onCompositionEnd={(event) => props.edit?.onInput(event.currentTarget.value)}
               onInput={(event) => { if (!event.isComposing) props.edit?.onInput(event.currentTarget.value) }}
-              onBlur={() => props.edit?.onSave()}
               onKeyDown={(event) => {
                 if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
                 event.preventDefault()

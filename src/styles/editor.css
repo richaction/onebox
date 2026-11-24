@@ -1274,12 +1274,11 @@ body {
   position: fixed;
   z-index: 800;
   box-sizing: border-box;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 3px;
   padding: 4px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
+  overflow: hidden;
   border: 1px solid var(--ob-border);
   border-radius: 9px;
   background: var(--ob-bg-overlay);
@@ -1287,6 +1286,16 @@ body {
   font: 13px/1.35 var(--ob-font-sans);
   user-select: none;
   box-shadow: var(--ob-shadow-menu);
+}
+
+.selection-toolbar-content {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .editor-selection-menu button {
@@ -1313,6 +1322,7 @@ body {
   padding: 3px 6px;
   text-align: start;
 }
+.editor-selection-menu > .selection-toolbar-row { flex: none; }
 .selection-toolbar-row > span { flex: 0 0 19px; text-align: center; }
 .selection-toolbar-row > i { margin-inline-start: auto; color: var(--ob-text-secondary); font-style: normal; }
 .selection-toolbar-marks {
@@ -1328,10 +1338,8 @@ body {
 .selection-toolbar-icon[data-action='下划线'] { text-decoration: underline; text-underline-offset: 2px; }
 .selection-toolbar-icon[data-action='删除线'] { text-decoration: line-through; }
 .selection-toolbar-icon[data-action='行内代码'] { font: 13px var(--ob-font-mono); }
-.selection-toolbar-options { display: grid; gap: 1px; min-height: 0; overflow: auto; scrollbar-width: thin; }
+.selection-toolbar-options { display: grid; gap: 1px; }
 .editor-selection-menu .selection-toolbar-ai {
-  position: sticky;
-  inset-block-end: 0;
   border-block-start: 1px solid var(--ob-border);
   border-start-start-radius: 0;
   border-start-end-radius: 0;
@@ -2114,7 +2122,7 @@ img.ProseMirror-selectednode {
 
 .block-menu-popup {
   position: fixed;
-  z-index: 5;
+  z-index: 800;
 }
 
 .block-menu,

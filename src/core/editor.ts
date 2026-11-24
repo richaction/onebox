@@ -237,7 +237,9 @@ export function createEditor(opts: {
   }
   const focusGutter = (event: MouseEvent) => {
     resetMousePress()
-    if (event.button === 0) {
+    const target = event.target as Element | null
+    // Task toggles use the native button click. Text and gutter presses still track drag selection.
+    if (event.button === 0 && !target?.closest?.('[data-task-toggle]')) {
       mousePress = { x: event.clientX, y: event.clientY, selection: editor.state.selection, dragged: false }
     }
     placeCaretInGutter(editor.view, event, opts.scrollRoot)

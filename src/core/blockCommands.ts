@@ -1,4 +1,4 @@
-import { Extension, InputRule, type ChainedCommands } from '@tiptap/core'
+import { Extension, InputRule, isNodeActive, type ChainedCommands } from '@tiptap/core'
 import { NodeSelection, type EditorState, type Selection } from '@tiptap/pm/state'
 import { canJoin } from '@tiptap/pm/transform'
 import { chartTemplates } from './chartTemplates'
@@ -43,8 +43,8 @@ export const blockCommands: readonly CommandItem[] = [
   {
     label: '任务列表', search: 'todo task checklist 待办 [] [ ]', icon: '☑', shortcut: '- [ ]',
     preview: { kind: 'task', caption: '列出可勾选的待办事项' },
-    run: (chain) => chain.command(({ editor, commands }) =>
-      (editor.isActive('listItem') || commands.toggleBulletList()) &&
+    run: (chain) => chain.command(({ state, commands }) =>
+      (isNodeActive(state, 'listItem') || commands.toggleBulletList()) &&
       commands.updateAttributes('listItem', { checked: false }),
     ),
   },

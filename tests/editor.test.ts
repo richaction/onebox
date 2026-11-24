@@ -89,6 +89,10 @@ it('opens the in-document AI editor on first click and applies only after approv
         scroll.dispatchEvent(new Event('scroll'))
         expect(aiButton()).toBe(button)
         button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+        // A layout event and a native caret update can follow pointerup before click.
+        scroll.dispatchEvent(new Event('scroll'))
+        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 12)))
+        expect(button.isConnected).toBe(true)
         button.click()
         await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('修改要求'))
         expect(retryFocus.mock.calls.length).toBeGreaterThan(1)
@@ -97,6 +101,7 @@ it('opens the in-document AI editor on first click and applies only after approv
       const panel = input.closest<HTMLElement>('.editor-inline-ai')!
       expect(input).not.toBeNull()
       expect(document.activeElement).toBe(input)
+      expect(view.state.selection.from).toBe(7)
       input.blur()
       panel.querySelector('.editor-inline-ai-spark')!.dispatchEvent(new PointerEvent('pointerdown', {
         bubbles: true, cancelable: true, button: 0,
@@ -177,12 +182,12 @@ it('opens the in-document AI editor on first click and applies only after approv
   }
 })
 
-it('keeps a pressed block-menu item mounted until the click after a scroll', () => {
+it('keeps a block-menu item mounted and applies it to the block where the menu opened', () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   let mounted!: EditorHandle
   const dispose = render(() => createComponent(EditorShell, {
-    markdown: 'paragraph', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
+    markdown: 'paragraph\n\nsecond', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
   }), host)
   try {
     const { view } = mounted.editor
@@ -191,11 +196,15 @@ it('keeps a pressed block-menu item mounted until the click after a scroll', () 
     const item = [...document.querySelectorAll<HTMLButtonElement>('.block-menu-item')]
       .find((button) => button.textContent?.includes('一级标题'))!
     item.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
-    host.querySelector('.editor-scroll')!.dispatchEvent(new Event('scroll'))
+    const scroll = host.querySelector('.editor-scroll')!
+    scroll.dispatchEvent(new Event('scroll'))
     expect(item.isConnected).toBe(true)
     item.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    scroll.dispatchEvent(new Event('scroll'))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.doc.firstChild!.nodeSize + 1)))
+    expect(item.isConnected).toBe(true)
     item.click()
-    expect(mounted.toMarkdown()).toBe('# paragraph')
+    expect(mounted.toMarkdown()).toBe('# paragraph\n\nsecond')
   } finally {
     dispose()
     host.remove()
@@ -289,6 +298,11 @@ it.each([
     expect(document.querySelector('.editor-block-drop')).toBeNull()
     expect(mounted.toMarkdown()).toBe(original)
     pointer('pointerdown', 35)
+    pointer('pointermove', 41)
+    pointer('pointerup', 41)
+    grip.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    expect(document.querySelector('.block-menu-popup')).not.toBeNull()
+    pointer('pointerdown', 35)
     pointer('pointermove', 160)
     pointer('pointerup', 160)
     expect(mounted.toMarkdown()).toBe(`second\n\nthird\n\n${original.split('\n\n')[0]}`)
@@ -357,6 +371,17 @@ describe('createEditor', () => {
     expect(selection.from).toBe(targetPos)
     expect(selection.node.textContent).toBe('second')
     expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('accepts a click with slight movement inside a task checkbox', () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('- [ ] first')
+    const button = element.querySelector<HTMLButtonElement>('[data-task-toggle]')!
+    button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 40 }))
+    button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 46, buttons: 1 }))
+    button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 46 }))
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 46, detail: 1 }))
+    expect(element.querySelector('[data-task-toggle]')?.getAttribute('aria-checked')).toBe('true')
   })
 
   it('selects whole rows from a left-gutter drag and clears the selection on one click in the text', () => {
@@ -705,6 +730,8 @@ describe('createEditor', () => {
     scrollRoot!.dispatchEvent(new Event('scroll'))
     expect(option.isConnected).toBe(true)
     option.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+    scrollRoot!.dispatchEvent(new Event('scroll'))
+    expect(option.isConnected).toBe(true)
     option.click()
     expect(handle.toMarkdown()).toBe('```python\nexample\n```')
   })
