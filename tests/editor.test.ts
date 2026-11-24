@@ -4,6 +4,7 @@ import { render } from 'solid-js/web'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blockEditCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
 import { createEditor, type EditorHandle } from '../src/core/editor'
+import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
 import { visibilityKey } from '../src/core/viewport/visibility'
 import EditorShell from '../src/ui/EditorShell'
 import { ai, type AiEvent } from '../src/io/ai'
@@ -220,6 +221,7 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
     markdown: 'example', onReady: (value) => { mounted = value }, onUpdate: vi.fn(), inlineAi: true,
   }), host)
   const { view } = mounted.editor
+  const stopMouse = enableButtonClickTolerance(document)
   const focus = vi.spyOn(view, 'hasFocus').mockReturnValue(true)
   const coords = vi.spyOn(view, 'coordsAtPos').mockImplementation((pos) =>
     pos === 1 ? { left: 20, right: 20, top: 60, bottom: 80 } : { left: 100, right: 100, top: 104, bottom: 124 })
@@ -260,8 +262,20 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
     expect(mounted.editor.state.selection.anchor).toBe(8)
     expect(mounted.editor.state.selection.head).toBe(1)
     expect(menu().querySelector('.selection-toolbar-ai')).toBe(aiButton)
+    const mouse = (button: HTMLButtonElement, type: string, x: number, y: number) =>
+      button.dispatchEvent(new PointerEvent(type, { bubbles: true, isPrimary: true, pointerId: 1,
+        pointerType: 'mouse', button: 0, clientX: x, clientY: y }))
+    mouse(italic, 'pointerdown', 70, 90)
+    mouse(italic, 'pointerup', 74, 93)
+    expect(italic.getAttribute('aria-pressed')).toBe('true')
+    expect(view.dom.querySelector('em')?.textContent).toBe('example')
     const formatted = mounted.toMarkdown()
-    aiButton.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 110, clientY: 190 }))
+    mouse(aiButton, 'pointerdown', 107, 187)
+    italic.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 74, clientY: 93 }))
+    expect(mounted.toMarkdown()).toBe(formatted)
+    mouse(aiButton, 'pointerup', 110, 190)
+    // WebKit may target the editor once the original AI button has disappeared.
+    host.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 110, clientY: 190 }))
     const input = document.querySelector<HTMLTextAreaElement>('[aria-label="修改要求"]')!
     expect(input).not.toBeNull()
     const panel = input.closest<HTMLElement>('.editor-inline-ai')!
@@ -284,6 +298,7 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 
     open()
+    menu().querySelector<HTMLButtonElement>('[aria-label="斜体"]')!.click()
     menu().querySelector<HTMLButtonElement>('[aria-label="粗体"]')!.click()
     expect(mounted.toMarkdown()).toBe('<u>example</u>')
     menu().querySelector<HTMLButtonElement>('[aria-label="转换区块"]')!.click()
@@ -300,6 +315,7 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
     expect(folded.hasAttribute('data-folded')).toBe(true)
     expect(mounted.toMarkdown()).toContain('## <u>example</u>')
   } finally {
+    stopMouse()
     focus.mockRestore()
     dispose()
     host.remove()

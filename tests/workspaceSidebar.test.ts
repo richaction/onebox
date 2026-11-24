@@ -262,6 +262,13 @@ it('uses the same menu for right click and overflow, with inline creation and co
     expect(onOpen).toHaveBeenCalledTimes(2)
     expect(host.querySelector('.filename-field input')).toBeNull()
 
+    // Native click counts can keep increasing while crossing the boundary in both directions.
+    for (const [index, path] of [entry.path, folder.path, entry.path, folder.path].entries()) {
+      rowButton(path).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: index + 1 }))
+    }
+    expect(onOpen).toHaveBeenCalledTimes(4)
+    expect(rowButton(folder.path).getAttribute('aria-expanded')).toBe('false')
+
     more.click()
     more.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1 }))
     window.dispatchEvent(new Event('resize'))

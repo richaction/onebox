@@ -190,7 +190,7 @@ export default function WorkspaceSidebar(props: {
   let tree!: HTMLElement
   let selectionAnchor: string | undefined
   let controlClick: string | undefined
-  let firstClickedPath: string | undefined
+  let lastRowClick: { button: HTMLButtonElement; count: number; repeat: boolean } | undefined
   let systemCopy = Promise.resolve()
   let systemClipboardChangeCount: number | undefined
   let clipboardHintTimer: ReturnType<typeof setTimeout> | undefined
@@ -928,12 +928,15 @@ export default function WorkspaceSidebar(props: {
                   aria-pressed={entry.directory ? undefined : selection().has(entry.path)}
                   aria-busy={props.pending === entry.path || undefined}
                   onClick={(event) => {
-                    // AppKit may continue a multi-click sequence across adjacent rows.
-                    if (event.detail === 1) firstClickedPath = entry.path
-                    if ((event.detail > 1 && firstClickedPath === entry.path) || (event.ctrlKey && controlClick === entry.path)) return
                     const modified = event.shiftKey || event.metaKey || event.ctrlKey
+                    // AppKit can count A, B, A as clicks 1, 2, 3 across a row boundary.
+                    const button = event.currentTarget
+                    const repeat = event.detail > 1 && lastRowClick?.button === button &&
+                      lastRowClick.count + 1 === event.detail
+                    lastRowClick = !modified && event.detail > 0 ? { button, count: event.detail, repeat } : undefined
+                    if ((!modified && repeat) || (event.ctrlKey && controlClick === entry.path)) return
                     if (entry.directory && modified) return
-                    event.currentTarget.focus({ preventScroll: true })
+                    button.focus({ preventScroll: true })
                     if (entry.directory) {
                       toggle(entry.path)
                     } else {
@@ -942,7 +945,7 @@ export default function WorkspaceSidebar(props: {
                     }
                   }}
                   onDblClick={(event) => {
-                    if (firstClickedPath === entry.path && !event.shiftKey && !event.metaKey && !event.ctrlKey) setRenaming(entry.path)
+                    if (lastRowClick?.button === event.currentTarget && lastRowClick.repeat) setRenaming(entry.path)
                   }}
                 >
                   <EntryIcons entry={entry} />

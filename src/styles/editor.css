@@ -358,6 +358,12 @@ body {
   background: transparent;
 }
 
+/* The row paints the rounded highlight. Its two controls cover every point in the row. */
+.workspace .workspace-row > button {
+  align-self: stretch;
+  border-radius: 0;
+}
+
 .workspace .workspace-row-button,
 .workspace .workspace-row-rename {
   display: flex;

@@ -55,3 +55,22 @@ it('blocks a captured release beyond the tolerance when the final movement has n
     } finally { hit.mockRestore() }
   })
 })
+
+it('activates a selection command on mouse release and consumes its later native click', () => {
+  withButton(({ button, pointer }) => {
+    button.dataset.activateOnRelease = ''
+    const activate = vi.fn()
+    button.addEventListener('click', activate)
+    pointer('pointerdown', 20)
+    pointer('pointerup', 26)
+    expect(activate).toHaveBeenCalledOnce()
+    expect(activate.mock.calls[0][0]).toMatchObject({ clientX: 26, detail: 1 })
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 26 }))
+    expect(activate).toHaveBeenCalledOnce()
+    button.click()
+    expect(activate).toHaveBeenCalledTimes(2)
+    pointer('pointerdown', 20)
+    pointer('pointercancel', 22)
+    expect(activate).toHaveBeenCalledTimes(2)
+  })
+})

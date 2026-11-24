@@ -110,7 +110,7 @@ export default function SelectionToolbar(props: {
   const iconButton = (label: string, symbol: string, activate: () => void, disabled?: () => boolean, mark?: string) => (
     <button type="button" class="selection-toolbar-icon" title={label} aria-label={label}
       aria-pressed={mark ? !!textSelection() && editor.isActive(mark) : undefined}
-      data-action={label} disabled={disabled?.()} onClick={activate}>{symbol}</button>
+      data-activate-on-release={mark ? '' : undefined} data-action={label} disabled={disabled?.()} onClick={activate}>{symbol}</button>
   )
 
   return <div class="editor-selection-menu" role="group" aria-label="选区操作" ref={props.ref}
@@ -202,7 +202,7 @@ export default function SelectionToolbar(props: {
     </Switch></div>
     <Show when={props.onAiEdit}>
       <Show when={aiError()}><p class="selection-toolbar-error" role="status">该选区没有可供 AI 编辑的内容</p></Show>
-      <button type="button" class="selection-toolbar-row selection-toolbar-ai" onClick={(event) => {
+      <button type="button" class="selection-toolbar-row selection-toolbar-ai" data-activate-on-release="" onClick={(event) => {
         if (!valid() || !props.onAiEdit?.(event)) setAiError(true)
       }}><span aria-hidden="true">✨</span>使用 AI 编辑</button>
     </Show>
