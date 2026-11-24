@@ -85,7 +85,8 @@ export function blockRangeSelectionPlugin() {
         const blocks: Decoration[] = []
         doc.nodesBetween(selection.from, selection.to, (node, pos) => {
           if (isGroup(node)) return true
-          blocks.push(Decoration.node(pos, pos + node.nodeSize, { 'data-block-range-selected': '' }))
+          const edge = pos === selection.first.pos ? 'start' : pos === selection.last.pos ? 'end' : 'middle'
+          blocks.push(Decoration.node(pos, pos + node.nodeSize, { 'data-block-range-selected': edge }))
           return false
         })
         const decorations = DecorationSet.create(doc, blocks)

@@ -160,9 +160,12 @@ export function listSelectionPlugin(scrollRoot: HTMLElement) {
         const parent = selection.first.parent
         const decorations: Decoration[] = []
         let pos = selection.from
-        for (let i = selection.first.index(); i <= selection.last.index(); i++) {
+        const first = selection.first.index()
+        const last = selection.last.index()
+        for (let i = first; i <= last; i++) {
           const end = pos + parent.child(i).nodeSize
-          decorations.push(Decoration.node(pos, end, { 'data-list-row-selected': '' }))
+          const edge = first === last ? 'single' : i === first ? 'start' : i === last ? 'end' : 'middle'
+          decorations.push(Decoration.node(pos, end, { 'data-list-row-selected': edge }))
           pos = end
         }
         return { rows: DecorationSet.create(doc, decorations), textOnly: false }

@@ -489,6 +489,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn full_format_sample_opens_as_editable_markdown() {
+        let source = include_str!("../../examples/manual-testing/01 编辑器/全格式验收.md");
+        let (blocks, readonly) = parse_document(source);
+        assert!(!readonly);
+        assert_eq!(blocks[0].kind, "heading");
+        for kind in ["table", "codeBlock", "footnoteDefinition"] {
+            assert!(blocks.iter().any(|block| block.kind == kind), "{kind}");
+        }
+        assert!(blocks.iter().any(|block| block
+            .content
+            .iter()
+            .any(|node| node.kind == "math" && node.attrs["display"] == true)));
+    }
+
+    #[test]
     fn parses_relative_references_and_gfm_from_the_same_context() {
         let source = "![A *caption*][photo]\n\n- [x] done\n  - child\n\n| A | B |\n| :--- | ---: |\n| a | b |\n\nText[^note].\n\n[^note]: body\n\n[photo]: assets/photo.png";
         let (blocks, readonly) = parse_document(source);

@@ -6,7 +6,7 @@ import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMo
 import { Portal } from 'solid-js/web'
 import { captureAiReference, highlightAiSource, type AiReference } from '../core/aiDocument'
 import {
-  blockCommands, blockEditCommands, insertCommands, selectedBlock, slashTrigger, tableCommands,
+  blockCommands, insertCommands, slashTrigger, tableCommands,
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
 import { blockDropTarget, moveBlock } from '../core/blockMove'
@@ -16,7 +16,7 @@ import { listTextSelectionRects } from '../core/listSelection'
 import { trackMenuPress } from '../core/menuPress'
 import BlockMenu from './BlockMenu'
 import InlineAiEditor from './InlineAiEditor'
-import SelectionToolbar, { selectionToolbarFormat, selectionToolbarHeight, selectionToolbarWidth } from './SelectionToolbar'
+import SelectionToolbar, { inlineFormatMarks, selectionToolbarFormat, selectionToolbarHeight, selectionToolbarWidth } from './SelectionToolbar'
 
 export type AttachmentKind = 'image' | 'file'
 
@@ -26,16 +26,21 @@ interface Popup {
   above: number
   trigger?: NonNullable<ReturnType<typeof slashTrigger>>
   inTable: boolean
-  canEditBlock?: boolean
   quoteRange?: Range
   selection: Selection
 }
 
 type GripDrag = { pointer: number; selection: NodeSelection; startX: number; startY: number; moved: boolean }
 
-type Action = CommandItem | (MenuItem & { attachment: AttachmentKind }) | (MenuItem & { quote: true })
+type Action = CommandItem | (MenuItem & { attachment: AttachmentKind }) | (MenuItem & { ai: 'quote' | 'edit' }) |
+  (MenuItem & { mark: string })
 
-const quoteAction: Action = { label: '引用到 AI', search: 'AI 引用', icon: '✦', quote: true }
+const quoteAction: Action = { label: '引用到侧栏', search: 'AI 引用 侧栏', icon: '✦', ai: 'quote' }
+const editAction: Action = { label: '正文编辑', search: 'AI 编辑 正文', icon: '✎', ai: 'edit' }
+const formatActions: readonly Action[] = inlineFormatMarks.map(({ name, symbol, mark }) =>
+  ({ label: name, search: name, icon: symbol, mark }))
+const typedSlash = 'onebox-typed-slash'
+const contextMenuFormat = 'onebox:context-menu-format'
 
 const attachmentItems: readonly Action[] = [
   {
@@ -57,6 +62,7 @@ export default function EditorShell(props: {
   onInsertFiles?: (files: File[]) => void
   onQuoteSelection?: (range?: Range) => void
   inlineAi?: boolean
+  showSelectionToolbar?: boolean
   readImage?: (href: string) => Promise<Blob | undefined>
   imageContext?: () => string | null
   openResource?: (href: string) => void
@@ -66,7 +72,6 @@ export default function EditorShell(props: {
   let popupElement: HTMLDivElement | undefined
   let selectionElement: HTMLDivElement | undefined
   let handle: EditorHandle | undefined
-  let dismissedSlash: number | undefined
   let selectionRects: { selection: Selection; rects: DOMRect[] } | undefined
   let selectionFrame = 0
   let menuPress: ReturnType<typeof trackMenuPress>
@@ -84,30 +89,43 @@ export default function EditorShell(props: {
   const [highlighted, setHighlighted] = createSignal(0)
   const [keyboardHighlight, setKeyboardHighlight] = createSignal(true)
   const menuId = createUniqueId()
-  const items = createMemo(() => {
+  const groups = createMemo(() => {
     const current = popup()
     if (!current) return []
-    const sections: [string, readonly Action[]][] = current.inTable
+    const sections: [string, readonly Action[], 'inline'?][] = current.inTable
       ? [['表格操作', tableCommands]]
       : [
-        ['区块操作', current.canEditBlock ? blockEditCommands : []],
         [current.trigger ? '基本区块' : '转换区块', blockCommands],
         ['插入内容', insertCommands],
         ['媒体与附件', props.onInsertAttachment ? attachmentItems : []],
       ]
-    if (current.quoteRange && props.onQuoteSelection) sections.unshift(['AI', [quoteAction]])
+    if (current.quoteRange) {
+      const { selection } = current
+      if (selection instanceof TextSelection && !selection.empty && !selection.$from.parent.type.spec.code) {
+        sections.unshift(['行内格式', formatActions, 'inline'])
+      }
+      const actions = []
+      if (props.onQuoteSelection) actions.push(quoteAction)
+      if (props.inlineAi && !inlineEdit()) actions.push(editAction)
+      if (actions.length) sections.unshift(['AI', actions])
+    }
     const query = current.trigger?.query.toLowerCase() ?? ''
-    return sections.flatMap(([section, commands]) => {
+    let index = 0
+    return sections.flatMap(([label, commands, layout]) => {
       const matches = commands.filter((item) =>
         `${item.label} ${item.search} ${item.shortcut ?? ''}`.toLowerCase().includes(query))
       const exact = matches.findIndex((item) => item.shortcut === query)
       if (exact > 0) matches.unshift(...matches.splice(exact, 1))
-      return matches.map((item, index) => ({ item, section: index === 0 ? section : undefined }))
+      return matches.length ? [{
+        label, layout, items: matches.map((item) => ({
+          item, index: index++, applied: 'mark' in item && !!handle?.editor.isActive(item.mark),
+        })),
+      }] : []
     })
   })
+  const items = createMemo(() => groups().flatMap((group) => group.items))
 
   const closeMenu = () => {
-    dismissedSlash = popup()?.trigger?.from
     if (menuPress.active(popupElement)) menuPress.clear()
     setPopup(undefined)
   }
@@ -154,13 +172,13 @@ export default function EditorShell(props: {
     if (!rects.length) return
     if (!afterSelection && !rects.some((rect) => x >= rect.left && x <= rect.right &&
       y >= rect.top && y <= rect.bottom)) return
-    const bounds = scrollRoot.getBoundingClientRect()
     let topEdge = rects[0].top
     let bottomEdge = rects[0].bottom
     for (const rect of rects) {
       topEdge = Math.min(topEdge, rect.top)
       bottomEdge = Math.max(bottomEdge, rect.bottom)
     }
+    const bounds = scrollRoot.getBoundingClientRect()
     const width = Math.min(selectionToolbarWidth, Math.max(0, bounds.width - 8))
     const minY = bounds.top + 4
     const maxY = bounds.bottom - 4
@@ -289,8 +307,21 @@ export default function EditorShell(props: {
     const item = items()[index]?.item
     const editor = handle?.editor
     if (!current || !item || !editor?.isEditable || current.selection.$from.doc !== editor.state.doc) return
+    if ('mark' in item) {
+      editor.chain().command(({ tr }) => {
+        closeHistory(tr)
+        tr.setSelection(current.selection)
+        tr.setMeta(contextMenuFormat, true)
+        return true
+      }).toggleMark(item.mark).run()
+      return
+    }
     closeMenu()
-    if ('quote' in item) { props.onQuoteSelection?.(current.quoteRange); return }
+    if ('ai' in item) {
+      if (item.ai === 'quote') props.onQuoteSelection?.(current.quoteRange)
+      else if (current.quoteRange) startInlineEdit(current.quoteRange)
+      return
+    }
     if ('attachment' in item) {
       const { from, to } = current.selection
       props.onInsertAttachment?.(item.attachment, current.trigger ?? { from, to })
@@ -333,6 +364,11 @@ export default function EditorShell(props: {
         props.onInsertFiles(files)
         return true
       },
+      handleTextInput(view, from, _to, text, insert) {
+        if (text !== '/' || view.composing) return false
+        view.dispatch(insert().setMeta(typedSlash, from))
+        return true
+      },
       handleKeyDown(view, event) {
         if (!view.editable || view.composing || event.isComposing) return false
         if (event.key === 'Escape' && selectionMenu()) {
@@ -344,7 +380,6 @@ export default function EditorShell(props: {
           const { left, bottom, top } = view.coordsAtPos(selection.head)
           showMenu({
             x: left, y: bottom + 4, above: top - 4, inTable: handle!.editor.isActive('table'),
-            canEditBlock: !!selectedBlock(selection),
           })
           return true
         }
@@ -360,6 +395,18 @@ export default function EditorShell(props: {
             setKeyboardHighlight(true)
             setHighlighted((index) => (index + (event.key === 'ArrowDown' ? 1 : count - 1)) % count)
             return true
+          case 'ArrowLeft':
+          case 'ArrowRight': {
+            const current = items()[highlighted()]?.item
+            if (!current || !('mark' in current)) return false
+            const next = highlighted() + (event.key === 'ArrowLeft' ? -1 : 1)
+            const target = items()[next]?.item
+            if (target && 'mark' in target) {
+              setKeyboardHighlight(true)
+              setHighlighted(next)
+            }
+            return true
+          }
           case 'Enter':
             if (!count) return false
             runItem(highlighted())
@@ -381,7 +428,6 @@ export default function EditorShell(props: {
         const selected = view.state.selection
         showMenu({
           x: event.clientX, y: event.clientY, above: event.clientY, inTable: handle.editor.isActive('table'),
-          canEditBlock: !!selectedBlock(view.state.selection),
           quoteRange: selected.empty ? undefined : { from: selected.from, to: selected.to },
         })
         return true
@@ -406,6 +452,10 @@ export default function EditorShell(props: {
       }
       if (blockDrag) endBlockDrag()
       positionBlockGrip()
+      if (current && transaction.getMeta(contextMenuFormat)) {
+        setPopup({ ...current, selection })
+        return
+      }
       if (current && menuPress.active(popupElement)) {
         if (transaction.docChanged) closeMenu()
         return
@@ -414,16 +464,18 @@ export default function EditorShell(props: {
         if (transaction.docChanged || !current.selection.eq(editor.state.selection)) closeMenu()
         return
       }
-      const trigger = editor.isEditable && editor.isFocused && !editor.view.composing
-        ? slashTrigger(editor.state)
-        : null
-      if (!trigger) {
-        dismissedSlash = undefined
-        setPopup(undefined)
-      } else if (trigger.from !== dismissedSlash) {
-        const { left, bottom, top } = editor.view.coordsAtPos(trigger.from)
-        showMenu({ x: left, y: bottom + 4, above: top - 4, trigger, inTable: editor.isActive('table') })
+      const typedAt = transaction.getMeta(typedSlash)
+      if (!current && typedAt === undefined) return
+      const trigger = editor.isEditable && editor.isFocused && !editor.view.composing ? slashTrigger(editor.state) : null
+      const previous = current?.trigger && transaction.mapping.mapResult(current.trigger.from, 1)
+      const continues = previous && !previous.deleted && trigger?.from === previous.pos &&
+        (transaction.docChanged || current?.selection.eq(selection))
+      if (!trigger || (trigger.from !== typedAt && !continues)) {
+        closeMenu()
+        return
       }
+      const { left, bottom, top } = editor.view.coordsAtPos(trigger.from)
+      showMenu({ x: left, y: bottom + 4, above: top - 4, trigger, inTable: editor.isActive('table') })
     })
 
     const closeOutside = (event: PointerEvent) => {
@@ -497,13 +549,15 @@ export default function EditorShell(props: {
 
   return (
     <div class="editor-shell">
-      <div class="editor-scroll" ref={scrollRoot} onPointerMove={hoverSelection} onPointerUp={hoverAfterSelection}>
+      <div class="editor-scroll" ref={scrollRoot}
+        onPointerMove={props.showSelectionToolbar ? hoverSelection : undefined}
+        onPointerUp={props.showSelectionToolbar ? hoverAfterSelection : undefined}>
         <div class="editor-mount" ref={element} />
       </div>
       <Show when={blockGrip()}>
         {(grip) => <Portal>
           <button type="button" class="editor-block-grip" title="拖动以移动区块"
-            aria-label="区块操作，拖动以移动" style={{ left: `${grip().x}px`, top: `${grip().y}px` }}
+            aria-label="拖动以移动区块" style={{ left: `${grip().x}px`, top: `${grip().y}px` }}
             onPointerDown={(event) => startBlockDrag(event, grip().selection)}
             onMouseDown={(event) => { if (event.button === 0) event.preventDefault() }}
             onPointerMove={previewBlockDrop} onPointerUp={finishBlockDrag}
@@ -516,7 +570,7 @@ export default function EditorShell(props: {
               if (!editor?.isEditable || editor.state.selection !== selection) return
               editor.view.focus()
               showMenu({
-                x: x + 26, y: y + 28, above: y - 4, inTable: editor.isActive('table'), canEditBlock: true,
+                x: x + 26, y: y + 28, above: y - 4, inTable: editor.isActive('table'),
                 quoteRange: { from: selection.from, to: selection.to },
               })
             }}>
@@ -552,8 +606,9 @@ export default function EditorShell(props: {
             id={menuId}
             anchor={current()}
             query={current().trigger?.query}
-            items={items()}
+            groups={groups()}
             active={highlighted()}
+            activeItem={items()[highlighted()]?.item}
             keyboardHighlight={keyboardHighlight()}
             isPressing={() => menuPress.active(popupElement)}
             onHighlight={(index) => { setKeyboardHighlight(false); setHighlighted(index) }}

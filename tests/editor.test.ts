@@ -51,7 +51,7 @@ it('opens the in-document AI editor on first click and applies only after approv
   let mounted!: EditorHandle
   const dispose = render(() => createComponent(EditorShell, {
     markdown: 'onebox sample text', onReady: (value) => { mounted = value },
-    onUpdate: vi.fn(), onQuoteSelection, inlineAi: true,
+    onUpdate: vi.fn(), onQuoteSelection, inlineAi: true, showSelectionToolbar: true,
   }), host)
   try {
     const view = mounted.editor.view
@@ -222,12 +222,125 @@ it('keeps a block-menu item mounted and applies it to the block where the menu o
   }
 })
 
-it('keeps the toolbar after formatting so AI edit and block conversion can follow', async () => {
+it('opens the existing AI box from the compact context menu using the original selection', async () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const events = vi.spyOn(ai, 'events').mockResolvedValue(() => {})
+  const onQuoteSelection = vi.fn()
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'example paragraph', onReady: (value) => { mounted = value },
+    onUpdate: vi.fn(), onQuoteSelection, inlineAi: true,
+  }), host)
+  try {
+    const { view } = mounted.editor
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
+    vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 80, top: 60, bottom: 80 })
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(32, 16, 600, 160))
+    vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 700, 240))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 8)))
+    view.dom.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }))
+    const menu = document.querySelector('.block-menu-compact')!
+    expect(menu.textContent).toContain('引用到侧栏')
+    expect(menu.textContent).not.toMatch(/区块操作|复制区块|删除区块/)
+    const edit = Array.from(menu.querySelectorAll('button')).find((button) => button.textContent?.includes('正文编辑'))!
+    edit.click()
+    expect(document.querySelector('.block-menu-popup')).toBeNull()
+    await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('修改要求'))
+    expect(view.dom.querySelector('.editor-ai-source')?.textContent).toBe('example')
+  } finally {
+    dispose()
+    host.remove()
+    events.mockRestore()
+  }
+})
+
+it('applies inline formats to selected text from the context menu', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'before example after', onReady: (value) => { mounted = value }, onUpdate: vi.fn(), onQuoteSelection: vi.fn(),
+  }), host)
+  try {
+    const { view } = mounted.editor
+    vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect')
+      .mockReturnValue(new DOMRect(0, 0, 700, 240))
+    const point = vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
+    const rightClick = () => view.dom.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, button: 2, clientX: 90, clientY: 60,
+    }))
+    const group = () => document.querySelector('[role="group"][aria-label="行内格式"]')
+    const buttons = () => Array.from(group()!.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    rightClick()
+    expect(group()).toBeNull()
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 8, 15)))
+    point.mockReturnValue({ pos: 9, inside: 0 })
+    expect(document.querySelector('.editor-selection-menu')).toBeNull()
+    rightClick()
+    expect(Array.from(document.querySelectorAll('.block-menu-results [role="group"]'), (el) => el.getAttribute('aria-label')).slice(0, 3))
+      .toEqual(['AI', '行内格式', '转换区块'])
+    expect(buttons().map((button) => button.title)).toEqual(['高亮', '粗体', '斜体', '下划线', '删除线'])
+    buttons()[1].click()
+    expect(mounted.toMarkdown()).toBe('before **example** after')
+    expect(buttons()[1].getAttribute('aria-label')).toBe('粗体，已应用')
+    buttons()[1].click()
+    expect(mounted.toMarkdown()).toBe('before example after')
+    buttons()[0].click()
+    expect(mounted.toMarkdown()).toBe('before <mark>example</mark> after')
+    view.dom.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }))
+    expect(group()).toBeNull()
+  } finally {
+    dispose()
+    host.remove()
+  }
+})
+
+it('opens slash commands for typed slash and never from a caret placed beside existing text', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'Existing `/`，example\n\nNew ', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
+  }), host)
+  try {
+    const { view } = mounted.editor
+    view.focus()
+    vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 20, top: 60, bottom: 80 })
+    const menu = () => document.querySelector('.block-menu-popup')
+    const setCaret = (pos: number) => view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)))
+    // Place the caret both after the existing slash and at the end of its surrounding text.
+    setCaret('Existing /'.length + 1)
+    setCaret(view.state.doc.firstChild!.nodeSize - 1)
+    expect(menu()).toBeNull()
+    const from = view.state.doc.firstChild!.nodeSize + 1
+    setCaret(from)
+    view.dispatch(view.state.tr.insertText('/table'))
+    expect(menu()).toBeNull()
+    view.dispatch(view.state.tr.delete(from, view.state.selection.from))
+    view.someProp('handleTextInput', (input) => input(view, from, from, '/', () => view.state.tr.insertText('/')))
+    expect(menu()?.querySelector('.block-menu-query')).not.toBeNull()
+    view.dispatch(view.state.tr.insertText('table'))
+    expect(menu()?.querySelector('.block-menu-query')?.textContent).toBe('/table')
+    setCaret(1)
+    expect(menu()).toBeNull()
+    setCaret(from + '/table'.length)
+    expect(menu()).toBeNull()
+  } finally {
+    dispose()
+    host.remove()
+  }
+})
+
+it.each([
+  ['hides the floating toolbar by default', undefined],
+  ['keeps the enabled toolbar open across formatting and block conversion', true],
+] as const)('%s', async (_label, showSelectionToolbar) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   let mounted!: EditorHandle
   const dispose = render(() => createComponent(EditorShell, {
-    markdown: 'example', onReady: (value) => { mounted = value }, onUpdate: vi.fn(), inlineAi: true,
+    markdown: 'example', onReady: (value) => { mounted = value }, onUpdate: vi.fn(), inlineAi: true, showSelectionToolbar,
   }), host)
   const { view } = mounted.editor
   const stopMouse = enableButtonClickTolerance(document)
@@ -248,6 +361,11 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
   }
   try {
     open()
+    if (!showSelectionToolbar) {
+      expect(menu()).toBeNull()
+      expect(view.state.doc.textBetween(view.state.selection.from, view.state.selection.to)).toBe('example')
+      return
+    }
     expect(menu().lastElementChild?.textContent).toContain('使用 AI 编辑')
     expect(menu().textContent).not.toMatch(/评论|技能/)
     const toolbar = menu()
@@ -317,16 +435,10 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
     expect(mounted.toMarkdown()).toBe('<u>example</u>')
     menu().querySelector<HTMLButtonElement>('[aria-label="转换区块"]')!.click()
     const blocks = menu().querySelector('[aria-label="区块类型"]')!
-    const fold = [...blocks.querySelectorAll('button')].find((button) => button.textContent?.includes('折叠标题 2'))!
-    fold.click()
-    const folded = view.dom.querySelector('.editor-fold-block')!
-    const heading = folded.querySelector('h2')!
-    const toggle = folded.querySelector('button')!
-    expect(heading.textContent).toBe('example')
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    toggle.click()
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(folded.hasAttribute('data-folded')).toBe(true)
+    expect(blocks.textContent).not.toContain('折叠')
+    const heading = [...blocks.querySelectorAll('button')].find((button) => button.textContent?.includes('二级标题'))!
+    heading.click()
+    expect(view.dom.querySelector('h2')?.textContent).toBe('example')
     expect(mounted.toMarkdown()).toContain('## <u>example</u>')
   } finally {
     stopMouse()
@@ -341,6 +453,7 @@ it('keeps the text toolbar hidden for block selections and preserves the explici
   document.body.append(host)
   let mounted!: EditorHandle
   const dispose = render(() => createComponent(EditorShell, {
+    showSelectionToolbar: true,
     markdown: 'first\n\nsecond', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
   }), host)
   vi.useFakeTimers()
@@ -430,6 +543,16 @@ it.each([
 })
 
 describe('createEditor', () => {
+  it('renders existing fold markup expanded and preserves it when saving', () => {
+    const { handle, element } = mount()
+    handle.loadMarkdown('> [!NOTE]-\n>\n> ## 旧标题\n>\n> 旧正文')
+    const quote = element.querySelector('blockquote')!
+    expect(quote.querySelector('h2')?.textContent).toBe('旧标题')
+    expect(quote.querySelector('p')?.textContent).toBe('旧正文')
+    expect(element.querySelector('button[aria-expanded]')).toBeNull()
+    expect(handle.toMarkdown()).toContain('> [!NOTE]-')
+  })
+
   it('loads markdown and serializes it back', () => {
     const { handle } = mount()
     expect(handle.toMarkdown()).toContain('# 标题')
@@ -526,6 +649,8 @@ describe('createEditor', () => {
     expect(selection.from).toBe(paragraphs[first])
     expect(Array.from(element.querySelectorAll('[data-block-range-selected]'), (node) => node.textContent))
       .toEqual(blocks.slice(first, last + 1).map((block) => block.content[0].text))
+    expect(Array.from(element.querySelectorAll('[data-block-range-selected]'), (node) => node.getAttribute('data-block-range-selected')))
+      .toEqual(['start', 'middle', 'end'])
     expect(selection.content().content.textBetween(0, selection.content().content.size, '\n'))
       .toBe(blocks.slice(first, last + 1).map((block) => block.content[0].text).join('\n'))
     view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
@@ -566,6 +691,8 @@ describe('createEditor', () => {
     gutterPointer(window, 'pointerup', 15, 95)
     expect(view.state.selection).toBeInstanceOf(ListRowsSelection)
     expect(rows()).toEqual(['first', 'second', 'third'])
+    expect(Array.from(element.querySelectorAll('li[data-list-row-selected]'), (item) => item.getAttribute('data-list-row-selected')))
+      .toEqual(['start', 'middle', 'end'])
     const third = view.dom.querySelectorAll('li p')[2]
     third.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
     expect(rows()).toEqual(['first', 'second', 'third'])

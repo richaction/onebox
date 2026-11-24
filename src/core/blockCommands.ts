@@ -147,7 +147,10 @@ export function slashTrigger(state: EditorState) {
   const trigger = /(?:^|\s)\/([^/\s]{0,32})$/u.exec(before)
   if (!trigger) return null
   const query = trigger[1]
-  return { from: $from.pos - query.length - 1, to: $from.pos, query }
+  const from = $from.pos - query.length - 1
+  const code = state.schema.marks.code
+  if (code && state.doc.rangeHasMark(from, $from.pos, code)) return null
+  return { from, to: $from.pos, query }
 }
 
 export const MarkdownTaskInput = Extension.create({

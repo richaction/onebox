@@ -14,7 +14,6 @@ import { collectMetrics } from './core/metrics'
 import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type PreviewEntry, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import { captureAiReference, type AiReference } from './core/aiDocument'
-import { handoffDocument, switchEditor } from './editorMode'
 import AiSidebar, { type AiConversationHistory } from './ui/AiSidebar'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
@@ -864,15 +863,6 @@ export default function App() {
 
   const autoSaveMessage = () => autoSaveHint() ? '无需手动保存，编辑会自动保存' : ''
 
-  const openPlate = async () => {
-    if (busy || !await saveTitle()) return
-    await runFileAction(async () => {
-      if (!await flush()) return false
-      switchEditor('plate', path() ?? undefined)
-      return true
-    }, '保存失败')
-  }
-
   const showAutoSaveHint = () => {
     clearTimeout(autoSaveHintTimer)
     setAutoSaveHint(true)
@@ -923,11 +913,11 @@ export default function App() {
       void desktopWorkspace.restoreRoot().then(async (current) => {
         if (disposed) return
         if (current) setWorkspace(current)
-        const handoff = handoffDocument()
-        const document = handoff ?? (import.meta.env.DEV ? await invoke<string | null>('restore_document') : null)
-        if (document && !disposed) {
+        if (import.meta.env.DEV) {
+          const document = await invoke<string | null>('restore_document')
+          if (!document || disposed) return
           await runFileAction((editor) => readDocument(editor, document), '打开失败')
-          if (!handoff) restoreDevelopmentPosition(document)
+          restoreDevelopmentPosition(document)
         }
       }).catch(() => { if (!disposed) setFailure('读取工作区失败') }).finally(() => {
         if (!disposed) setRestoringWorkspace(false)
@@ -1145,8 +1135,6 @@ export default function App() {
             title={`${sidebarLabel()}（${mac ? '⌘' : 'Ctrl+'}\\）`} onClick={toggleSidebar}>
             <span class="sidebar-toggle-symbol" aria-hidden="true" />
           </button>
-          <button type="button" class="file-preview-toolbar-button" style={{ position: 'relative', 'margin-left': 'auto' }}
-            data-activate-on-release onClick={() => void openPlate()}>试用 Plate</button>
         </header>
       </Show>
       <div class="editor-layout">

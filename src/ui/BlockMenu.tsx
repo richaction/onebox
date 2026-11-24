@@ -15,8 +15,9 @@ export default function BlockMenu(props: {
   id: string
   anchor: { x: number; y: number; above: number }
   query?: string
-  items: { item: MenuItem; section?: string }[]
+  groups: { label: string; layout?: 'inline'; items: { item: MenuItem; index: number; applied: boolean }[] }[]
   active: number
+  activeItem?: MenuItem
   keyboardHighlight: boolean
   isPressing: () => boolean
   onHighlight: (index: number) => void
@@ -26,21 +27,22 @@ export default function BlockMenu(props: {
 }) {
   const [viewport, setViewport] = createSignal(viewportBounds())
   let results!: HTMLDivElement
-  const activeItem = () => props.items[props.active]?.item
+  const compact = () => props.query === undefined
 
   const layout = createMemo(() => {
     const { left, top, width, height } = viewport()
     const right = left + width
     const bottom = top + height
     const margin = 8
-    const menuWidth = Math.min(304, width - margin * 2)
+    const menuWidth = Math.min(compact() ? 220 : 304, width - margin * 2)
     const x = Math.max(left + margin, Math.min(props.anchor.x, right - menuWidth - margin))
     const above = props.anchor.above - top - margin
     const below = bottom - props.anchor.y - margin
-    const maxHeight = props.query === undefined ? 396 : 428
+    const maxHeight = compact() ? 330 : 428
     const openUp = below < Math.min(above, maxHeight)
     const heightLimit = Math.min(maxHeight, Math.max(100, openUp ? above : below))
-    const preview = right - (x + menuWidth) >= 204 ? 'right' : x - left >= 204 ? 'left' : undefined
+    const preview = compact() ? undefined
+      : right - (x + menuWidth) >= 204 ? 'right' : x - left >= 204 ? 'left' : undefined
     return { x, openUp, heightLimit, menuWidth, preview }
   })
 
@@ -59,7 +61,7 @@ export default function BlockMenu(props: {
 
   createEffect(() => {
     if (!props.keyboardHighlight) return
-    props.items
+    props.groups
     const row = results.querySelector<HTMLElement>(`[data-index="${props.active}"]`)
     if (props.active === 0) results.scrollTop = 0
     else if (row && row.offsetTop < results.scrollTop) results.scrollTop = row.offsetTop
@@ -71,6 +73,7 @@ export default function BlockMenu(props: {
   return (
     <div
       class="block-menu-popup"
+      classList={{ 'block-menu-compact': compact() }}
       ref={props.ref}
       style={{
         left: `${layout().x}px`,
@@ -93,40 +96,54 @@ export default function BlockMenu(props: {
           ref={results}
           id={props.id}
           role="listbox"
-          aria-label={props.query === undefined ? '区块操作' : '区块命令'}
+          aria-label={compact() ? '编辑器菜单' : '区块命令'}
         >
-          <For each={props.items} fallback={<div class="block-menu-empty" role="status">没有匹配的命令</div>}>
-            {({ item, section }, index) => (
-              <>
-                <Show when={section}><div class="block-menu-section" role="presentation">{section}</div></Show>
-                <button
-                  type="button"
-                  role="option"
-                  tabIndex={-1}
-                  id={`${props.id}-${index()}`}
-                  data-index={index()}
-                  data-activate-on-release
-                  aria-selected={index() === props.active}
-                  classList={{ 'block-menu-item': true, highlighted: index() === props.active }}
-                  onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlight(index()) }}
-                  onClick={() => props.onChoose(index())}
-                >
-                  <span class="block-menu-icon" aria-hidden="true">{item.icon}</span>
-                  <span>{item.label}</span>
-                  <Show when={item.shortcut}><kbd>{item.shortcut}</kbd></Show>
-                </button>
-              </>
+          <For each={props.groups} fallback={<div class="block-menu-empty" role="status">没有匹配的命令</div>}>
+            {(group) => (
+              <div role="group" aria-label={group.label}>
+                <div class="block-menu-section" aria-hidden="true">{group.label}</div>
+                <div role="presentation" classList={{ 'block-menu-inline': group.layout === 'inline' }}>
+                  <For each={group.items}>{({ item, index, applied }) => (
+                    <button
+                      type="button"
+                      role="option"
+                      tabIndex={-1}
+                      id={`${props.id}-${index}`}
+                      data-index={index}
+                      data-activate-on-release
+                      aria-selected={index === props.active}
+                      aria-label={group.layout === 'inline' ? (applied ? `${item.label}，已应用` : item.label) : undefined}
+                      title={group.layout === 'inline' ? item.label : undefined}
+                      data-action={group.layout === 'inline' ? item.label : undefined}
+                      data-applied={applied ? '' : undefined}
+                      classList={{ 'block-menu-item': true, highlighted: index === props.active }}
+                      onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlight(index) }}
+                      onClick={() => props.onChoose(index)}
+                    >
+                      <Show when={group.layout === 'inline'} fallback={
+                        <>
+                          <span class="block-menu-icon" aria-hidden="true">{item.icon}</span>
+                          <span>{item.label}</span>
+                          <Show when={item.shortcut}><kbd>{item.shortcut}</kbd></Show>
+                        </>
+                      }><span aria-hidden="true">{item.icon}</span></Show>
+                    </button>
+                  )}</For>
+                </div>
+              </div>
             )}
           </For>
         </div>
-        <footer class="block-menu-footer">
-          <button type="button" tabIndex={-1} data-activate-on-release onClick={props.onClose}>关闭菜单 <kbd>Esc</kbd></button>
-        </footer>
+        <Show when={!compact()}>
+          <footer class="block-menu-footer">
+            <button type="button" tabIndex={-1} data-activate-on-release onClick={props.onClose}>关闭菜单 <kbd>Esc</kbd></button>
+          </footer>
+        </Show>
       </div>
-      <Show when={layout().preview ? activeItem()?.preview : undefined}>
+      <Show when={layout().preview ? props.activeItem?.preview : undefined}>
         {(preview) => (
           <aside class="block-menu-preview" data-side={layout().preview} aria-hidden="true">
-            <div class="block-menu-example" data-example={preview().kind} data-level={activeItem()?.icon}>
+            <div class="block-menu-example" data-example={preview().kind} data-level={props.activeItem?.icon}>
               <Switch>
                 <Match when={preview().kind === 'heading'}><strong>章节标题</strong></Match>
                 <Match when={preview().kind === 'text'}>在这里开始写作。</Match>
@@ -139,7 +156,7 @@ export default function BlockMenu(props: {
                 <Match when={preview().kind === 'table'}>
                   <table><tbody><tr><th>项目</th><th>状态</th></tr><tr><td>初稿</td><td>完成</td></tr></tbody></table>
                 </Match>
-                <Match when={preview().kind === 'media'}><span class="block-menu-media-icon">{activeItem()?.icon}</span></Match>
+                <Match when={preview().kind === 'media'}><span class="block-menu-media-icon">{props.activeItem?.icon}</span></Match>
               </Switch>
             </div>
             <p>{preview().caption}</p>

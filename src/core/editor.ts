@@ -57,6 +57,7 @@ export function createEditor(opts: {
   editable?: boolean
   onUpdate: (doc: Node) => void
   handleKeyDown?: NonNullable<EditorProps['handleKeyDown']>
+  handleTextInput?: EditorProps['handleTextInput']
   handleContextMenu?: NonNullable<EditorProps['handleDOMEvents']>['contextmenu']
   handleDrop?: EditorProps['handleDrop']
   handlePaste?: EditorProps['handlePaste']
@@ -194,6 +195,7 @@ export function createEditor(opts: {
       },
       handleDrop: opts.handleDrop,
       handlePaste: opts.handlePaste,
+      handleTextInput: opts.handleTextInput,
       handleScrollToSelection(view) {
         keepTableCaretVisible(view)
         return false

@@ -13,6 +13,7 @@
   --ai-toggle-width: 46px;
   --ai-toggle-height: 30px;
   --ai-toolbar-icon-width: 28px;
+  --ai-toolbar-glyph-width: 16px;
 }
 
 .ai-toggle-slot {
@@ -99,12 +100,14 @@
 .ai-sidebar button > * { pointer-events: none; }
 .ai-sidebar button:disabled { cursor: default; opacity: 0.48; }
 .ai-sidebar-header {
+  --ai-conversation-inset: 8px;
+
   position: relative;
   display: flex;
   box-sizing: border-box;
   align-items: center;
   min-height: var(--pane-header-height);
-  padding: 6px 12px 6px 16px;
+  padding: 6px var(--file-toolbar-inset);
   gap: 4px;
   border-block-end: 1px solid var(--ob-border);
 }
@@ -112,6 +115,7 @@
 .ai-conversations {
   flex: 0 1 auto;
   min-inline-size: 0;
+  margin-inline-start: calc(0px - var(--ai-conversation-inset));
   margin-inline-end: auto;
 }
 .ai-sidebar .ai-conversation-trigger {
@@ -120,7 +124,7 @@
   gap: 8px;
   max-inline-size: 100%;
   min-block-size: 30px;
-  padding: 0 8px;
+  padding: 0 var(--ai-conversation-inset);
   border: 0;
   border-radius: 6px;
   color: inherit;
@@ -262,6 +266,15 @@
   padding: 0;
   font-size: 18px;
   line-height: 1;
+}
+
+/* Align visible content with the filename while keeping the full button hit areas. */
+.ai-sidebar-collapse {
+  margin-inline-end: calc((var(--ai-toolbar-glyph-width) - var(--ai-toolbar-icon-width)) / 2);
+}
+
+.ai-sidebar-collapse svg {
+  inline-size: var(--ai-toolbar-glyph-width);
 }
 
 .ai-subtle, .ai-primary, .ai-source {

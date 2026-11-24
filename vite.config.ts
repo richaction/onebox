@@ -1,17 +1,11 @@
 import { fileViewerRenderers } from '@file-viewer/vite-plugin'
 import { defineConfig } from 'vitest/config'
 import solid from 'vite-plugin-solid'
-import react from '@vitejs/plugin-react'
 import { codeLanguageIds } from './src/core/codeLanguages.ts'
 import { developmentBridge } from './scripts/dev-bridge.mjs'
 
 export default defineConfig({
-  plugins: [
-    solid({ exclude: '**/src/react/**' }),
-    react({ include: /\/src\/react\/.*\.[jt]sx$/ }),
-    developmentBridge(),
-    fileViewerRenderers({ inject: false, copyAssets: true }),
-  ],
+  plugins: [solid(), developmentBridge(), fileViewerRenderers({ inject: false, copyAssets: true })],
   clearScreen: false,
   server: { port: 1420, strictPort: true, watch: { ignored: ['**/public/file-viewer/**'] } },
   build: {

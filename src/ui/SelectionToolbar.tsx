@@ -31,6 +31,8 @@ const inlineMarks = [
   { name: '斜体', symbol: 'I', mark: 'italic' },
   { name: '下划线', symbol: 'U', mark: 'underline' },
 ] as const
+const strikeMark = { name: '删除线', symbol: 'S', mark: 'strike' } as const
+export const inlineFormatMarks = [...inlineMarks, strikeMark] as const
 
 function asText(selection: EditorSelection) {
   if (selection instanceof TextSelection) return selection
@@ -72,8 +74,7 @@ export default function SelectionToolbar(props: {
   const inQuote = editor.isActive('blockquote')
   const listType = editor.isActive('orderedList') ? 'orderedList' : editor.isActive('bulletList') ? 'bulletList' : undefined
   const quoteVariant = editor.getAttributes('blockquote').variant
-  const typeLabel = quoteVariant === 'note' ? '标注' : quoteVariant === 'fold'
-    ? (activeBlock?.icon.startsWith('H') ? `折叠${activeBlock.label}` : '折叠区块') : activeBlock?.label
+  const typeLabel = quoteVariant === 'note' ? '标注' : activeBlock?.label
   const valid = () => editor.isEditable && editor.state.doc === props.selection.$from.doc
 
   const run = (action: Action, keepOpen = false) => {
@@ -96,7 +97,7 @@ export default function SelectionToolbar(props: {
     run((chain) => chain.insertContent(display ? { type: 'paragraph', content: [formula] } : formula))
   }
 
-  const quote = (chain: ChainedCommands, variant: 'note' | 'fold' | null) => inQuote
+  const quote = (chain: ChainedCommands, variant: 'note' | null) => inQuote
     ? chain.updateAttributes('blockquote', { variant }) : chain.wrapIn('blockquote', { variant })
 
   const copy = async () => {
@@ -113,6 +114,11 @@ export default function SelectionToolbar(props: {
       data-action={label} disabled={disabled?.()} onClick={activate}>{symbol}</button>
   )
 
+  const returnToMain = () => {
+    setPanel('main')
+    editor.view.focus()
+  }
+
   return <div class="editor-selection-menu" role="group" aria-label="选区操作" ref={props.ref} data-activate-on-release
     style={{ left: `${props.x}px`, width: `${props.width}px`, 'max-height': `${props.maxHeight}px`,
       top: props.above ? undefined : `${props.y}px`, bottom: props.above ? `${window.innerHeight - props.y}px` : undefined }}
@@ -123,14 +129,12 @@ export default function SelectionToolbar(props: {
       if (event.key !== 'Escape' || event.isComposing) return
       event.preventDefault()
       event.stopPropagation()
-      if (panel() !== 'main') { setPanel('main'); editor.view.focus() }
+      if (panel() !== 'main') returnToMain()
       else { props.onClose(); editor.view.focus() }
     }}>
     <Show when={panel() !== 'main'}>
-      <button type="button" class="selection-toolbar-row" aria-label="返回选区操作" onClick={() => {
-        setPanel('main')
-        editor.view.focus()
-      }}><span aria-hidden="true">‹</span><strong>{panel() === 'blocks' ? '转换区块' : panel() === 'link' ? '链接' : '更多操作'}</strong></button>
+      <button type="button" class="selection-toolbar-row" aria-label="返回选区操作"
+        onClick={returnToMain}><span aria-hidden="true">‹</span><strong>{panel() === 'blocks' ? '转换区块' : panel() === 'link' ? '链接' : '更多操作'}</strong></button>
     </Show>
     <div class="selection-toolbar-content"><Switch>
       <Match when={panel() === 'main'}>
@@ -143,7 +147,7 @@ export default function SelectionToolbar(props: {
             run((chain) => chain.toggleMark(item.mark), true), () => !canMark(), item.mark)}</For>
           {iconButton('清除格式', 'Tₓ', () => run((chain) => chain.unsetAllMarks(), true), () => !canMark())}
           {iconButton('链接', '↗', () => { setLinkError(false); setPanel('link') }, () => !canMark(), 'link')}
-          {iconButton('删除线', 'S', () => run((chain) => chain.toggleStrike(), true), () => !canMark(), 'strike')}
+          {iconButton(strikeMark.name, strikeMark.symbol, () => run((chain) => chain.toggleStrike(), true), () => !canMark(), strikeMark.mark)}
           {iconButton('行内代码', '‹/›', () => run((chain) => chain.toggleCode(), true), () => !canMark(), 'code')}
           {iconButton('行内公式', '√x', () => math(false), () => !latex())}
           {iconButton('更多操作', '⋯', () => { setCopyError(false); setPanel('more') })}
@@ -168,14 +172,6 @@ export default function SelectionToolbar(props: {
           </button>
           <button type="button" class="selection-toolbar-row" aria-pressed={quoteVariant === 'note'}
             onClick={() => run((chain) => quote(chain, 'note'))}><span aria-hidden="true">▣</span>标注</button>
-          <button type="button" class="selection-toolbar-row" aria-pressed={quoteVariant === 'fold'}
-            onClick={() => run((chain) => quote(chain, 'fold'))}><span aria-hidden="true">▸</span>折叠区块</button>
-          <For each={[1, 2, 3, 4] as const}>{(level) => (
-            <button type="button" class="selection-toolbar-row" aria-pressed={quoteVariant === 'fold' && editor.isActive('heading', { level })}
-              onClick={() => run((chain) => quote(chain.setHeading({ level }), 'fold'))}>
-              <span aria-hidden="true">▸H{level}</span>折叠标题 {level}
-            </button>
-          )}</For>
           <button type="button" class="selection-toolbar-row" disabled={!canMark()} onClick={() => { setLinkError(false); setPanel('link') }}>
             <span aria-hidden="true">↗</span>页面链接
           </button>

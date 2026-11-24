@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import formatSample from '../examples/manual-testing/01 编辑器/全格式验收.md?raw'
 import { detectUnsupported, parseMarkdown, serializeMarkdown, serializeMarkdownForFile } from '../src/core/markdown'
 import { schema } from '../src/core/schema'
 
@@ -87,6 +88,10 @@ describe('phase two Markdown', () => {
     expect(parseMarkdown(output, schema).eq(doc), output).toBe(true)
     return { doc, output }
   }
+
+  it('loads the full-format sample as editable Markdown and preserves its formatting on save', () => {
+    assertRoundTrip(formatSample)
+  })
 
   it('keeps aligned GFM tables and pipes inside text and code', () => {
     const { doc, output } = assertRoundTrip('| A | B |\n| :--- | ---: |\n| x\\|y | `a\\|b` |')
