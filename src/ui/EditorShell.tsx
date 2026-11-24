@@ -10,12 +10,12 @@ import {
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
 import { blockDropTarget, moveBlock } from '../core/blockMove'
-import { reachesDragThreshold } from '../core/buttonClickTolerance'
+import { isClickFromRelease, reachesDragThreshold } from '../core/buttonClickTolerance'
 import { createEditor, type EditorHandle } from '../core/editor'
 import { ListRowsSelection, listTextSelectionRects } from '../core/listSelection'
 import { trackMenuPress } from '../core/menuPress'
 import BlockMenu from './BlockMenu'
-import InlineAiEditor, { type OpeningClick } from './InlineAiEditor'
+import InlineAiEditor from './InlineAiEditor'
 import SelectionToolbar, { selectionToolbarFormat, selectionToolbarHeight, selectionToolbarWidth } from './SelectionToolbar'
 
 export type AttachmentKind = 'image' | 'file'
@@ -72,13 +72,13 @@ export default function EditorShell(props: {
   let menuPress: ReturnType<typeof trackMenuPress>
   let blockDrag: GripDrag | undefined
   let blockScrollFrame = 0
-  let suppressGripClick = false
+  let gripDragRelease: PointerEvent | undefined
 
   const [popup, setPopup] = createSignal<Popup>()
   const [selectionMenu, setSelectionMenu] = createSignal<{
     x: number; y: number; above: boolean; width: number; maxHeight: number; selection: Selection
   }>()
-  const [inlineEdit, setInlineEdit] = createSignal<{ reference: AiReference & { anchor: number }; openingClick?: OpeningClick }>()
+  const [inlineEdit, setInlineEdit] = createSignal<AiReference & { anchor: number }>()
   const [blockGrip, setBlockGrip] = createSignal<{ x: number; y: number; selection: NodeSelection }>()
   const [blockDrop, setBlockDrop] = createSignal<ReturnType<typeof blockDropTarget>>()
   const [highlighted, setHighlighted] = createSignal(0)
@@ -127,16 +127,14 @@ export default function EditorShell(props: {
     if (restoreFocus) handle?.editor.view.focus()
   }
 
-  const startInlineEdit = (range: Range, event: MouseEvent) => {
+  const startInlineEdit = (range: Range) => {
     const editor = handle?.editor
     if (!props.inlineAi || !editor?.isEditable || inlineEdit()) return false
     const reference = captureAiReference(editor, 'selection', '', range)
     if (!reference || reference.anchor === undefined) return false
     closeSelectionMenu()
     highlightAiSource(editor, reference.anchor)
-    const { clientX, clientY, timeStamp } = event
-    setInlineEdit({ reference: { ...reference, anchor: reference.anchor },
-      openingClick: event.detail > 0 ? { clientX, clientY, timeStamp } : undefined })
+    setInlineEdit({ ...reference, anchor: reference.anchor })
     return true
   }
 
@@ -231,15 +229,13 @@ export default function EditorShell(props: {
 
   const endBlockDrag = () => {
     cancelAnimationFrame(blockScrollFrame)
-    suppressGripClick = !!blockDrag?.moved
     blockDrag = undefined
     setBlockDrop(undefined)
   }
 
   const startBlockDrag = (event: PointerEvent & { currentTarget: HTMLButtonElement }, selection: NodeSelection) => {
     const view = handle?.editor.view
-    if (event.button !== 0 || blockDrag || !view?.editable || view.state.selection !== selection) return
-    suppressGripClick = false
+    if (event.defaultPrevented || event.button !== 0 || blockDrag || !view?.editable || view.state.selection !== selection) return
     blockDrag = { pointer: event.pointerId, selection, startX: event.clientX, startY: event.clientY, moved: false }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -280,6 +276,7 @@ export default function EditorShell(props: {
   const finishBlockDrag = (event: PointerEvent) => {
     const drag = blockDrag
     if (!drag || event.pointerId !== drag.pointer) return
+    if (drag.moved) gripDragRelease = event
     const target = drag.moved ? locateBlockDrop(event, drag.selection) : undefined
     endBlockDrag()
     if (target && handle) moveBlock(handle.editor.view, drag.selection, target.pos)
@@ -438,6 +435,7 @@ export default function EditorShell(props: {
     })
 
     const closeOutside = (event: PointerEvent) => {
+      if (event.defaultPrevented) return
       cancelAnimationFrame(selectionFrame)
       const path = event.composedPath()
       const inPopup = popup() && popupElement && path.includes(popupElement)
@@ -520,7 +518,7 @@ export default function EditorShell(props: {
             onPointerCancel={endBlockDrag}
             onLostPointerCapture={() => { if (blockDrag) endBlockDrag() }}
             onClick={(event) => {
-              if (suppressGripClick && event.detail !== 0) return
+              if (gripDragRelease && isClickFromRelease(event, gripDragRelease)) return
               const editor = handle?.editor
               const { selection, x, y } = grip()
               if (!editor?.isEditable || editor.state.selection !== selection) return
@@ -545,15 +543,15 @@ export default function EditorShell(props: {
           <Portal>
             <SelectionToolbar {...current()} editor={handle!.editor} onClose={closeSelectionMenu}
               ref={(element) => { selectionElement = element }}
-              onAiEdit={props.inlineAi ? (event) => {
+              onAiEdit={props.inlineAi ? () => {
                 const { from, to } = current().selection
-                return startInlineEdit({ from, to }, event)
+                return startInlineEdit({ from, to })
               } : undefined} />
           </Portal>
         )}
       </Show>
       <Show when={inlineEdit()} keyed>
-        {(edit) => <Portal><InlineAiEditor editor={handle!.editor} reference={edit.reference} openingClick={edit.openingClick}
+        {(edit) => <Portal><InlineAiEditor editor={handle!.editor} reference={edit}
           scrollRoot={scrollRoot} close={closeInlineEdit} /></Portal>}
       </Show>
       <Show when={popup()}>

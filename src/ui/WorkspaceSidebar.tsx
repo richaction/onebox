@@ -2,7 +2,7 @@ import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMo
 import { NameField, onInlineNameBlur } from './FileName'
 import { createStore, reconcile } from 'solid-js/store'
 import { trackMenuPress } from '../core/menuPress'
-import { reachesDragThreshold } from '../core/buttonClickTolerance'
+import { isClickFromRelease, reachesDragThreshold } from '../core/buttonClickTolerance'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
 
 interface Directory {
@@ -737,8 +737,7 @@ export default function WorkspaceSidebar(props: {
 
   let press: { pointer: number; x: number; y: number; row: HTMLElement; entry: WorkspaceEntry } | undefined
   let openTimer: ReturnType<typeof setTimeout> | undefined
-  let clickTimer: ReturnType<typeof setTimeout> | undefined
-  let suppressClick = false
+  let dropRelease: PointerEvent | undefined
 
   const clearDrag = () => {
     press = undefined
@@ -748,6 +747,7 @@ export default function WorkspaceSidebar(props: {
   }
 
   const pressRow = (event: PointerEvent, entry: WorkspaceEntry) => {
+    if (event.defaultPrevented) return
     controlClick = undefined
     const button = (event.target as Element).closest<HTMLButtonElement>('.workspace-row-button')
     if ((event.button === 0 || event.button === 2) && event.ctrlKey && button && !button.disabled) {
@@ -817,14 +817,13 @@ export default function WorkspaceSidebar(props: {
     const target = source && locationAt(event, source)
     clearDrag()
     if (!source) return
-    suppressClick = true
-    clickTimer = setTimeout(() => { suppressClick = false }, 0)
+    dropRelease = event
     if (target) void drop(source, target)
   }
 
   onMount(() => {
     const preventDropClick = (event: MouseEvent) => {
-      if (suppressClick && event.detail > 0) {
+      if (dropRelease && isClickFromRelease(event, dropRelease)) {
         event.preventDefault()
         event.stopPropagation()
       }
@@ -840,7 +839,6 @@ export default function WorkspaceSidebar(props: {
     window.addEventListener('keydown', cancelDrag)
     onCleanup(() => {
       clearTimeout(openTimer)
-      clearTimeout(clickTimer)
       window.removeEventListener('pointermove', movePointer)
       window.removeEventListener('pointerup', releasePointer)
       window.removeEventListener('pointercancel', clearDrag)
@@ -921,7 +919,6 @@ export default function WorkspaceSidebar(props: {
                 <button
                   type="button"
                   class="workspace-row-button"
-                  data-recover-reordered-tap
                   title={props.displayName?.(entry) ?? entry.name}
                   disabled={entry.accessible === false}
                   aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}

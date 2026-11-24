@@ -173,6 +173,11 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
   const pointer = (type: string, y: number, buttons: number) => new PointerEvent(type, {
     bubbles: true, pointerId: 1, pointerType: 'mouse', clientX: 30, clientY: y, button: 0, buttons,
   })
+  const clickAtRelease = (button: HTMLButtonElement, timeStamp: number) => {
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })
+    Object.defineProperty(click, 'timeStamp', { value: timeStamp })
+    return button.dispatchEvent(click)
+  }
 
   try {
     sourceRow.querySelector('button')!.dispatchEvent(pointer('pointerdown', 12, 1))
@@ -181,11 +186,17 @@ it('marks a valid drop folder before moving and clears the mark on release', () 
 
     window.dispatchEvent(pointer('pointermove', 62, 1))
     expect(targetRow.parentElement!.classList.contains('workspace-drop-after')).toBe(true)
-    window.dispatchEvent(pointer('pointerup', 62, 0))
+    const release = pointer('pointerup', 62, 0)
+    window.dispatchEvent(release)
     expect(targetRow.parentElement!.classList.contains('workspace-drop-after')).toBe(false)
     expect([...host.querySelectorAll('[data-workspace-entry]')].map((row) => row.getAttribute('data-workspace-entry')))
       .toEqual([target.path, source.path])
     expect(onMove).not.toHaveBeenCalled()
+    const targetButton = targetRow.querySelector('button')!
+    expect(clickAtRelease(targetButton, release.timeStamp)).toBe(false)
+    expect(targetButton.getAttribute('aria-expanded')).toBe('false')
+    expect(clickAtRelease(targetButton, release.timeStamp + 5)).toBe(true)
+    expect(targetButton.getAttribute('aria-expanded')).toBe('true')
 
     sourceRow.querySelector('button')!.dispatchEvent(pointer('pointerdown', 12, 1))
     window.dispatchEvent(pointer('pointermove', 48, 1))

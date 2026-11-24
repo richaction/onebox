@@ -169,7 +169,9 @@ it('opens the in-document AI editor on first click and applies only after approv
       expect(document.querySelector('.editor-inline-ai')).not.toBeNull()
       const outsideClick = vi.fn()
       host.addEventListener('click', outsideClick)
-      expect(host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))).toBe(true)
+      expect(host.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, isPrimary: true,
+      }))).toBe(true)
       expect(document.querySelector('.editor-inline-ai')).toBeNull()
       host.click()
       expect(outsideClick).toHaveBeenCalledOnce()
@@ -262,40 +264,45 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
     expect(mounted.editor.state.selection.anchor).toBe(8)
     expect(mounted.editor.state.selection.head).toBe(1)
     expect(menu().querySelector('.selection-toolbar-ai')).toBe(aiButton)
-    const mouse = (button: HTMLButtonElement, type: string, x: number, y: number) =>
-      button.dispatchEvent(new PointerEvent(type, { bubbles: true, isPrimary: true, pointerId: 1,
-        pointerType: 'mouse', button: 0, clientX: x, clientY: y }))
-    mouse(italic, 'pointerdown', 70, 90)
-    mouse(italic, 'pointerup', 74, 93)
+    const mouse = (target: HTMLElement, type: string, x: number, y: number, timeStamp: number) => {
+      const event = new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true, pointerId: 1,
+        pointerType: 'mouse', button: 0, clientX: x, clientY: y, detail: type === 'click' ? 1 : 0 })
+      Object.defineProperty(event, 'timeStamp', { value: timeStamp })
+      return target.dispatchEvent(event)
+    }
+    mouse(italic, 'pointerup', 74, 93, 101)
+    mouse(italic, 'click', 74, 93, 101)
+    mouse(italic, 'pointerdown', 70, 90, 100)
     expect(italic.getAttribute('aria-pressed')).toBe('true')
     expect(view.dom.querySelector('em')?.textContent).toBe('example')
     const formatted = mounted.toMarkdown()
-    mouse(aiButton, 'pointerdown', 107, 187)
-    italic.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 74, clientY: 93 }))
+    mouse(aiButton, 'pointerdown', 107, 187, 200)
+    mouse(italic, 'click', 74, 93, 101)
     expect(mounted.toMarkdown()).toBe(formatted)
-    mouse(aiButton, 'pointerup', 110, 190)
+    mouse(aiButton, 'pointerup', 110, 190, 201)
     // WebKit may target the editor once the original AI button has disappeared.
-    host.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 110, clientY: 190 }))
+    expect(mouse(host, 'click', 110, 190, 201)).toBe(false)
     const input = document.querySelector<HTMLTextAreaElement>('[aria-label="修改要求"]')!
     expect(input).not.toBeNull()
     const panel = input.closest<HTMLElement>('.editor-inline-ai')!
     expect(panel.style.top).toBe('130px')
     expect(panel.style.left).toBe('80px')
     expect(panel.style.width).toBe('650px')
-    const repeat = { bubbles: true, cancelable: true, detail: 2, clientX: 113, clientY: 191 }
-    expect(host.dispatchEvent(new PointerEvent('pointerdown', repeat))).toBe(false)
-    expect(host.dispatchEvent(new MouseEvent('click', repeat))).toBe(false)
     expect(input.isConnected).toBe(true)
     expect(document.activeElement).toBe(input)
-    input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
-    host.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    mouse(input, 'pointerdown', 102, 135, 205)
+    mouse(input, 'pointerup', 102, 135, 206)
+    mouse(host, 'click', 102, 135, 206)
     vi.spyOn(panel, 'offsetHeight', 'get').mockReturnValue(44)
     coords.mockReturnValue({ left: 100, right: 100, top: 550, bottom: 570 })
     window.dispatchEvent(new Event('resize'))
     await vi.waitFor(() => expect(panel.style.top).toBe('500px'))
     expect(input.isConnected).toBe(true)
     expect(mounted.toMarkdown()).toBe(formatted)
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    // A real next press near the old toolbar location must reach the editor.
+    expect(mouse(host, 'pointerdown', 113, 191, 220)).toBe(true)
+    expect(mouse(host, 'click', 113, 191, 221)).toBe(true)
+    expect(input.isConnected).toBe(false)
 
     open()
     menu().querySelector<HTMLButtonElement>('[aria-label="斜体"]')!.click()

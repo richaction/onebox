@@ -3,9 +3,7 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-j
 import { aiRevisionDiff, decodeAiAnswer } from '../core/aiAnswer'
 import { aiReferenceRange, applyAiRevision, clearAiSource, previewAiChanges, type AiReference, type AiRevision } from '../core/aiDocument'
 import { ai, type AiEvent } from '../io/ai'
-import { reachesDragThreshold } from '../core/buttonClickTolerance'
-
-export type OpeningClick = Pick<MouseEvent, 'clientX' | 'clientY' | 'timeStamp'>
+import { isClickFromRelease } from '../core/buttonClickTolerance'
 type EditJob = { thread?: string; turn?: string; chunks: Map<string, string>; final?: string }
 
 const actionPaths = {
@@ -25,7 +23,6 @@ function ActionIcon(props: { name: keyof typeof actionPaths }) {
 export default function InlineAiEditor(props: {
   editor: Editor
   reference: AiReference & { anchor: number }
-  openingClick?: OpeningClick
   scrollRoot: HTMLElement
   close: (restoreFocus: boolean) => void
 }) {
@@ -223,36 +220,32 @@ export default function InlineAiEditor(props: {
     props.scrollRoot.addEventListener('scroll', schedule, true)
     window.addEventListener('resize', schedule)
     const doc = panel.ownerDocument
-    let pressedInside = false
-    let openingClick = props.openingClick
-    let repeat = false
-    const closeOutside = (event: MouseEvent) => {
-      if (event.button !== 0) return
+    let insidePointer: number | undefined
+    let insideRelease: PointerEvent | undefined
+    const press = (event: PointerEvent) => {
+      if (event.defaultPrevented || !event.isPrimary || event.button !== 0) return
       const inside = event.composedPath().includes(panel)
-      if (event.type === 'pointerdown') {
-        // The menu has moved away. Consume only an immediate second press at the opening point.
-        repeat = !!openingClick && !inside && event.timeStamp - openingClick.timeStamp <= 500 &&
-          !reachesDragThreshold(event.clientX - openingClick.clientX, event.clientY - openingClick.clientY)
-        openingClick = undefined
-        pressedInside = inside
-        if (repeat) { event.preventDefault(); event.stopPropagation(); return }
-        if (!inside && !inPlace()) props.close(false)
-        return
-      }
-      if (repeat && event.detail > 0) {
-        repeat = false
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
+      insidePointer = inside ? event.pointerId : undefined
+      insideRelease = undefined
+      if (!inside && !inPlace()) props.close(false)
+    }
+    const release = (event: PointerEvent) => {
+      if (event.pointerId !== insidePointer) return
+      insidePointer = undefined
+      insideRelease = event.type === 'pointerup' ? event : undefined
+    }
+    const click = (event: MouseEvent) => {
+      if (event.button !== 0) return
       // A press on the panel border can end with a native click on a common ancestor.
-      if (inside || (event.detail > 0 && pressedInside)) return
+      if (event.composedPath().includes(panel) || (insideRelease && isClickFromRelease(event, insideRelease))) return
       // Removing the in-document diff can reflow the text under the pointer.
       clearTimeout(outsideClose)
       outsideClose = setTimeout(() => props.close(false), 0)
     }
-    doc.addEventListener('pointerdown', closeOutside, true)
-    doc.addEventListener('click', closeOutside, true)
+    doc.addEventListener('pointerdown', press, true)
+    doc.addEventListener('pointerup', release, true)
+    doc.addEventListener('pointercancel', release, true)
+    doc.addEventListener('click', click, true)
     position()
     const previousFocus = doc.activeElement
     input.focus({ preventScroll: true })
@@ -272,8 +265,10 @@ export default function InlineAiEditor(props: {
       props.editor.off('transaction', schedule)
       props.scrollRoot.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
-      doc.removeEventListener('pointerdown', closeOutside, true)
-      doc.removeEventListener('click', closeOutside, true)
+      doc.removeEventListener('pointerdown', press, true)
+      doc.removeEventListener('pointerup', release, true)
+      doc.removeEventListener('pointercancel', release, true)
+      doc.removeEventListener('click', click, true)
     })
   })
 

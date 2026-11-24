@@ -34,7 +34,7 @@ export function trackMenuPress(document: Document, onCancel: (menu: HTMLElement)
   return {
     start(event: PointerEvent, menu: HTMLElement | undefined) {
       clear()
-      if (menu && event.button === 0) press = { menu, pointer: event.pointerId, released: false }
+      if (menu && event.button === 0 && !event.defaultPrevented) press = { menu, pointer: event.pointerId, released: false }
     },
     active(menu: HTMLElement | undefined) { return !!press && press.menu === menu },
     clear,

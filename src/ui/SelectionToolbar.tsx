@@ -51,7 +51,7 @@ export default function SelectionToolbar(props: {
   maxHeight: number
   ref: (element: HTMLDivElement) => void
   onClose: () => void
-  onAiEdit?: (event: MouseEvent) => boolean
+  onAiEdit?: () => boolean
 }) {
   const [panel, setPanel] = createSignal<Panel>('main')
   const [linkError, setLinkError] = createSignal(false)
@@ -202,8 +202,8 @@ export default function SelectionToolbar(props: {
     </Switch></div>
     <Show when={props.onAiEdit}>
       <Show when={aiError()}><p class="selection-toolbar-error" role="status">该选区没有可供 AI 编辑的内容</p></Show>
-      <button type="button" class="selection-toolbar-row selection-toolbar-ai" onClick={(event) => {
-        if (!valid() || !props.onAiEdit?.(event)) setAiError(true)
+      <button type="button" class="selection-toolbar-row selection-toolbar-ai" onClick={() => {
+        if (!valid() || !props.onAiEdit?.()) setAiError(true)
       }}><span aria-hidden="true">✨</span>使用 AI 编辑</button>
     </Show>
   </div>

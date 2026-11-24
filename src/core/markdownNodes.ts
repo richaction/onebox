@@ -64,7 +64,6 @@ export const MarkdownListItem = ListItem.extend({
         'aria-label': '完成任务',
         'aria-checked': String(node.attrs.checked),
         'data-task-toggle': '',
-        'data-recover-reordered-tap': '',
       }],
       ['div', 0],
     ]
