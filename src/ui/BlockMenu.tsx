@@ -105,6 +105,7 @@ export default function BlockMenu(props: {
                   tabIndex={-1}
                   id={`${props.id}-${index()}`}
                   data-index={index()}
+                  data-activate-on-release
                   aria-selected={index() === props.active}
                   classList={{ 'block-menu-item': true, highlighted: index() === props.active }}
                   onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlight(index()) }}
@@ -119,7 +120,7 @@ export default function BlockMenu(props: {
           </For>
         </div>
         <footer class="block-menu-footer">
-          <button type="button" tabIndex={-1} onClick={props.onClose}>关闭菜单 <kbd>Esc</kbd></button>
+          <button type="button" tabIndex={-1} data-activate-on-release onClick={props.onClose}>关闭菜单 <kbd>Esc</kbd></button>
         </footer>
       </div>
       <Show when={layout().preview ? activeItem()?.preview : undefined}>

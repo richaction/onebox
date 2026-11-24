@@ -2145,6 +2145,8 @@ img.ProseMirror-selectednode {
 .block-menu-popup {
   position: fixed;
   z-index: 800;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .block-menu,
@@ -2213,6 +2215,11 @@ img.ProseMirror-selectednode {
   font: inherit;
   text-align: start;
   cursor: pointer;
+}
+
+.block-menu-item > *,
+.block-menu-footer button > * {
+  pointer-events: none;
 }
 
 .block-menu-item.highlighted,

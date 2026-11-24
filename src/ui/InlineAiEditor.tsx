@@ -289,7 +289,7 @@ export default function InlineAiEditor(props: {
     clearAiSource(props.editor, props.reference.anchor)
   })
 
-  return <section class="editor-inline-ai" aria-label="在正文中使用 AI 编辑" ref={panel}
+  return <section class="editor-inline-ai" aria-label="在正文中使用 AI 编辑" ref={panel} data-activate-on-release
     style={{
       left: `${layout()?.left ?? 0}px`, top: `${layout()?.top ?? 0}px`, width: `${layout()?.width ?? 0}px`,
       visibility: layout() ? 'visible' : 'hidden',

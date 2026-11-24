@@ -8,6 +8,7 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
   const trigger = document.createElement('button')
   trigger.type = 'button'
   trigger.className = 'code-language'
+  trigger.dataset.activateOnRelease = ''
   trigger.dataset.languageId = current.id
   trigger.textContent = current.label
   trigger.setAttribute('aria-label', '代码语言：' + current.label)
@@ -29,6 +30,7 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
     if (trigger.disabled || popup) return
     const menu = document.createElement('div')
     menu.className = 'code-language-menu'
+    menu.dataset.activateOnRelease = ''
     const search = document.createElement('input')
     search.type = 'search'
     search.placeholder = '搜索语言…'

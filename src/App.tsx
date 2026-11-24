@@ -1127,7 +1127,7 @@ export default function App() {
         <header class="window-bar" classList={{ 'window-bar-mac': mac }} inert={selectionFilePreviewOpen()}
           style={{ '--traffic-light-center': titleBarButtonCenter() }}>
           <div class="window-drag-region" data-tauri-drag-region="" aria-hidden="true" />
-          <button type="button" class="sidebar-toggle" ref={sidebarToggle}
+          <button type="button" class="sidebar-toggle" ref={sidebarToggle} data-activate-on-release
             aria-label={sidebarLabel()} aria-expanded={sidebarVisible()} aria-controls="workspace-sidebar"
             title={`${sidebarLabel()}（${mac ? '⌘' : 'Ctrl+'}\\）`} onClick={toggleSidebar}>
             <span class="sidebar-toggle-symbol" aria-hidden="true" />
@@ -1157,7 +1157,7 @@ export default function App() {
                     <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
                     <Show when={desktop}>
                       <div class="file-preview-actions ai-toggle-slot">
-                        <button type="button" class="ai-toggle" ref={aiToggle} aria-expanded={aiOpen()}
+                        <button type="button" class="ai-toggle" ref={aiToggle} data-activate-on-release aria-expanded={aiOpen()}
                           aria-label="AI 侧栏"
                           aria-controls="onebox-ai-sidebar"
                           onClick={() => aiOpen() ? closeAi() : openAi()}>

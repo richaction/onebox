@@ -102,7 +102,7 @@ function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; clos
     })
   })
   return (
-    <div class="workspace-context-menu" ref={menu} popover="manual" role="menu" aria-label="文件操作"
+    <div class="workspace-context-menu" ref={menu} popover="manual" role="menu" aria-label="文件操作" data-activate-on-release
       onContextMenu={(event) => { event.preventDefault(); event.stopPropagation() }}
       onKeyDown={(event) => {
         if (event.key === 'Escape' || event.key === 'Tab') {
@@ -921,6 +921,7 @@ export default function WorkspaceSidebar(props: {
                 <button
                   type="button"
                   class="workspace-row-button"
+                  data-recover-reordered-tap
                   title={props.displayName?.(entry) ?? entry.name}
                   disabled={entry.accessible === false}
                   aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
@@ -955,7 +956,7 @@ export default function WorkspaceSidebar(props: {
               </Show>
               <Show when={entry.accessible !== false}>
                 <button
-                  type="button" class="workspace-row-action" title="更多操作" aria-haspopup="menu"
+                  type="button" class="workspace-row-action" title="更多操作" aria-haspopup="menu" data-activate-on-release
                   aria-label={`${entry.name} 的操作`} onClick={(event) => showContext(event, entry)}
                 />
               </Show>
@@ -1082,7 +1083,7 @@ export default function WorkspaceSidebar(props: {
         <Show when={root}><span class="workspace-entry-icon is-folder is-folder-open" aria-hidden="true" /></Show>
         <strong title={root || undefined}>{root ? nameOf(root) : '工作区'}</strong>
         <ClipboardHint path={root || props.active || ''} />
-        <button type="button" class="workspace-more" aria-label="工作区操作" aria-haspopup="menu"
+        <button type="button" class="workspace-more" aria-label="工作区操作" aria-haspopup="menu" data-activate-on-release
           disabled={moving() || props.restoring} onClick={(event) => showContext(event)}>⋯</button>
       </div>
       <Show when={root} fallback={

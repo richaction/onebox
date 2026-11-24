@@ -608,7 +608,7 @@ export default function AiSidebar(props: {
   })
 
   return (
-    <aside id="onebox-ai-sidebar" class="ai-sidebar" classList={{ 'ai-sidebar-resizing': resizingSidebar() }}
+    <aside id="onebox-ai-sidebar" class="ai-sidebar" data-activate-on-release classList={{ 'ai-sidebar-resizing': resizingSidebar() }}
       aria-label="Onebox AI" hidden={!props.open} style={{ '--ai-preferred-width': `${sidebarWidth()}px` }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return
@@ -634,9 +634,6 @@ export default function AiSidebar(props: {
           onDismiss={() => { if (menu() === 'conversations') setMenu(undefined) }}
           onSelect={(id) => { setMenu(undefined); if (id === conversationId()) composer?.focus({ preventScroll: true }); else switchConversation(id) }} />
         <button class="ai-subtle" type="button" title="新会话" aria-label="新会话" disabled={working()} onClick={startConversation}>＋</button>
-        <button class="ai-subtle" type="button" title="收起对话" aria-label="收起对话" onClick={props.onClose}>
-          <span class="ai-toggle-collapse" aria-hidden="true" />
-        </button>
       </header>
 
       <Show when={props.loading}><div class="ai-document-loading" role="status">正在载入文档…</div></Show>

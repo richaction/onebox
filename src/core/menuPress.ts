@@ -21,7 +21,7 @@ export function trackMenuPress(document: Document, onCancel: (menu: HTMLElement)
   }
 
   function click(event: MouseEvent) {
-    if (!press?.released || !event.composedPath().includes(press.menu)) return
+    if (!press || !event.composedPath().includes(press.menu)) return
     clearTimeout(timeout)
     // Keep the command's target stable through the click's default action as well.
     timeout = setTimeout(clear, 0)

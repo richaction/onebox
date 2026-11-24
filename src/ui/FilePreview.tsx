@@ -158,7 +158,7 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
 
   return (
     <section class="file-preview" aria-label="文件预览">
-      <header class="file-preview-toolbar">
+      <header class="file-preview-toolbar" data-activate-on-release>
         <FileName name={props.entry?.name ?? ''} edit={props.titleEdit} />
         <div class="file-save-hint" role="status">{props.saveHint}</div>
         <div class="file-preview-actions">

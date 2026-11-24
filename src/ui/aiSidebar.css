@@ -20,6 +20,12 @@
   inline-size: var(--ai-toggle-width);
   block-size: var(--ai-toggle-height);
 }
+.editor-document .ai-toggle-slot > .ai-toggle {
+  position: absolute;
+  inset-block-start: calc((var(--pane-header-height) - var(--ai-toggle-height) - 1px) / 2);
+  inset-inline-end: var(--file-toolbar-inset);
+  z-index: 4;
+}
 .file-preview-toolbar .ai-toggle {
   display: inline-flex;
   align-items: center;
@@ -50,25 +56,6 @@
   font: 13px/1 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   pointer-events: none;
 }
-.ai-toggle-collapse {
-  position: relative;
-  inline-size: 16px;
-  block-size: 14px;
-  pointer-events: none;
-}
-.ai-toggle-collapse::before,
-.ai-toggle-collapse::after {
-  position: absolute;
-  inset-block-start: 3px;
-  inset-inline-start: 0;
-  inline-size: 7px;
-  block-size: 7px;
-  border: solid currentColor;
-  border-width: 0 1.5px 1.5px 0;
-  transform: rotate(-45deg);
-  content: '';
-}
-.ai-toggle-collapse::after { inset-inline-start: 6px; }
 
 .ai-sidebar {
   --ai-accent: light-dark(#315588, #acc7f5);
@@ -103,7 +90,8 @@
   }
 }
 
-.ai-sidebar button { font: inherit; cursor: pointer; }
+.ai-sidebar button { font: inherit; cursor: pointer; user-select: none; -webkit-user-select: none; }
+.ai-sidebar button > * { pointer-events: none; }
 .ai-sidebar button:disabled { cursor: default; opacity: 0.48; }
 .ai-sidebar-header {
   position: relative;
@@ -114,6 +102,11 @@
   padding: 6px 12px 6px 16px;
   gap: 4px;
   border-block-end: 1px solid var(--ob-border);
+}
+@container editor-document (width >= 660px) {
+  .ai-sidebar-header {
+    padding-inline-end: calc(2 * var(--file-toolbar-inset) + var(--ai-toggle-width));
+  }
 }
 .ai-conversations {
   flex: 0 1 auto;

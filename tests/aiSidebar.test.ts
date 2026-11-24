@@ -179,7 +179,10 @@ it('opens composer menus while a document loads', () => {
     usage.click()
     expect(host.querySelector('.ai-usage-popup')).not.toBeNull()
     expect(host.querySelector<HTMLButtonElement>('[aria-label="发送"]')?.disabled).toBe(true)
-    host.querySelector<HTMLButtonElement>('[aria-label="收起对话"]')!.click()
+    const sidebar = host.querySelector<HTMLElement>('[aria-label="Onebox AI"]')!
+    sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(host.querySelector('.ai-usage-popup')).toBeNull()
+    sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(onClose).toHaveBeenCalledTimes(1)
   } finally {
     dispose()
