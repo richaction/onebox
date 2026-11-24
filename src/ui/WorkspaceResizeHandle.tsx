@@ -28,13 +28,8 @@ export default function WorkspaceResizeHandle(props: {
   const limit = () => Math.max(minimum, Math.min(maximum, window.innerWidth - 360))
   const [available, setAvailable] = createSignal(limit())
   const current = () => Math.min(props.width, available())
+  let handle!: HTMLDivElement
   let drag: { id: number; x: number; width: number } | undefined
-
-  onMount(() => {
-    const resize = () => setAvailable(limit())
-    window.addEventListener('resize', resize)
-    onCleanup(() => window.removeEventListener('resize', resize))
-  })
 
   const remember = (width: number) => {
     try { localStorage.setItem(settings.key, String(width)) } catch { /* Keep the session width. */ }
@@ -46,15 +41,41 @@ export default function WorkspaceResizeHandle(props: {
   }
   const stopDragging = () => {
     if (!drag) return
+    const { id } = drag
     drag = undefined
+    if (handle.hasPointerCapture(id)) handle.releasePointerCapture(id)
     props.onResize(false)
     remember(props.width)
   }
   const finish = (event: PointerEvent) => { if (drag?.id === event.pointerId) stopDragging() }
-  onCleanup(stopDragging)
+  const resizeFromPointer = (event: PointerEvent) => {
+    if (drag?.id === event.pointerId) change(drag.width + (event.clientX - drag.x) * direction)
+  }
+  const release = (event: PointerEvent) => {
+    resizeFromPointer(event)
+    finish(event)
+  }
+
+  onMount(() => {
+    const resize = () => setAvailable(limit())
+    window.addEventListener('resize', resize)
+    // A release or the next press can reach the window without hitting the handle.
+    window.addEventListener('pointerup', release, true)
+    window.addEventListener('pointercancel', finish, true)
+    window.addEventListener('pointerdown', finish, true)
+    window.addEventListener('blur', stopDragging)
+    onCleanup(() => {
+      stopDragging()
+      window.removeEventListener('resize', resize)
+      window.removeEventListener('pointerup', release, true)
+      window.removeEventListener('pointercancel', finish, true)
+      window.removeEventListener('pointerdown', finish, true)
+      window.removeEventListener('blur', stopDragging)
+    })
+  })
 
   return (
-    <div class={`sidebar-resize-handle ${props.sidebar}-resize-handle`} role="separator" aria-label={settings.label}
+    <div ref={handle} class={`sidebar-resize-handle ${props.sidebar}-resize-handle`} role="separator" aria-label={settings.label}
       aria-orientation="vertical" aria-controls={settings.controls} tabIndex={0}
       aria-valuemin={minimum} aria-valuemax={available()} aria-valuenow={current()}
       onPointerDown={(event) => {
@@ -64,10 +85,8 @@ export default function WorkspaceResizeHandle(props: {
         event.currentTarget.setPointerCapture(event.pointerId)
         props.onResize(true)
       }}
-      onPointerMove={(event) => {
-        if (drag?.id === event.pointerId) change(drag.width + (event.clientX - drag.x) * direction)
-      }}
-      onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}
+      onPointerMove={resizeFromPointer}
+      onLostPointerCapture={finish}
       onKeyDown={(event) => {
         const width = event.key === 'ArrowLeft' ? current() - 16 * direction
           : event.key === 'ArrowRight' ? current() + 16 * direction

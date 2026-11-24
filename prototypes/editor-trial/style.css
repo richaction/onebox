@@ -1,0 +1,74 @@
+:root {
+  color: #242820;
+  background: #f5f5f1;
+  font: 15px/1.55 system-ui, "PingFang SC", sans-serif;
+  --line: #dedfd7;
+}
+
+body { margin: 0; }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--line);
+  background: #fafaf7;
+}
+
+.topbar-inner, main { max-width: 1056px; margin-inline: auto; padding-inline: 24px; }
+.topbar-inner, .trial-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.topbar-inner { min-height: 66px; padding-block: 10px; box-sizing: border-box; }
+.topbar h1 { margin: 0; font-size: 20px; font-weight: 650; }
+.choices { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; }
+
+.choices > button, #compare {
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.choices > button { border-color: transparent; background: transparent; }
+.choices > button[aria-pressed="true"] { color: #244b32; background: #e3ede2; }
+#compare:disabled { opacity: 0.55; cursor: default; }
+main { padding-block: 23px 32px; }
+.trial-bar { margin-bottom: 14px; }
+.trial-bar p { margin: 3px 0 0; color: #60655b; }
+#status:empty { display: none; }
+#status, #comparison-status { color: #50574b; }
+
+.editor-card, .comparison {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-inline-size: 0;
+}
+
+[data-editor-slot] { position: relative; }
+[data-editor-slot][hidden] { display: none; }
+#blocksuite > page-editor { display: block; height: 68vh; min-height: 480px; }
+#crepe .milkdown { min-height: 480px; padding-block: 20px 36px; border-radius: inherit; }
+.comparison { margin-top: 16px; padding: 16px; }
+#comparison-status { margin: 0 0 10px; }
+.markdown-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.markdown-columns label { display: grid; gap: 5px; }
+.markdown-columns textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 260px;
+  padding: 10px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  background: #fafaf8;
+  font: 12px/1.55 ui-monospace, monospace;
+}
+
+@media (max-width: 640px) {
+  .topbar-inner, main { padding-inline: 12px; }
+  .markdown-columns { grid-template-columns: 1fr; }
+}

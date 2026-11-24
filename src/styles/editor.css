@@ -81,17 +81,12 @@ body {
   --sidebar-min-width: 180px;
   --sidebar-width-limit: min(460px, calc(100vw - 360px));
   --workspace-width: clamp(var(--sidebar-min-width), var(--workspace-preferred-width, 252px), var(--sidebar-width-limit));
-  --workspace-reveal: 0px;
   --sidebar-transition: 220ms cubic-bezier(0.2, 0.75, 0.25, 1);
   display: flex;
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
   background: var(--ob-bg);
-}
-
-.app.workspace-open {
-  --workspace-reveal: var(--workspace-width);
 }
 
 /* ---------------------------------------------------------------- app 外壳 */
@@ -102,6 +97,7 @@ body {
   display: flex;
   min-height: 0;
   flex: 1;
+  overflow: clip;
 }
 
 .window-bar {
@@ -193,8 +189,13 @@ body {
   display: flex;
   flex: none;
   min-inline-size: 0;
-  inline-size: var(--workspace-reveal);
-  overflow: clip;
+  inline-size: var(--workspace-width);
+  margin-inline-start: calc(0px - var(--workspace-width));
+  transition: margin-inline-start var(--sidebar-transition);
+}
+
+.workspace-open .workspace-slot {
+  margin-inline-start: 0;
 }
 
 .workspace-slot[inert]::after {
@@ -213,7 +214,7 @@ body {
   cursor: col-resize;
   touch-action: none;
 }
-.workspace-resize-handle { inset-inline-start: calc(var(--workspace-width) - 4px); }
+.workspace-resize-handle { inset-inline-end: -4px; }
 
 .sidebar-resize-handle::after {
   position: absolute;
@@ -239,16 +240,12 @@ body {
 .workspace {
   position: relative;
   flex: none;
-  width: var(--workspace-width);
+  width: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--ob-border);
   background: var(--ob-bg-sidebar);
-}
-
-.workspace[inert] {
-  opacity: 0;
 }
 
 .workspace-title {
@@ -1552,7 +1549,9 @@ body {
   color: var(--ob-text);
 }
 
-.ProseMirror :is(.onebox-block, .onebox-block-content).ProseMirror-selectednode {
+.ProseMirror :is(.onebox-block, .onebox-block-content).ProseMirror-selectednode,
+.ProseMirror .viewport-group > .ProseMirror-selectednode,
+.ProseMirror [data-block-range-selected] {
   background: var(--ob-selection);
   border-radius: 4px;
 }
@@ -1570,8 +1569,8 @@ body {
   box-shadow: -1.45em 0 var(--ob-selection);
 }
 
-.editor-mount .ProseMirror[data-list-text-highlights]::selection,
-.editor-mount .ProseMirror[data-list-text-highlights] *::selection {
+.editor-mount .ProseMirror:is([data-block-selection], [data-list-text-highlights])::selection,
+.editor-mount .ProseMirror:is([data-block-selection], [data-list-text-highlights]) *::selection {
   background-color: transparent;
 }
 .ProseMirror ::highlight(onebox-list-text) { background-color: var(--ob-selection); }
@@ -2047,8 +2046,10 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 
   .workspace-slot {
     width: 100%;
+    margin-inline-start: 0;
     display: grid;
     grid-template-rows: 0fr;
+    overflow: clip;
     transition: grid-template-rows var(--sidebar-transition);
   }
 

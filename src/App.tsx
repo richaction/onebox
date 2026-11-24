@@ -50,6 +50,7 @@ export default function App() {
   const desktop = isTauri()
   const mac = desktop && /Mac OS X/u.test(navigator.userAgent)
   let handle: EditorHandle | undefined
+  let workspaceSlot: HTMLDivElement | undefined
   let sidebarToggle: HTMLButtonElement | undefined
   let aiToggle: HTMLButtonElement | undefined
   const aiHistoryByDocument = new Map<string, AiConversationHistory>()
@@ -117,7 +118,7 @@ export default function App() {
   })
   const sidebarLabel = () => sidebarVisible() ? '关闭侧栏' : '打开侧栏'
   const toggleSidebar = () => {
-    if (sidebarVisible() && document.getElementById('workspace-sidebar')?.contains(document.activeElement)) {
+    if (sidebarVisible() && workspaceSlot?.contains(document.activeElement)) {
       sidebarToggle?.focus({ preventScroll: true })
     }
     setSidebarVisible((visible) => !visible)
@@ -134,7 +135,9 @@ export default function App() {
   }
   const closeAi = () => {
     setAiOpen(false)
-    aiToggle?.focus({ preventScroll: true })
+    queueMicrotask(() => {
+      if (!aiOpen() && aiToggle?.isConnected) aiToggle.focus({ preventScroll: true })
+    })
   }
   const aiHistory = (file: string) => {
     const previous = aiHistoryByDocument.get(file)
@@ -1136,14 +1139,14 @@ export default function App() {
       </Show>
       <div class="editor-layout">
         <Show when={desktop}>
-          <div class="workspace-slot" inert={selectionFilePreviewOpen()}>
+          <div class="workspace-slot" ref={workspaceSlot} inert={selectionFilePreviewOpen()}>
             <Show when={workspace()} keyed fallback={renderSidebar()}>
               {(current) => renderSidebar(current)}
             </Show>
+            <Show when={sidebarVisible() && !selectionFilePreviewOpen()}>
+              <WorkspaceResizeHandle sidebar="workspace" width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
+            </Show>
           </div>
-        </Show>
-        <Show when={desktop && sidebarVisible() && !selectionFilePreviewOpen()}>
-          <WorkspaceResizeHandle sidebar="workspace" width={sidebarWidth()} onWidth={setSidebarWidth} onResize={setResizingSidebar} />
         </Show>
         <div class="editor-content">
           <div class="editor-current-content" inert={!!selectionPreview()}
@@ -1155,12 +1158,12 @@ export default function App() {
                   <header class="file-preview-toolbar">
                     <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
                     <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
-                    <Show when={desktop}>
+                    <Show when={desktop && !aiOpen()}>
                       <div class="file-preview-actions ai-toggle-slot">
-                        <button type="button" class="ai-toggle" ref={aiToggle} data-activate-on-release aria-expanded={aiOpen()}
+                        <button type="button" class="ai-toggle" ref={aiToggle} data-activate-on-release aria-expanded="false"
                           aria-label="AI 侧栏"
                           aria-controls="onebox-ai-sidebar"
-                          onClick={() => aiOpen() ? closeAi() : openAi()}>
+                          onClick={() => openAi()}>
                           <span class="ai-toggle-spark" aria-hidden="true">✨</span>AI
                         </button>
                       </div>

@@ -1,0 +1,22 @@
+{
+  "name": "onebox-editor-trial",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4178 --strictPort"
+  },
+  "dependencies": {
+    "@blocksuite/blocks": "0.19.5",
+    "@blocksuite/presets": "0.19.5",
+    "@blocksuite/store": "0.19.5",
+    "@milkdown/crepe": "7.23.0",
+    "@toeverything/theme": "1.1.1"
+  },
+  "overrides": {
+    "@blocksuite/icons": "2.1.75"
+  },
+  "devDependencies": {
+    "vite": "8.3.8"
+  }
+}

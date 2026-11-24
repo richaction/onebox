@@ -33,14 +33,17 @@ export function continueAfterBlock(view: EditorView, pos: number) {
   return true
 }
 
-export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
+function isGutterPress(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
   if (!view.editable || view.composing || event.defaultPrevented || event.button !== 0 ||
-    event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return
+    event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return false
   const target = event.target
-  if (!(target instanceof HTMLElement) ||
-    (target !== scrollRoot && target !== view.dom.parentElement && target !== view.dom &&
-      !target.matches('.onebox-block, .viewport-group'))) return
+  return target instanceof HTMLElement &&
+    (target === scrollRoot || target === view.dom.parentElement || target === view.dom ||
+      target.matches('.onebox-block, .viewport-group'))
+}
 
+export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
+  if (!isGutterPress(view, event, scrollRoot)) return
   const bounds = view.dom.getBoundingClientRect()
   const { doc } = view.state
   if (event.clientY >= bounds.bottom) {
@@ -53,20 +56,34 @@ export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRo
   } else if (event.clientY < bounds.top) {
     view.dispatch(view.state.tr.setSelection(Selection.atStart(doc)))
   } else {
-    const selectingBlock = event.clientX < bounds.left
+    const onLeft = event.clientX < bounds.left
     const point = view.posAtCoords({
       // Sample inside the block instead of in the list's indentation.
-      left: selectingBlock ? bounds.left + bounds.width / 2
+      left: onLeft ? bounds.left + bounds.width / 2
         : Math.max(bounds.left + 1, Math.min(event.clientX, bounds.right - 1)),
       top: event.clientY,
     })
     if (!point) return
-    const selection = (selectingBlock ? blockAtGutterPoint(view, event.clientY, point) : undefined)
-      ?? nearestCaret(view, point.pos, event.clientY)
-    view.dispatch(view.state.tr.setSelection(selection))
+    view.dispatch(view.state.tr.setSelection(nearestCaret(view, point.pos, event.clientY)))
   }
   event.preventDefault()
   event.stopPropagation()
+  view.focus()
+}
+
+export function gutterDragAnchor(view: EditorView, event: PointerEvent, scrollRoot: HTMLElement) {
+  if (event.pointerType !== 'mouse' || !isGutterPress(view, event, scrollRoot)) return
+  const bounds = view.dom.getBoundingClientRect()
+  if (event.clientX < bounds.left || event.clientX >= bounds.right) return blockAtGutterPoint(view, event.clientY)
+}
+
+export function selectBlockInGutter(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
+  if (!isGutterPress(view, event, scrollRoot) || event.clientX >= view.dom.getBoundingClientRect().left) return
+  const block = blockAtGutterPoint(view, event.clientY)
+  if (!block) return
+  event.preventDefault()
+  event.stopPropagation()
+  view.dispatch(view.state.tr.setSelection(block))
   view.focus()
 }
 

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Onebox 编辑器试用</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <h1>Onebox 编辑器试用</h1>
+        <div class="choices" role="group" aria-label="候选编辑器">
+          <button type="button" data-engine="blocksuite" aria-pressed="true">BlockSuite</button>
+          <button type="button" data-engine="crepe" aria-pressed="false">Milkdown Crepe</button>
+        </div>
+      </div>
+    </header>
+    <main>
+      <div class="trial-bar">
+        <div>
+          <strong>00 开始测试.md</strong>
+          <p>拖选文字、从页边拖选整块、拖动块手柄，或输入 / 打开插入菜单。试改只在本页生效。</p>
+        </div>
+        <button type="button" id="compare" aria-expanded="false" aria-controls="comparison" disabled>对照 Markdown</button>
+      </div>
+      <p id="status" role="status"></p>
+      <section class="editor-card" aria-label="编辑器样例">
+        <div id="blocksuite" data-editor-slot></div>
+        <div id="crepe" data-editor-slot hidden></div>
+      </section>
+      <section id="comparison" class="comparison" aria-label="Markdown 导入导出对照" hidden>
+        <p id="comparison-status" role="status"></p>
+        <div class="markdown-columns">
+          <label>原文<textarea id="original" readonly spellcheck="false"></textarea></label>
+          <label>当前编辑器导出<textarea id="exported" readonly spellcheck="false"></textarea></label>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

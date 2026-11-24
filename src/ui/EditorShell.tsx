@@ -12,7 +12,7 @@ import {
 import { blockDropTarget, moveBlock } from '../core/blockMove'
 import { isClickFromRelease, reachesDragThreshold } from '../core/buttonClickTolerance'
 import { createEditor, type EditorHandle } from '../core/editor'
-import { ListRowsSelection, listTextSelectionRects } from '../core/listSelection'
+import { listTextSelectionRects } from '../core/listSelection'
 import { trackMenuPress } from '../core/menuPress'
 import BlockMenu from './BlockMenu'
 import InlineAiEditor from './InlineAiEditor'
@@ -142,23 +142,13 @@ export default function EditorShell(props: {
     const view = handle?.editor.view
     if (!view?.editable || !view.hasFocus() || view.composing || inlineEdit() || popup()) return
     const { selection } = view.state
-    if (!(selection instanceof TextSelection || selection instanceof ListRowsSelection ||
-      (selection instanceof NodeSelection && selection.node.isBlock)) || selection.empty) return
+    if (!(selection instanceof TextSelection) || selection.empty) return
     if (selectionMenu()?.selection.eq(selection)) return
     if (!selectionRects?.selection.eq(selection)) {
       const native = window.getSelection()
-      if (selection instanceof TextSelection) {
-        if (!native?.rangeCount || native.isCollapsed || !view.dom.contains(native.anchorNode) ||
-          !view.dom.contains(native.focusNode)) return
-        selectionRects = { selection, rects: listTextSelectionRects(view) ?? Array.from(native.getRangeAt(0).getClientRects()) }
-      } else {
-        const first = view.nodeDOM(selection.from)
-        const last = selection instanceof ListRowsSelection ? view.nodeDOM(selection.last.pos) : first
-        if (!(first instanceof HTMLElement) || !(last instanceof HTMLElement)) return
-        const start = first.getBoundingClientRect()
-        const end = last.getBoundingClientRect()
-        selectionRects = { selection, rects: [new DOMRect(start.left, start.top, start.width, end.bottom - start.top)] }
-      }
+      if (!native?.rangeCount || native.isCollapsed || !view.dom.contains(native.anchorNode) ||
+        !view.dom.contains(native.focusNode)) return
+      selectionRects = { selection, rects: listTextSelectionRects(view) ?? Array.from(native.getRangeAt(0).getClientRects()) }
     }
     const rects = selectionRects.rects.filter((rect) => rect.width > 0)
     if (!rects.length) return
@@ -406,7 +396,9 @@ export default function EditorShell(props: {
       const selection = editor.state.selection
       const selected = menu?.selection ?? selectionRects?.selection
       const selectionInUse = menuPress.active(selectionElement) || selectionElement?.contains(document.activeElement)
-      if (transaction.docChanged && menu && transaction.getMeta(selectionToolbarFormat) && !selection.empty) {
+      if (!(selection instanceof TextSelection)) {
+        resetSelectionMenu()
+      } else if (transaction.docChanged && menu && transaction.getMeta(selectionToolbarFormat) && !selection.empty) {
         selectionRects = undefined
         setSelectionMenu({ ...menu, selection })
       } else if (transaction.docChanged || (selected && !selected.eq(selection) && !selectionInUse)) {

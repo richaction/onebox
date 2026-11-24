@@ -3,6 +3,7 @@ import { createComponent } from 'solid-js'
 import { render } from 'solid-js/web'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blockEditCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
+import { BlockRangeSelection } from '../src/core/blockSelection'
 import { createEditor, type EditorHandle } from '../src/core/editor'
 import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
 import { visibilityKey } from '../src/core/viewport/visibility'
@@ -21,6 +22,12 @@ function mount(onUpdate = vi.fn()) {
   document.body.appendChild(scrollRoot)
   handle = createEditor({ element, scrollRoot, markdown: SAMPLE, onUpdate })
   return { handle, element, onUpdate }
+}
+
+function gutterPointer(target: EventTarget, type: string, clientX: number, clientY: number) {
+  target.dispatchEvent(new PointerEvent(type, {
+    bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, pointerType: 'mouse', clientX, clientY,
+  }))
 }
 
 afterEach(() => {
@@ -329,6 +336,46 @@ it('keeps the toolbar after formatting so AI edit and block conversion can follo
   }
 })
 
+it('keeps the text toolbar hidden for block selections and preserves the explicit context menu', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'first\n\nsecond', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
+  }), host)
+  vi.useFakeTimers()
+  try {
+    const { view } = mounted.editor
+    const scroll = host.querySelector('.editor-scroll')!
+    const toolbar = () => document.querySelector('.editor-selection-menu')
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 280, 220))
+    vi.spyOn(view, 'hasFocus').mockReturnValue(true)
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
+    scroll.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: 15, clientY: 35 }))
+    expect(view.state.selection).toBeInstanceOf(NodeSelection)
+    view.dom.querySelector('p')!.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerType: 'mouse', clientX: 50, clientY: 35,
+    }))
+    scroll.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 15, clientY: 35 }))
+    vi.advanceTimersByTime(40)
+    expect(toolbar()).toBeNull()
+    view.dom.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 50, clientY: 35 }))
+    expect(document.querySelector('.block-menu-popup')).not.toBeNull()
+    expect(view.state.selection).toBeInstanceOf(NodeSelection)
+    expect(toolbar()).toBeNull()
+    const escape = () => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    escape()
+    expect(view.state.selection).toBeInstanceOf(NodeSelection)
+    escape()
+    expect(view.state.selection.empty).toBe(true)
+  } finally {
+    vi.useRealTimers()
+    dispose()
+    host.remove()
+  }
+})
+
 it.each([
   { label: 'paragraph', block: 'first', inside: 0 },
   { label: 'code block', block: '```js\nconsole.log(1)\n```', inside: 0 },
@@ -352,7 +399,7 @@ it.each([
     const lastPos = view.state.doc.content.size - last.nodeSize
     vi.spyOn(view.nodeDOM(lastPos) as HTMLElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 85, 200, 30))
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside })
-    scroll.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 35, bubbles: true }))
+    scroll.dispatchEvent(new MouseEvent('dblclick', { clientX: 15, clientY: 35, bubbles: true }))
     expect(view.state.selection).toBeInstanceOf(NodeSelection)
     const grip = document.querySelector<HTMLButtonElement>('.editor-block-grip')!
     Object.defineProperty(grip, 'setPointerCapture', { value: vi.fn() })
@@ -417,7 +464,7 @@ describe('createEditor', () => {
     expect(onUpdate).not.toHaveBeenCalled()
   })
 
-  it('selects a single task from the left gutter, including in a grouped document', () => {
+  it('selects a single task on gutter double-click, including in a grouped document', () => {
     const { handle, onUpdate } = mount()
     handle.loadBlocks([{
       type: 'bulletList',
@@ -434,10 +481,58 @@ describe('createEditor', () => {
     vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 200))
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: targetPos + 2, inside: targetPos + 1 })
     scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 65, bubbles: true }))
+    expect(view.state.selection).toBeInstanceOf(TextSelection)
+    expect(view.state.selection.empty).toBe(true)
+    scrollRoot!.dispatchEvent(new MouseEvent('dblclick', { clientX: 15, clientY: 65, bubbles: true }))
     const selection = view.state.selection as NodeSelection
     expect(selection).toBeInstanceOf(NodeSelection)
     expect(selection.from).toBe(targetPos)
     expect(selection.node.textContent).toBe('second')
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { grouped: false, reverse: false, gutter: 15 },
+    { grouped: true, reverse: true, gutter: 255 },
+  ])('selects and paints whole document blocks from a gutter drag ($grouped, $reverse)', ({ grouped, reverse, gutter }) => {
+    const { handle, element, onUpdate } = mount()
+    const blocks = Array.from({ length: grouped ? 66 : 3 }, (_, i) => ({
+      type: 'paragraph', content: [{ type: 'text', text: `block ${i}` }],
+    }))
+    handle.loadBlocks(blocks, grouped)
+    const { view } = handle.editor
+    const paragraphs: number[] = []
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'paragraph') paragraphs.push(pos)
+    })
+    const first = grouped ? 63 : 0
+    const last = grouped ? 65 : 2
+    const start = paragraphs[reverse ? last : first]
+    const finish = paragraphs[reverse ? first : last]
+    const startY = reverse ? 95 : 35
+    const endY = reverse ? 35 : 95
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 200))
+    const point = vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: start + 2, inside: start })
+    gutterPointer(scrollRoot!, 'pointerdown', gutter, startY)
+    scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: gutter, clientY: startY, bubbles: true, cancelable: true }))
+    gutterPointer(window, 'pointermove', gutter, startY + 3)
+    expect(view.state.selection.empty).toBe(true)
+    point.mockReturnValue({ pos: finish + 2, inside: finish })
+    gutterPointer(window, 'pointermove', gutter, endY)
+    expect(view.state.selection).toBeInstanceOf(BlockRangeSelection)
+    gutterPointer(window, 'pointerup', gutter, endY)
+    const selection = view.state.selection
+    expect(selection).toBeInstanceOf(BlockRangeSelection)
+    expect(selection.from).toBe(paragraphs[first])
+    expect(Array.from(element.querySelectorAll('[data-block-range-selected]'), (node) => node.textContent))
+      .toEqual(blocks.slice(first, last + 1).map((block) => block.content[0].text))
+    expect(selection.content().content.textBetween(0, selection.content().content.size, '\n'))
+      .toBe(blocks.slice(first, last + 1).map((block) => block.content[0].text).join('\n'))
+    view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(view.state.selection).toBeInstanceOf(TextSelection)
+    expect(view.state.selection.empty).toBe(true)
+    expect(view.state.selection.from).toBe(paragraphs[first] + 1)
+    expect(element.querySelector('[data-block-range-selected]')).toBeNull()
     expect(onUpdate).not.toHaveBeenCalled()
   })
 
@@ -464,10 +559,11 @@ describe('createEditor', () => {
     const rows = () => Array.from(element.querySelectorAll('li[data-list-row-selected]'), (item) => item.textContent)
     vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 200))
     const point = vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: items[0] + 2, inside: items[0] })
+    gutterPointer(scrollRoot!, 'pointerdown', 15, 35)
     scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 35, bubbles: true, cancelable: true }))
     point.mockReturnValue({ pos: items[2] + 3, inside: items[2] })
-    document.dispatchEvent(new MouseEvent('mousemove', { buttons: 1, clientX: 15, clientY: 95, bubbles: true }))
-    document.dispatchEvent(new MouseEvent('mouseup', { clientX: 15, clientY: 95, bubbles: true }))
+    gutterPointer(window, 'pointermove', 15, 95)
+    gutterPointer(window, 'pointerup', 15, 95)
     expect(view.state.selection).toBeInstanceOf(ListRowsSelection)
     expect(rows()).toEqual(['first', 'second', 'third'])
     const third = view.dom.querySelectorAll('li p')[2]
@@ -542,13 +638,13 @@ describe('createEditor', () => {
   it.each([
     { markdown: '```js\nconsole.log(1)\n```', type: 'codeBlock', inside: 0 },
     { markdown: '$$a+b$$', type: 'paragraph', inside: 1 },
-  ])('selects $markdown as a whole from its left edge', ({ markdown, type, inside }) => {
+  ])('selects $markdown as a whole on a left-edge double-click', ({ markdown, type, inside }) => {
     const { handle } = mount()
     handle.loadMarkdown(`${markdown}\n\nnext`)
     const view = handle.editor.view
     vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 200))
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: view.state.doc.content.size - 2, inside })
-    scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 35, bubbles: true }))
+    scrollRoot!.dispatchEvent(new MouseEvent('dblclick', { clientX: 15, clientY: 35, bubbles: true }))
     const selection = view.state.selection as NodeSelection
     expect(selection).toBeInstanceOf(NodeSelection)
     expect(selection.from).toBe(0)
@@ -607,7 +703,7 @@ describe('createEditor', () => {
     expect(view.state.doc.firstChild?.firstChild?.textContent).toBe('code')
   })
 
-  it('selects the visually nearer block when a left gutter click lands between blocks', () => {
+  it('selects the visually nearer block when a left gutter double-click lands between blocks', () => {
     const { handle } = mount()
     handle.loadMarkdown('first\n\nsecond')
     const view = handle.editor.view
@@ -616,7 +712,7 @@ describe('createEditor', () => {
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: gap, inside: -1 })
     vi.spyOn(view, 'coordsAtPos').mockImplementation((pos) => pos < gap
       ? { left: 50, right: 50, top: 20, bottom: 38 } : { left: 40, right: 40, top: 62, bottom: 80 })
-    scrollRoot!.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 56, bubbles: true }))
+    scrollRoot!.dispatchEvent(new MouseEvent('dblclick', { clientX: 15, clientY: 56, bubbles: true }))
     expect(view.state.selection).toBeInstanceOf(NodeSelection)
     expect((view.state.selection as NodeSelection).node.textContent).toBe('second')
   })

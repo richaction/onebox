@@ -8,6 +8,7 @@
 
 .editor-document {
   container-name: editor-document;
+  overflow: clip;
   --file-toolbar-inset: 12px;
   --ai-toggle-width: 46px;
   --ai-toggle-height: 30px;
@@ -25,7 +26,10 @@
   inset-block-start: calc((var(--pane-header-height) - var(--ai-toggle-height) - 1px) / 2);
   inset-inline-end: var(--file-toolbar-inset);
   z-index: 4;
+  animation: ai-toggle-appear var(--sidebar-transition);
 }
+@keyframes ai-toggle-appear { from { opacity: 0; } }
+
 .file-preview-toolbar .ai-toggle {
   display: inline-flex;
   align-items: center;
@@ -44,9 +48,6 @@
 }
 .file-preview-toolbar .ai-toggle:enabled:hover {
   background: light-dark(#fbfaf8, #242423);
-}
-.file-preview-toolbar .ai-toggle[aria-expanded='true'] {
-  background: var(--ob-bg-hover);
 }
 .file-preview-toolbar .ai-toggle:focus-visible {
   border-color: var(--ob-focus);
@@ -71,23 +72,27 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  margin-inline-end: 0;
+  transition: margin-inline-end var(--sidebar-transition);
   border-inline-start: 1px solid var(--ob-border);
   background: var(--ob-bg);
   color: var(--ob-text);
   font-size: 13px;
 }
-.ai-sidebar[hidden] { display: none; }
+.ai-sidebar[inert] { margin-inline-end: calc(0px - var(--ai-width)); }
 .ai-resize-handle { inset-inline-start: -4px; }
 .ai-resize-handle::after { inset-inline: 3px auto; }
 
 @container editor-document (width < 660px) {
   .ai-sidebar {
+    --ai-overlay-width: min(100%, var(--ai-width));
     position: absolute;
     z-index: 3;
     inset-block: var(--pane-header-height) 0;
     inset-inline-end: 0;
-    width: min(100%, var(--ai-width));
+    width: var(--ai-overlay-width);
   }
+  .ai-sidebar[inert] { margin-inline-end: calc(0px - var(--ai-overlay-width)); }
 }
 
 .ai-sidebar button { font: inherit; cursor: pointer; user-select: none; -webkit-user-select: none; }
@@ -103,11 +108,7 @@
   gap: 4px;
   border-block-end: 1px solid var(--ob-border);
 }
-@container editor-document (width >= 660px) {
-  .ai-sidebar-header {
-    padding-inline-end: calc(2 * var(--file-toolbar-inset) + var(--ai-toggle-width));
-  }
-}
+.ai-sidebar[inert] .ai-sidebar-collapse { visibility: hidden; }
 .ai-conversations {
   flex: 0 1 auto;
   min-inline-size: 0;

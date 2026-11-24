@@ -2,8 +2,66 @@ import { createComponent, createSignal } from 'solid-js'
 import { render } from 'solid-js/web'
 import { expect, it, vi } from 'vitest'
 import WorkspaceSidebar, { type WorkspaceSelection } from '../src/ui/WorkspaceSidebar'
+import WorkspaceResizeHandle from '../src/ui/WorkspaceResizeHandle'
 import FileName from '../src/ui/FileName'
 import { desktopWorkspace } from '../src/io/tauri'
+
+it('ends a sidebar resize when the release misses the handle and lets the other handle drag', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const [workspaceWidth, setWorkspaceWidth] = createSignal(258)
+  const [aiWidth, setAiWidth] = createSignal(306)
+  const workspaceResizing = vi.fn()
+  const aiResizing = vi.fn()
+  const keys = ['onebox:workspace-width', 'onebox:ai-sidebar-width']
+  const saved = keys.map((key) => localStorage.getItem(key))
+  const dispose = render(() => [
+    createComponent(WorkspaceResizeHandle, { sidebar: 'workspace', get width() { return workspaceWidth() },
+      onWidth: setWorkspaceWidth, onResize: workspaceResizing }),
+    createComponent(WorkspaceResizeHandle, { sidebar: 'ai', get width() { return aiWidth() },
+      onWidth: setAiWidth, onResize: aiResizing }),
+  ], host)
+  const [left, right] = host.querySelectorAll('div')
+  for (const handle of [left, right]) {
+    let captured = false
+    Object.assign(handle, {
+      setPointerCapture: () => { captured = true },
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => { captured = false },
+    })
+  }
+  const pointer = (target: EventTarget, type: string, x: number, buttons = 1) =>
+    target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1,
+      pointerType: 'mouse', clientX: x, button: 0, buttons }))
+  try {
+    pointer(left, 'pointerdown', 258)
+    pointer(left, 'pointermove', 278)
+    expect(workspaceWidth()).toBe(278)
+
+    pointer(window, 'pointerup', 280, 0)
+    expect(workspaceResizing.mock.calls.map(([value]) => value)).toEqual([true, false])
+    expect(left.hasPointerCapture(1)).toBe(false)
+    expect(workspaceWidth()).toBe(280)
+
+    pointer(right, 'pointerdown', 718)
+    pointer(right, 'pointermove', 698)
+    expect(aiWidth()).toBe(326)
+    // A second press still ends a resize if the platform never delivered its up.
+    pointer(left, 'pointerdown', 278)
+    pointer(left, 'pointermove', 268)
+    pointer(window, 'pointerup', 268, 0)
+    expect(aiResizing.mock.calls.map(([value]) => value)).toEqual([true, false])
+    expect(right.hasPointerCapture(1)).toBe(false)
+    expect(workspaceWidth()).toBe(270)
+  } finally {
+    dispose()
+    host.remove()
+    for (const [index, key] of keys.entries()) {
+      if (saved[index] === null) localStorage.removeItem(key)
+      else localStorage.setItem(key, saved[index])
+    }
+  }
+})
 
 it('saves the document title after a click moves focus to another control', async () => {
   const host = document.createElement('div')

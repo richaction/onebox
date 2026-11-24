@@ -609,7 +609,7 @@ export default function AiSidebar(props: {
 
   return (
     <aside id="onebox-ai-sidebar" class="ai-sidebar" data-activate-on-release classList={{ 'ai-sidebar-resizing': resizingSidebar() }}
-      aria-label="Onebox AI" hidden={!props.open} style={{ '--ai-preferred-width': `${sidebarWidth()}px` }}
+      aria-label="Onebox AI" inert={!props.open} style={{ '--ai-preferred-width': `${sidebarWidth()}px` }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return
         event.preventDefault()
@@ -634,6 +634,13 @@ export default function AiSidebar(props: {
           onDismiss={() => { if (menu() === 'conversations') setMenu(undefined) }}
           onSelect={(id) => { setMenu(undefined); if (id === conversationId()) composer?.focus({ preventScroll: true }); else switchConversation(id) }} />
         <button class="ai-subtle" type="button" title="新会话" aria-label="新会话" disabled={working()} onClick={startConversation}>＋</button>
+        <button class="ai-subtle ai-sidebar-collapse" type="button" title="收起 AI 侧栏" aria-label="收起 AI 侧栏"
+          onClick={() => props.onClose()}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none"
+            stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m2.5 2.75 5.25 5.25-5.25 5.25m5.5-10.5L13.25 8 8 13.25" />
+          </svg>
+        </button>
       </header>
 
       <Show when={props.loading}><div class="ai-document-loading" role="status">正在载入文档…</div></Show>

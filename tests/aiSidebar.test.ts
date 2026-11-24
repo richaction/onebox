@@ -184,6 +184,8 @@ it('opens composer menus while a document loads', () => {
     expect(host.querySelector('.ai-usage-popup')).toBeNull()
     sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(onClose).toHaveBeenCalledTimes(1)
+    sidebar.querySelector<HTMLButtonElement>('header [aria-label="收起 AI 侧栏"]')!.click()
+    expect(onClose).toHaveBeenCalledTimes(2)
   } finally {
     dispose()
     host.remove()
