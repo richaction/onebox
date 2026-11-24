@@ -9,6 +9,7 @@ import { aiDocumentPlugin, aiInlineSourcePlugin } from './aiDocument'
 import { blockRangeSelectionPlugin, extendBlockSelection, isBlockSelection } from './blockSelection'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
+import { editorImage } from './editorImage'
 import { createCodeHighlight } from './codeHighlight'
 import { developmentSession } from './developmentSession'
 import { blockAtGutterPoint, gutterDragAnchor, placeCaretInGutter, selectBlockInGutter } from './editorCaret'
@@ -104,48 +105,9 @@ export function createEditor(opts: {
   })
   const inlineImage = MarkdownImage.extend({
     addNodeView() {
-      return ({ node }) => {
-        const dom = document.createElement('img')
-        const { src, alt, title } = node.attrs
-        dom.alt = alt
-        if (title) dom.title = title
-        dom.decoding = 'async'
-        let objectUrl: string | undefined
-        let disposed = false
-        let request = 0
-        let previousContext: string | null | undefined
-        const refresh = () => {
-          const context = opts.imageContext?.()
-          if (request > 0 && previousContext === context) return
-          previousContext = context
-          const generation = ++request
-          if (objectUrl) {
-            dom.removeAttribute('src')
-            URL.revokeObjectURL(objectUrl)
-            objectUrl = undefined
-          }
-          void opts.readImage?.(src).then((blob) => {
-            if (!blob || disposed || generation !== request) return
-            objectUrl = URL.createObjectURL(blob)
-            dom.src = objectUrl
-          }).catch(() => {})
-        }
-
-        if (isRelativeResource(src)) {
-          localImages.add(refresh)
-          refresh()
-        } else if (/^https?:\/\//i.test(src)) {
-          dom.src = src
-        }
-        return {
-          dom,
-          destroy() {
-            disposed = true
-            localImages.delete(refresh)
-            if (objectUrl) URL.revokeObjectURL(objectUrl)
-          },
-        }
-      }
+      return ({ node, view, getPos }) => editorImage(node, view, getPos, {
+        read: opts.readImage, context: opts.imageContext, refreshers: localImages,
+      })
     },
   })
   const editor = new Editor({

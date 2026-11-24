@@ -93,6 +93,14 @@ describe('phase two Markdown', () => {
     assertRoundTrip(formatSample)
   })
 
+  it('uses ordinary Markdown images with optional hidden width metadata', () => {
+    const source = '![山雾](assets/mountain.jpg "标题")<!--onebox-image-width:60-->'
+    const { doc, output } = assertRoundTrip(source)
+    expect(doc.firstChild?.firstChild?.attrs).toMatchObject({ widthPercent: 60, title: '标题' })
+    expect(output).toBe(source)
+    expect(parseMarkdown('![山雾](assets/mountain.jpg)', schema).firstChild?.firstChild?.attrs.widthPercent).toBeNull()
+  })
+
   it('keeps aligned GFM tables and pipes inside text and code', () => {
     const { doc, output } = assertRoundTrip('| A | B |\n| :--- | ---: |\n| x\\|y | `a\\|b` |')
     expect(doc.firstChild?.type.name).toBe('table')

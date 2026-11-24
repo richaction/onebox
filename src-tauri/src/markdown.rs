@@ -381,6 +381,24 @@ fn parse_document(source: &str) -> (Vec<Node>, bool) {
                 }
             }
             Event::Rule => node.content.push(Node::plain("horizontalRule")),
+            Event::InlineHtml(raw)
+                if raw.starts_with("<!--onebox-image-width:") && !raw.contains(['\r', '\n']) =>
+            {
+                let width = raw
+                    .strip_prefix("<!--onebox-image-width:")
+                    .and_then(|suffix| suffix.strip_suffix("-->"))
+                    .filter(|value| value.len() <= 3 && value.bytes().all(|byte| byte.is_ascii_digit()))
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|value| (20..=100).contains(value));
+                let inline = node.inline_parent();
+                if let (Some(width), Some(image)) = (width, inline.content.last_mut().filter(|item| item.kind == "image")) {
+                    if image.attrs["widthPercent"].is_null() {
+                        image.attrs["widthPercent"] = json!(width);
+                        continue;
+                    }
+                }
+                inline.push_text(&raw, &marks);
+            }
             Event::InlineHtml(raw) if inline_format(&raw).is_some() => {
                 let (kind, closing) = inline_format(&raw).unwrap();
                 if !closing {
@@ -487,6 +505,19 @@ pub(crate) fn release_document(pending: State<'_, Mutex<PendingDocument>>, id: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_image_width_without_changing_its_markdown_reference() {
+        let (blocks, readonly) =
+            parse_document(r#"![山雾](assets/mountain.jpg "标题")<!--onebox-image-width:60-->"#);
+        assert!(!readonly);
+        let image = &blocks[0].content[0];
+        assert_eq!(image.kind, "image");
+        assert_eq!(image.attrs["src"], "assets/mountain.jpg");
+        assert_eq!(image.attrs["title"], "标题");
+        assert_eq!(image.attrs["widthPercent"], 60);
+        assert_eq!(blocks[0].content.len(), 1);
+    }
 
     #[test]
     fn full_format_sample_opens_as_editable_markdown() {

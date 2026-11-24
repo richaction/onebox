@@ -2,7 +2,7 @@ import { NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { createComponent } from 'solid-js'
 import { render } from 'solid-js/web'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { blockEditCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
+import { blockEditCommands, diagramCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
 import { BlockRangeSelection } from '../src/core/blockSelection'
 import { createEditor, type EditorHandle } from '../src/core/editor'
 import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
@@ -222,6 +222,34 @@ it('keeps a block-menu item mounted and applies it to the block where the menu o
   }
 })
 
+it('identifies the current heading independently of right-click menu navigation', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: '### 标题', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
+  }), host)
+  try {
+    const { view } = mounted.editor
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
+    view.dom.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }))
+    const headings = Array.from(document.querySelectorAll('[role="option"]'))
+      .filter((option) => /^H[1-6]/u.test(option.textContent ?? ''))
+    expect(headings.map((option) => option.querySelector('.block-menu-icon')?.textContent)).toEqual(['H1', 'H2', 'H3', 'H4', 'H5'])
+    expect(headings.every((option) => !option.querySelector('kbd'))).toBe(true)
+    const current = document.querySelector('[role="option"][aria-current="true"]')!
+    expect(current.textContent).toContain('三级标题')
+    expect(current.querySelector('.block-menu-check')?.textContent).toBe('✓')
+    expect(current.getAttribute('aria-selected')).toBe('true')
+    view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    expect(current.getAttribute('aria-current')).toBe('true')
+    expect(current.getAttribute('aria-selected')).toBe('false')
+  } finally {
+    dispose()
+    host.remove()
+  }
+})
+
 it('opens the existing AI box from the compact context menu using the original selection', async () => {
   const host = document.createElement('div')
   document.body.append(host)
@@ -326,6 +354,63 @@ it('opens slash commands for typed slash and never from a caret placed beside ex
     expect(menu()).toBeNull()
     setCaret(from + '/table'.length)
     expect(menu()).toBeNull()
+  } finally {
+    dispose()
+    host.remove()
+  }
+})
+
+it('keeps the slash menu open while browsing and selecting a chart', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  let mounted!: EditorHandle
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: '', onReady: (value) => { mounted = value }, onUpdate: vi.fn(),
+  }), host)
+  try {
+    const { view } = mounted.editor
+    view.focus()
+    vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 20, top: 60, bottom: 80 })
+    view.someProp('handleTextInput', (input) => input(view, 1, 1, '/', () => view.state.tr.insertText('/')))
+    view.dispatch(view.state.tr.insertText('折线图'))
+    const parent = document.querySelector('[aria-label="区块命令"]')!
+    const group = parent.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!
+    group.click()
+    const menu = () => document.querySelector('[role="listbox"][aria-label="图表与流程图"]')
+    const press = (key: string) => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    expect(parent.isConnected).toBe(true)
+    expect(menu()?.querySelectorAll('[role="option"]')).toHaveLength(1)
+    press('Escape')
+    expect(parent.isConnected).toBe(true)
+    expect(menu()).toBeNull()
+    press('ArrowRight')
+    press('Enter')
+    expect(mounted.toMarkdown()).toContain('echarts')
+    expect(mounted.toMarkdown()).not.toContain('/折线图')
+    expect(parent.isConnected).toBe(false)
+  } finally {
+    dispose()
+    host.remove()
+  }
+})
+
+it('reads pasted image files from clipboard items and captures the insertion range', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  let mounted!: EditorHandle
+  const onInsertFiles = vi.fn()
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: 'text', onReady: (value) => { mounted = value }, onUpdate: vi.fn(), onInsertFiles,
+  }), host)
+  try {
+    const { view } = mounted.editor
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2, 4)))
+    const file = new File(['bytes'], 'clipboard', { type: 'image/png' })
+    const event = {
+      clipboardData: { files: [], items: [{ kind: 'file', getAsFile: () => file }] },
+    } as unknown as ClipboardEvent
+    expect(view.someProp('handlePaste', (paste) => paste(view, event, view.state.selection.content()))).toBe(true)
+    expect(onInsertFiles).toHaveBeenCalledWith([file], { from: 2, to: 4 })
   } finally {
     dispose()
     host.remove()
@@ -543,6 +628,37 @@ it.each([
 })
 
 describe('createEditor', () => {
+  it('resizes a standalone image from its edges and stores one undoable width change', () => {
+    const { handle, element, onUpdate } = mount()
+    handle.loadMarkdown('![山雾](assets/mountain.jpg)')
+    const paragraph = element.querySelector('p[data-standalone-image]')!
+    const image = paragraph.querySelector<HTMLElement>('.editor-image')!
+    const grip = image.querySelector<HTMLButtonElement>('[data-side="right"]')!
+    vi.spyOn(paragraph, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 500, 200))
+    Object.defineProperty(grip, 'setPointerCapture', { value: vi.fn() })
+    const drag = (type: string, x: number) => grip.dispatchEvent(new PointerEvent(type, {
+      pointerId: 1, button: 0, clientX: x, cancelable: true, bubbles: true,
+    }))
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+    drag('pointerdown', 450)
+    drag('pointermove', 400)
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('60%')
+    expect(onUpdate).not.toHaveBeenCalled()
+    drag('pointerup', 400)
+    expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)<!--onebox-image-width:60-->')
+    expect(onUpdate).toHaveBeenCalledOnce()
+    expect(handle.editor.commands.undo()).toBe(true)
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+    expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)')
+    expect(handle.editor.commands.redo()).toBe(true)
+    const leftGrip = image.querySelector<HTMLButtonElement>('[data-side="left"]')!
+    leftGrip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+    expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)')
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+    expect(handle.editor.commands.undo()).toBe(true)
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('60%')
+  })
+
   it('renders existing fold markup expanded and preserves it when saving', () => {
     const { handle, element } = mount()
     handle.loadMarkdown('> [!NOTE]-\n>\n> ## 旧标题\n>\n> 旧正文')
@@ -1065,7 +1181,7 @@ describe('createEditor', () => {
     const { handle } = mount()
     handle.loadMarkdown('')
     const { editor } = handle
-    const line = insertCommands.find((item) => item.label === '折线图')!
+    const line = diagramCommands.find((item) => item.label === '折线图')!
     const formula = insertCommands.find((item) => item.label === '公式')!
     expect(line.run(editor.chain()).run()).toBe(true)
     editor.commands.insertContentAt(editor.state.doc.content.size, { type: 'paragraph' })

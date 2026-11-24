@@ -5,6 +5,8 @@
     'Apple Color Emoji', Arial, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
   --ob-font-size: 16px;
   --ob-line-height: 1.5;
+  --ob-paragraph-line-height: 1.45;
+  --ob-paragraph-inset: 0.375em;
   --ob-block-padding: 3px;
   --ob-block-margin: 1px;
   --ob-content-width: 708px;

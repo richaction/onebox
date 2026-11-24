@@ -116,10 +116,13 @@ export const desktopAttachments = {
     invoke<Attachment>('import_attachment', { document, source }),
   async importFile(document: string, file: File) {
     const bytes = new Uint8Array(await file.arrayBuffer())
+    const imageExtension = Object.keys(imageMimes).find((extension) => imageMimes[extension] === file.type)
+    const hasImageExtension = !!imageMimes[file.name.split('.').at(-1)?.toLowerCase() ?? ''] && file.name.includes('.')
+    const name = imageExtension && !hasImageExtension ? `${file.name || '图片'}.${imageExtension}` : file.name
     return invoke<Attachment>('import_inline_attachment', bytes, {
       headers: {
         'x-onebox-document': encodeURIComponent(document),
-        'x-onebox-filename': encodeURIComponent(file.name),
+        'x-onebox-filename': encodeURIComponent(name),
       },
     })
   },

@@ -8,10 +8,7 @@ export interface MenuItem {
   search: string
   icon: string
   shortcut?: string
-  preview?: {
-    kind: 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'code' | 'divider' | 'table' | 'media'
-    caption: string
-  }
+  headingLevel?: 1 | 2 | 3 | 4 | 5
 }
 
 export interface CommandItem extends MenuItem {
@@ -21,28 +18,23 @@ export interface CommandItem extends MenuItem {
 export const blockCommands: readonly CommandItem[] = [
   {
     label: '正文', search: 'text plain paragraph 文本', icon: 'T',
-    preview: { kind: 'text', caption: '写一段正文' },
     run: (chain) => chain.setParagraph(),
   },
-  ...([1, 2, 3, 4, 5, 6] as const).map((level): CommandItem => ({
-    label: `${'一二三四五六'[level - 1]}级标题`, search: `heading h${level} 标题${level}`,
-    icon: `H${level}`, shortcut: '#'.repeat(level),
-    preview: { kind: 'heading', caption: level === 1 ? '文档或章节标题' : '组织章节的层次' },
+  ...([1, 2, 3, 4, 5] as const).map((level): CommandItem => ({
+    label: `${'一二三四五'[level - 1]}级标题`, search: `heading h${level} 标题${level}`,
+    icon: `H${level}`, headingLevel: level, shortcut: '#'.repeat(level),
     run: (chain) => chain.setHeading({ level }),
   })),
   {
     label: '无序列表', search: 'bullet list 项目符号', icon: '☷', shortcut: '-',
-    preview: { kind: 'bullet', caption: '用项目符号列出要点' },
     run: (chain) => chain.toggleBulletList(),
   },
   {
     label: '有序列表', search: 'num numbered ordered list', icon: '≡', shortcut: '1.',
-    preview: { kind: 'ordered', caption: '按顺序列出步骤' },
     run: (chain) => chain.toggleOrderedList(),
   },
   {
     label: '任务列表', search: 'todo task checklist 待办 [] [ ]', icon: '☑', shortcut: '- [ ]',
-    preview: { kind: 'task', caption: '列出可勾选的待办事项' },
     run: (chain) => chain.command(({ state, commands }) =>
       (isNodeActive(state, 'listItem') || commands.toggleBulletList()) &&
       commands.updateAttributes('listItem', { checked: false }),
@@ -50,12 +42,10 @@ export const blockCommands: readonly CommandItem[] = [
   },
   {
     label: '引用', search: 'quote blockquote', icon: '❝', shortcut: '>',
-    preview: { kind: 'quote', caption: '标出引用文字' },
     run: (chain) => chain.toggleBlockquote(),
   },
   {
     label: '代码块', search: 'code fence', icon: '‹/›', shortcut: '```',
-    preview: { kind: 'code', caption: '插入可选择语言的代码块' },
     run: (chain) => chain.toggleCodeBlock(),
   },
 ]
@@ -66,7 +56,7 @@ function insertFence(chain: ChainedCommands, language: string, source: string) {
   })
 }
 
-export const insertCommands: readonly CommandItem[] = [
+export const diagramCommands: readonly CommandItem[] = [
   ...chartTemplates.map(({ label, key, option }): CommandItem => ({
     label, search: `图表 chart echarts ${key}`, icon: '▥',
     run: (chain) => insertFence(chain, 'echarts', JSON.stringify(option, null, 2)),
@@ -75,6 +65,9 @@ export const insertCommands: readonly CommandItem[] = [
     label: '流程图', search: '流程图 图表 时序 甘特 思维导图 mermaid diagram', icon: '◇',
     run: (chain) => insertFence(chain, 'mermaid', 'flowchart LR\n  A[开始] --> B[处理] --> C[完成]'),
   },
+]
+
+export const insertCommands: readonly CommandItem[] = [
   {
     label: '公式', search: '公式 math latex katex', icon: '∑', shortcut: '$$',
     run: (chain) => chain.insertContent({
@@ -83,12 +76,10 @@ export const insertCommands: readonly CommandItem[] = [
   },
   {
     label: '分隔线', search: 'div divider rule', icon: '―', shortcut: '---',
-    preview: { kind: 'divider', caption: '用细线分隔两段内容' },
     run: (chain) => chain.setHorizontalRule(),
   },
   {
     label: '表格', search: 'table grid', icon: '▦',
-    preview: { kind: 'table', caption: '插入三行三列的表格' },
     run: (chain) => chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }),
   },
 ]

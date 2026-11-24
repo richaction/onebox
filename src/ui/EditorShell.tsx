@@ -6,7 +6,7 @@ import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMo
 import { Portal } from 'solid-js/web'
 import { captureAiReference, highlightAiSource, type AiReference } from '../core/aiDocument'
 import {
-  blockCommands, insertCommands, slashTrigger, tableCommands,
+  blockCommands, diagramCommands, insertCommands, slashTrigger, tableCommands,
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
 import { blockDropTarget, moveBlock } from '../core/blockMove'
@@ -33,23 +33,26 @@ interface Popup {
 type GripDrag = { pointer: number; selection: NodeSelection; startX: number; startY: number; moved: boolean }
 
 type Action = CommandItem | (MenuItem & { attachment: AttachmentKind }) | (MenuItem & { ai: 'quote' | 'edit' }) |
-  (MenuItem & { mark: string })
+  (MenuItem & { mark: string }) | (MenuItem & { children: true })
 
 const quoteAction: Action = { label: '引用到侧栏', search: 'AI 引用 侧栏', icon: '✦', ai: 'quote' }
 const editAction: Action = { label: '正文编辑', search: 'AI 编辑 正文', icon: '✎', ai: 'edit' }
 const formatActions: readonly Action[] = inlineFormatMarks.map(({ name, symbol, mark }) =>
   ({ label: name, search: name, icon: symbol, mark }))
+const chartsAction: Action = { label: '图表与流程图', search: '图表 chart', icon: '▥', children: true }
+const matchesQuery = (item: MenuItem, query: string) =>
+  `${item.label} ${item.search} ${item.shortcut ?? ''}`.toLowerCase().includes(query)
 const typedSlash = 'onebox-typed-slash'
 const contextMenuFormat = 'onebox:context-menu-format'
 
 const attachmentItems: readonly Action[] = [
   {
     label: '图片', search: 'image photo', icon: '▧',
-    preview: { kind: 'media', caption: '插入本地图片' }, attachment: 'image',
+    attachment: 'image',
   },
   {
     label: '附件', search: 'attachment file', icon: '▤',
-    preview: { kind: 'media', caption: '插入本地文件链接' }, attachment: 'file',
+    attachment: 'file',
   },
 ]
 
@@ -59,7 +62,7 @@ export default function EditorShell(props: {
   onDispose?: (handle: EditorHandle) => void
   onUpdate: (doc: DocumentNode) => void
   onInsertAttachment?: (kind: AttachmentKind, range?: Range) => void
-  onInsertFiles?: (files: File[]) => void
+  onInsertFiles?: (files: File[], range?: Range) => void
   onQuoteSelection?: (range?: Range) => void
   inlineAi?: boolean
   showSelectionToolbar?: boolean
@@ -87,8 +90,12 @@ export default function EditorShell(props: {
   const [blockGrip, setBlockGrip] = createSignal<{ x: number; y: number; selection: NodeSelection }>()
   const [blockDrop, setBlockDrop] = createSignal<ReturnType<typeof blockDropTarget>>()
   const [highlighted, setHighlighted] = createSignal(0)
+  const [chartChoice, setChartChoice] = createSignal<number>()
   const [keyboardHighlight, setKeyboardHighlight] = createSignal(true)
   const menuId = createUniqueId()
+  const query = () => popup()?.trigger?.query.toLowerCase() ?? ''
+  const charts = createMemo(() => matchesQuery(chartsAction, query())
+    ? diagramCommands : diagramCommands.filter((item) => matchesQuery(item, query())))
   const groups = createMemo(() => {
     const current = popup()
     if (!current) return []
@@ -96,7 +103,7 @@ export default function EditorShell(props: {
       ? [['表格操作', tableCommands]]
       : [
         [current.trigger ? '基本区块' : '转换区块', blockCommands],
-        ['插入内容', insertCommands],
+        ['插入内容', [chartsAction, ...insertCommands]],
         ['媒体与附件', props.onInsertAttachment ? attachmentItems : []],
       ]
     if (current.quoteRange) {
@@ -109,16 +116,17 @@ export default function EditorShell(props: {
       if (props.inlineAi && !inlineEdit()) actions.push(editAction)
       if (actions.length) sections.unshift(['AI', actions])
     }
-    const query = current.trigger?.query.toLowerCase() ?? ''
+    const search = query()
     let index = 0
     return sections.flatMap(([label, commands, layout]) => {
-      const matches = commands.filter((item) =>
-        `${item.label} ${item.search} ${item.shortcut ?? ''}`.toLowerCase().includes(query))
-      const exact = matches.findIndex((item) => item.shortcut === query)
+      const matches = commands.filter((item) => 'children' in item ? charts().length > 0 : matchesQuery(item, search))
+      const exact = matches.findIndex((item) => item.shortcut === search)
       if (exact > 0) matches.unshift(...matches.splice(exact, 1))
       return matches.length ? [{
         label, layout, items: matches.map((item) => ({
           item, index: index++, applied: 'mark' in item && !!handle?.editor.isActive(item.mark),
+          current: !current.trigger && !!item.headingLevel &&
+            !!handle?.editor.isActive('heading', { level: item.headingLevel }),
         })),
       }] : []
     })
@@ -127,6 +135,7 @@ export default function EditorShell(props: {
 
   const closeMenu = () => {
     if (menuPress.active(popupElement)) menuPress.clear()
+    setChartChoice(undefined)
     setPopup(undefined)
   }
 
@@ -296,17 +305,27 @@ export default function EditorShell(props: {
     if (!editor) return
     closeSelectionMenu()
     if (!next.trigger || popup()?.trigger?.query !== next.trigger.query) {
+      setChartChoice(undefined)
       setKeyboardHighlight(true)
       setHighlighted(0)
     }
     setPopup({ ...next, selection: editor.state.selection })
+    if (!next.trigger) {
+      const heading = items().find((option) => option.current)
+      if (heading) setHighlighted(heading.index)
+    }
   }
 
-  const runItem = (index: number) => {
+  const runItem = (index: number, submenu = false) => {
     const current = popup()
-    const item = items()[index]?.item
+    const item = submenu ? charts()[index] : items()[index]?.item
     const editor = handle?.editor
     if (!current || !item || !editor?.isEditable || current.selection.$from.doc !== editor.state.doc) return
+    if ('children' in item) {
+      setHighlighted(index)
+      setChartChoice((choice) => choice === undefined ? 0 : undefined)
+      return
+    }
     if ('mark' in item) {
       editor.chain().command(({ tr }) => {
         closeHistory(tr)
@@ -351,9 +370,18 @@ export default function EditorShell(props: {
       imageContext: props.imageContext,
       openResource: props.openResource,
       handlePaste(view, event) {
-        const files = Array.from(event.clipboardData?.files ?? [])
-        if (!props.onInsertFiles || !view.editable || !files.length) return false
-        props.onInsertFiles(files)
+        if (!props.onInsertFiles || !view.editable || !event.clipboardData) return false
+        const files = Array.from(event.clipboardData.files)
+        if (!files.length) {
+          for (const item of event.clipboardData.items ?? []) {
+            if (item.kind !== 'file') continue
+            const file = item.getAsFile()
+            if (file) files.push(file)
+          }
+        }
+        if (!files.length) return false
+        const { from, to } = view.state.selection
+        props.onInsertFiles(files, { from, to })
         return true
       },
       handleDrop(view, event, _slice, moved) {
@@ -384,6 +412,24 @@ export default function EditorShell(props: {
           return true
         }
         if (!popup()) return false
+        const chart = chartChoice()
+        if (chart !== undefined) {
+          switch (event.key) {
+            case 'Escape':
+            case 'ArrowLeft':
+              setChartChoice(undefined)
+              return true
+            case 'ArrowDown':
+            case 'ArrowUp': {
+              const count = charts().length
+              setChartChoice((chart + (event.key === 'ArrowDown' ? 1 : count - 1)) % count)
+              return true
+            }
+            case 'Enter':
+              runItem(chart, true)
+              return true
+          }
+        }
         const count = items().length
         switch (event.key) {
           case 'Escape':
@@ -398,6 +444,10 @@ export default function EditorShell(props: {
           case 'ArrowLeft':
           case 'ArrowRight': {
             const current = items()[highlighted()]?.item
+            if (current && 'children' in current && event.key === 'ArrowRight') {
+              if (chartChoice() === undefined) runItem(highlighted())
+              return true
+            }
             if (!current || !('mark' in current)) return false
             const next = highlighted() + (event.key === 'ArrowLeft' ? -1 : 1)
             const target = items()[next]?.item
@@ -539,11 +589,13 @@ export default function EditorShell(props: {
   createEffect(() => {
     const current = popup()
     const active = items()[highlighted()]
+    const chart = chartChoice()
     const dom = handle?.editor.view.dom
     if (!dom) return
-    if (current) dom.setAttribute('aria-controls', menuId)
+    if (current) dom.setAttribute('aria-controls', chart === undefined ? menuId : `${menuId}-charts`)
     else dom.removeAttribute('aria-controls')
-    if (active) dom.setAttribute('aria-activedescendant', `${menuId}-${highlighted()}`)
+    if (chart !== undefined) dom.setAttribute('aria-activedescendant', `${menuId}-charts-${chart}`)
+    else if (active) dom.setAttribute('aria-activedescendant', `${menuId}-${highlighted()}`)
     else dom.removeAttribute('aria-activedescendant')
   })
 
@@ -608,12 +660,13 @@ export default function EditorShell(props: {
             query={current().trigger?.query}
             groups={groups()}
             active={highlighted()}
-            activeItem={items()[highlighted()]?.item}
+            submenu={chartChoice() === undefined ? undefined : { items: charts(), active: chartChoice()! }}
             keyboardHighlight={keyboardHighlight()}
             isPressing={() => menuPress.active(popupElement)}
             onHighlight={(index) => { setKeyboardHighlight(false); setHighlighted(index) }}
-            onChoose={runItem}
-            onClose={closeMenu}
+            onChoose={(index) => runItem(index)}
+            onChooseSubmenu={(index) => runItem(index, true)}
+            onHighlightSubmenu={setChartChoice}
             ref={(el) => { popupElement = el }}
           /></Portal>
         )}

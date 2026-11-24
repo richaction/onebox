@@ -28,6 +28,11 @@ export const MarkdownImage = Node.create({
       src: { default: '' },
       alt: { default: '' },
       title: { default: null },
+      widthPercent: {
+        default: null,
+        parseHTML: (element) => imageWidthPercent(Number(element.getAttribute('data-onebox-image-width'))),
+        renderHTML: ({ widthPercent }) => widthPercent === null ? {} : { 'data-onebox-image-width': widthPercent },
+      },
     }
   },
   parseHTML() {
@@ -37,6 +42,14 @@ export const MarkdownImage = Node.create({
     return ['img', mergeAttributes(HTMLAttributes, { loading: 'lazy', decoding: 'async' })]
   },
 })
+
+export const defaultImageWidth = 80
+export const minImageWidth = 20
+export const maxImageWidth = 100
+
+export function imageWidthPercent(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= minImageWidth && value <= maxImageWidth ? value : null
+}
 
 export const MarkdownListItem = ListItem.extend({
   addAttributes() {

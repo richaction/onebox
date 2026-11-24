@@ -1,4 +1,5 @@
 import { mathMarkdown, mathSource } from './mathMarkdown'
+import { imageWidthPercent } from './markdownNodes'
 import MarkdownIt from 'markdown-it'
 import footnote from 'markdown-it-footnote'
 import {
@@ -30,6 +31,20 @@ const footnoteLabel = /^[^\s\[\]\\]+$/u
 type Token = ReturnType<typeof tokenizer.parse>[number]
 const inlineFormatNames: Readonly<Record<string, string>> = { '<u>': 'underline', '<mark>': 'highlight' }
 const inlineFormatTag = /^<(\/?)(u|mark)>/u
+// Keep the image link standard and store editor-only sizing in the adjacent comment.
+const imageWidthComment = /^<!--onebox-image-width:([0-9]{2,3})-->/u
+
+tokenizer.inline.ruler.before('html_inline', 'onebox_image_width', (state, silent) => {
+  if (state.src[state.pos] !== '<' || state.pending) return false
+  const image = state.tokens.at(-1)
+  if (image?.type !== 'image' || image.meta?.widthPercent !== undefined) return false
+  const match = imageWidthComment.exec(state.src.slice(state.pos, state.pos + '<!--onebox-image-width:100-->'.length))
+  const widthPercent = imageWidthPercent(Number(match?.[1]))
+  if (!match || widthPercent === null || state.pos + match[0].length > state.posMax) return false
+  if (!silent) image.meta = { ...image.meta, widthPercent }
+  state.pos += match[0].length
+  return true
+})
 
 function pairedFormats(tokens: readonly Token[]) {
   const opening: Token[] = []
@@ -164,6 +179,7 @@ function buildParser(schema: Schema): MarkdownParser {
         src: tok.attrGet('src'),
         title: tok.attrGet('title'),
         alt: imageAlt(tok.children ?? []),
+        widthPercent: tok.meta?.widthPercent ?? null,
       }),
     },
     table: { block: 'table' },
@@ -221,7 +237,11 @@ const serializer = new MarkdownSerializer(
       if (node.attrs.checked !== null) state.write(node.attrs.checked ? '[x] ' : '[ ] ')
       state.renderContent(node)
     },
-    image: base.image,
+    image(state, node, parent, index) {
+      base.image(state, node, parent, index)
+      const width = imageWidthPercent(node.attrs.widthPercent)
+      if (width !== null) state.write('<!--onebox-image-width:' + width + '-->')
+    },
     table(state, node) {
       const header = node.firstChild!
       node.forEach((row, _offset, index) => {

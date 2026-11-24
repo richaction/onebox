@@ -50,6 +50,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     if (node.type.name === 'paragraph') {
       const updateContent = (paragraph: typeof node) => {
         dom.toggleAttribute('data-display-math', isDisplayMath(paragraph))
+        dom.toggleAttribute('data-standalone-image', paragraph.childCount === 1 && paragraph.firstChild?.type.name === 'image')
       }
       updateContent(node)
       return { ...rendered, updateContent }

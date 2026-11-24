@@ -14,7 +14,7 @@ type Panel = 'main' | 'blocks' | 'link' | 'more'
 const blockTypes = blockCommands.map((item) => ({
   ...item,
   active: (editor: Editor) => {
-    if (item.shortcut?.startsWith('#')) return editor.isActive('heading', { level: item.shortcut.length })
+    if (item.headingLevel) return editor.isActive('heading', { level: item.headingLevel })
     if (item.icon === 'T') return editor.isActive('paragraph') &&
       !['listItem', 'blockquote'].some((type) => editor.isActive(type))
     const task = editor.isActive('listItem') && !editor.isActive('listItem', { checked: null })

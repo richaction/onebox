@@ -769,12 +769,17 @@ export default function App() {
 
   const insertAttachments = (editor: EditorHandle, attachments: Attachment[], range?: Range) => {
     if (!attachments.length) return
+    const hasImages = attachments.some((attachment) => attachment.image)
     const content: JSONContent[] = []
     for (const attachment of attachments) {
-      if (content.length) content.push({ type: 'text', text: ' ' })
-      content.push(attachment.image
+      const inline: JSONContent = attachment.image
         ? { type: 'image', attrs: { src: attachment.href, alt: attachment.name } }
-        : { type: 'text', text: attachment.name, marks: [{ type: 'link', attrs: { href: attachment.href } }] })
+        : { type: 'text', text: attachment.name, marks: [{ type: 'link', attrs: { href: attachment.href } }] }
+      if (hasImages) content.push({ type: 'paragraph', content: [inline] })
+      else {
+        if (content.length) content.push({ type: 'text', text: ' ' })
+        content.push(inline)
+      }
     }
     if (range) editor.editor.chain().focus().insertContentAt(range, content).run()
     else editor.editor.chain().focus().insertContent(content).run()
