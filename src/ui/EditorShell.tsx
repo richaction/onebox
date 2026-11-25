@@ -2,8 +2,8 @@ import type { Range } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
 import type { Node as DocumentNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state'
-import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount, Show } from 'solid-js'
-import { Portal } from 'solid-js/web'
+import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onSettled, Show } from 'solid-js'
+import { Portal } from '@solidjs/web'
 import { captureAiReference, highlightAiSource, type AiReference } from '../core/aiDocument'
 import {
   blockCommands, diagramCommands, insertCommands, slashTrigger, tableCommands,
@@ -77,6 +77,12 @@ export default function EditorShell(props: {
   let menuPress: ReturnType<typeof trackMenuPress>
 
   const [popup, setPopup] = createSignal<Popup>()
+  // ProseMirror can dispatch several transactions before Solid commits a render.
+  let currentPopup: Popup | undefined
+  const updatePopup = (next: Popup | undefined) => {
+    currentPopup = next
+    setPopup(next)
+  }
   const [selectionMenu, setSelectionMenu] = createSignal<{
     x: number; y: number; above: boolean; width: number; maxHeight: number; selection: Selection
   }>()
@@ -86,10 +92,10 @@ export default function EditorShell(props: {
   const [keyboardHighlight, setKeyboardHighlight] = createSignal(true)
   const menuId = createUniqueId()
   const query = () => popup()?.trigger?.query.toLowerCase() ?? ''
-  const charts = createMemo(() => matchesQuery(chartsAction, query())
-    ? diagramCommands : diagramCommands.filter((item) => matchesQuery(item, query())))
-  const groups = createMemo(() => {
-    const current = popup()
+  const getCharts = (search: string) => matchesQuery(chartsAction, search)
+    ? diagramCommands : diagramCommands.filter((item) => matchesQuery(item, search))
+  const charts = createMemo(() => getCharts(query()))
+  const getGroups = (current: Popup | undefined) => {
     if (!current) return []
     const sections: [string, readonly Action[], 'inline'?][] = current.inTable
       ? [['表格操作', tableCommands]]
@@ -108,10 +114,11 @@ export default function EditorShell(props: {
       if (props.inlineAi && !inlineEdit()) actions.push(editAction)
       if (actions.length) sections.unshift(['AI', actions])
     }
-    const search = query()
+    const search = current.trigger?.query.toLowerCase() ?? ''
+    const hasCharts = getCharts(search).length > 0
     let index = 0
     return sections.flatMap(([label, commands, layout]) => {
-      const matches = commands.filter((item) => 'children' in item ? charts().length > 0 : matchesQuery(item, search))
+      const matches = commands.filter((item) => 'children' in item ? hasCharts : matchesQuery(item, search))
       const exact = matches.findIndex((item) => item.shortcut === search)
       if (exact > 0) matches.unshift(...matches.splice(exact, 1))
       return matches.length ? [{
@@ -122,17 +129,18 @@ export default function EditorShell(props: {
         })),
       }] : []
     })
-  })
+  }
+  const groups = createMemo(() => getGroups(popup()))
   const items = createMemo(() => groups().flatMap((group) => group.items))
 
   const closeMenu = () => {
-    if (menuPress.active(popupElement)) menuPress.clear()
+    if (menuPress?.active(popupElement)) menuPress.clear()
     setChartChoice(undefined)
-    setPopup(undefined)
+    updatePopup(undefined)
   }
 
   const closeSelectionMenu = () => {
-    if (menuPress.active(selectionElement)) menuPress.clear()
+    if (menuPress?.active(selectionElement)) menuPress.clear()
     setSelectionMenu(undefined)
   }
 
@@ -159,7 +167,7 @@ export default function EditorShell(props: {
 
   const showSelectionMenu = (x: number, y: number, afterSelection = false) => {
     const view = handle?.editor.view
-    if (!view?.editable || !view.hasFocus() || view.composing || inlineEdit() || popup()) return
+    if (!view?.editable || !view.hasFocus() || view.composing || inlineEdit() || currentPopup) return
     const { selection } = view.state
     if (!(selection instanceof TextSelection) || selection.empty) return
     if (selectionMenu()?.selection.eq(selection)) return
@@ -220,20 +228,21 @@ export default function EditorShell(props: {
     const editor = handle?.editor
     if (!editor) return
     closeSelectionMenu()
-    if (!next.trigger || popup()?.trigger?.query !== next.trigger.query) {
+    if (!next.trigger || currentPopup?.trigger?.query !== next.trigger.query) {
       setChartChoice(undefined)
       setKeyboardHighlight(true)
       setHighlighted(0)
     }
-    setPopup({ ...next, selection: editor.state.selection })
+    const current = { ...next, selection: editor.state.selection }
+    updatePopup(current)
     if (!next.trigger) {
-      const heading = items().find((option) => option.current)
+      const heading = getGroups(current).flatMap((group) => group.items).find((option) => option.current)
       if (heading) setHighlighted(heading.index)
     }
   }
 
   const runItem = (index: number, submenu = false) => {
-    const current = popup()
+    const current = currentPopup
     const item = submenu ? charts()[index] : items()[index]?.item
     const editor = handle?.editor
     if (!current || !item || !editor?.isEditable || current.selection.$from.doc !== editor.state.doc) return
@@ -271,7 +280,7 @@ export default function EditorShell(props: {
     item.run(chain).run()
   }
 
-  onMount(() => {
+  onSettled(() => {
     const document = scrollRoot.ownerDocument
     menuPress = trackMenuPress(document, (menu) => {
       if (menu === popupElement) closeMenu()
@@ -327,7 +336,7 @@ export default function EditorShell(props: {
           })
           return true
         }
-        if (!popup()) return false
+        if (!currentPopup) return false
         const chart = chartChoice()
         if (chart !== undefined) {
           switch (event.key) {
@@ -402,7 +411,7 @@ export default function EditorShell(props: {
 
     const { editor } = handle
     editor.on('transaction', ({ transaction }) => {
-      const current = popup()
+      const current = currentPopup
       if (!transaction.docChanged && !transaction.selectionSet) return
       const menu = selectionMenu()
       const selection = editor.state.selection
@@ -417,7 +426,7 @@ export default function EditorShell(props: {
         resetSelectionMenu()
       }
       if (current && transaction.getMeta(contextMenuFormat)) {
-        setPopup({ ...current, selection })
+        updatePopup({ ...current, selection })
         return
       }
       if (current && menuPress.active(popupElement)) {
@@ -446,14 +455,14 @@ export default function EditorShell(props: {
       if (event.defaultPrevented) return
       cancelAnimationFrame(selectionFrame)
       const path = event.composedPath()
-      const inPopup = popup() && popupElement && path.includes(popupElement)
+      const inPopup = currentPopup && popupElement && path.includes(popupElement)
       const inSelection = selectionMenu() && selectionElement && path.includes(selectionElement)
-      if (popup() && !inPopup) closeMenu()
+      if (currentPopup && !inPopup) closeMenu()
       if (selectionMenu() && !inSelection) closeSelectionMenu()
       menuPress.start(event, inPopup ? popupElement : inSelection ? selectionElement : undefined)
     }
     const closeOnBlur = () => {
-      if (popup()) closeMenu()
+      if (currentPopup) closeMenu()
       resetSelectionMenu()
     }
     const updateLayout = () => {
@@ -463,7 +472,7 @@ export default function EditorShell(props: {
     }
     const closeOnScroll = () => {
       cancelAnimationFrame(selectionFrame)
-      if (popup() && !menuPress.active(popupElement)) closeMenu()
+      if (currentPopup && !menuPress.active(popupElement)) closeMenu()
       updateLayout()
     }
     const layout = new ResizeObserver(updateLayout)
@@ -472,7 +481,8 @@ export default function EditorShell(props: {
     scrollRoot.addEventListener('scroll', closeOnScroll, true)
     window.addEventListener('resize', closeOnScroll)
     window.addEventListener('blur', closeOnBlur)
-    onCleanup(() => {
+    props.onReady(handle)
+    return () => {
       document.removeEventListener('pointerdown', closeOutside, true)
       menuPress.destroy()
       scrollRoot.removeEventListener('scroll', closeOnScroll, true)
@@ -480,32 +490,29 @@ export default function EditorShell(props: {
       window.removeEventListener('blur', closeOnBlur)
       layout.disconnect()
       cancelAnimationFrame(selectionFrame)
-    })
-    props.onReady(handle)
+    }
   })
   onCleanup(() => {
     if (!handle) return
     props.onDispose?.(handle)
-    handle.destroy()
+    handle?.destroy()
   })
 
-  createEffect(() => {
-    props.imageContext?.()
-    props.inlineAi
+  createEffect(() => [props.imageContext?.(), props.inlineAi] as const, () => {
     closeInlineEdit(false)
     resetSelectionMenu()
-  })
+  }, { defer: true })
 
   createEffect(() => {
-    const current = popup()
-    const active = items()[highlighted()]
-    const chart = chartChoice()
+    const index = highlighted()
+    return { current: popup(), active: items()[index], chart: chartChoice(), index }
+  }, ({ current, active, chart, index }) => {
     const dom = handle?.editor.view.dom
     if (!dom) return
     if (current) dom.setAttribute('aria-controls', chart === undefined ? menuId : `${menuId}-charts`)
     else dom.removeAttribute('aria-controls')
     if (chart !== undefined) dom.setAttribute('aria-activedescendant', `${menuId}-charts-${chart}`)
-    else if (active) dom.setAttribute('aria-activedescendant', `${menuId}-${highlighted()}`)
+    else if (active) dom.setAttribute('aria-activedescendant', `${menuId}-${index}`)
     else dom.removeAttribute('aria-activedescendant')
   })
 

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from 'solid-js'
 import type { MenuItem } from '../core/blockCommands'
 
 function viewportBounds() {
@@ -57,17 +57,17 @@ export default function BlockMenu(props: {
     return { x, openUp, heightLimit, menuWidth, submenuSide }
   })
 
-  onMount(() => {
+  onSettled(() => {
     const resize = () => { if (!props.isPressing()) setViewport(viewportBounds()) }
     const visual = window.visualViewport
     window.addEventListener('resize', resize)
     visual?.addEventListener('resize', resize)
     visual?.addEventListener('scroll', resize)
-    onCleanup(() => {
+    return () => {
       window.removeEventListener('resize', resize)
       visual?.removeEventListener('resize', resize)
       visual?.removeEventListener('scroll', resize)
-    })
+    }
   })
 
   const keepVisible = (list: HTMLDivElement, active: number) => {
@@ -78,11 +78,10 @@ export default function BlockMenu(props: {
       list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight
     }
   }
-  createEffect(() => {
-    if (props.keyboardHighlight) { props.groups; keepVisible(results, props.active) }
+  createEffect(() => props.keyboardHighlight ? { groups: props.groups, active: props.active } : undefined, (highlight) => {
+    if (highlight) keepVisible(results, highlight.active)
   })
-  createEffect(() => {
-    const submenu = props.submenu
+  createEffect(() => props.submenu, (submenu) => {
     if (submenu && children) keepVisible(children, submenu.active)
   })
 
@@ -99,11 +98,11 @@ export default function BlockMenu(props: {
       }}
       onMouseDown={(event) => { if (event.button === 0) event.preventDefault() }}
     >
-      <div class="block-menu" classList={{ 'block-menu-searchable': props.query !== undefined }}>
+      <div class={['block-menu', { 'block-menu-searchable': props.query !== undefined }]}>
         <Show when={props.query !== undefined}>
           <div class="block-menu-query" aria-hidden="true">
             <span>/</span>
-            <span classList={{ 'block-menu-hint': !props.query }}>{props.query || '输入以搜索'}</span>
+            <span class={{ 'block-menu-hint': !props.query }}>{props.query || '输入以搜索'}</span>
           </div>
         </Show>
         <div
@@ -117,24 +116,24 @@ export default function BlockMenu(props: {
             {(group) => (
               <div role="group" aria-label={group.label}>
                 <div class="block-menu-section" aria-hidden="true">{group.label}</div>
-                <div role="presentation" classList={{ 'block-menu-inline': group.layout === 'inline' }}>
+                <div role="presentation" class={{ 'block-menu-inline': group.layout === 'inline' }}>
                   <For each={group.items}>{({ item, index, applied, current }) => (
                     <button
                       type="button"
                       role="option"
-                      tabIndex={-1}
+                      tabindex={-1}
                       id={`${props.id}-${index}`}
                       data-index={index}
                       data-activate-on-release
-                      aria-selected={index === props.active}
+                      aria-selected={index === props.active ? 'true' : 'false'}
                       aria-current={current ? 'true' : undefined}
                       aria-haspopup={'children' in item ? 'listbox' : undefined}
-                      aria-expanded={'children' in item ? !!props.submenu : undefined}
+                      aria-expanded={'children' in item ? (props.submenu ? 'true' : 'false') : undefined}
                       aria-label={group.layout === 'inline' ? (applied ? `${item.label}，已应用` : item.label) : undefined}
                       title={group.layout === 'inline' ? item.label : undefined}
                       data-action={group.layout === 'inline' ? item.label : undefined}
                       data-applied={applied ? '' : undefined}
-                      classList={{ 'block-menu-item': true, highlighted: index === props.active }}
+                      class={{ 'block-menu-item': true, highlighted: index === props.active }}
                       onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlight(index) }}
                       onClick={() => props.onChoose(index)}
                     >
@@ -161,9 +160,9 @@ export default function BlockMenu(props: {
             <div class="block-menu-results" ref={(list) => { children = list }}
               id={`${props.id}-charts`} role="listbox" aria-label="图表与流程图">
               <For each={submenu().items}>{(item, index) => (
-                <button type="button" role="option" tabIndex={-1} id={`${props.id}-charts-${index()}`}
-                  class="block-menu-item" classList={{ highlighted: index() === submenu().active }}
-                  data-index={index()} data-activate-on-release aria-selected={index() === submenu().active}
+                <button type="button" role="option" tabindex={-1} id={`${props.id}-charts-${index()}`}
+                   class={['block-menu-item', { highlighted: index() === submenu().active }]}
+                  data-index={index()} data-activate-on-release aria-selected={index() === submenu().active ? 'true' : 'false'}
                   onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlightSubmenu(index()) }}
                   onClick={() => props.onChooseSubmenu(index())}>
                   <span class="block-menu-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>

@@ -1,5 +1,5 @@
 import { convertFileSrc } from '@tauri-apps/api/core'
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from 'solid-js'
 import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 import { FilePreviewDialog } from './FilePreview'
 import { isImagePreview } from './previewImage'
@@ -21,7 +21,7 @@ function ItemPreview(props: {
     return [extension, image() ? '图片' : '文件'].filter(Boolean).join(' ')
   }
 
-  onMount(() => {
+  onSettled(() => {
     if (!image()) return
     let disposed = false
     const load = () => {
@@ -37,10 +37,10 @@ function ItemPreview(props: {
       })
     if (observer) observer.observe(thumbnail)
     else load()
-    onCleanup(() => {
+    return () => {
       disposed = true
       observer?.disconnect()
-    })
+    }
   })
 
   const remove = (button: HTMLButtonElement) => {
@@ -52,7 +52,7 @@ function ItemPreview(props: {
 
   return (
     <li>
-      <button type="button" class="selection-preview-item" classList={{ 'selection-preview-item-cut': props.cut }}
+      <button type="button" class={['selection-preview-item', { 'selection-preview-item-cut': props.cut }]}
         title={props.entry.path} aria-haspopup="dialog"
         onPointerDown={(event) => {
           // macOS may turn Ctrl-click into a context menu instead of dispatching click.
@@ -66,7 +66,7 @@ function ItemPreview(props: {
         }}>
         <span class="selection-preview-thumbnail" ref={thumbnail} aria-hidden="true">
           <Show when={source()} fallback={
-            <span class="workspace-entry-icon" classList={{ 'is-document': props.entry.markdown }} />
+            <span class={['workspace-entry-icon', { 'is-document': props.entry.markdown }]} />
           }>
             {(url) => <img src={url()} alt="" draggable={false} decoding="async" onError={() => setSource(undefined)} />}
           </Show>
@@ -91,8 +91,8 @@ export default function WorkspaceSelectionPreview(props: {
   const [preview, setPreview] = createSignal<{ path: string; trigger: HTMLButtonElement }>()
   const entries = () => props.selection.entries()
   const previewEntry = createMemo(() => entries().find(({ path }) => path === preview()?.path))
-  createEffect(() => { if (preview() && !previewEntry()) setPreview(undefined) })
-  createEffect(() => props.onFilePreviewOpenChange(!!previewEntry()))
+  createEffect(() => !!preview() && !previewEntry(), (missing) => { if (missing) setPreview(undefined) })
+  createEffect(() => !!previewEntry(), (open) => { props.onFilePreviewOpenChange(open) })
   onCleanup(() => props.onFilePreviewOpenChange(false))
   return (
     <section class="file-preview selection-preview" aria-label="多选预览"

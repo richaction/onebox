@@ -1,6 +1,5 @@
-import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show, createStore, reconcile, untrack } from 'solid-js'
 import { NameField, onInlineNameBlur } from './FileName'
-import { createStore, reconcile } from 'solid-js/store'
 import { trackMenuPress } from '../core/menuPress'
 import { isClickFromRelease, reachesDragThreshold } from '../core/buttonClickTolerance'
 import { desktopWorkspace, type WorkspaceEntry, type WorkspaceRoot } from '../io/tauri'
@@ -76,7 +75,7 @@ export interface WorkspaceSelection {
 function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; close: (restoreFocus: boolean) => void }) {
   let menu!: HTMLDivElement
   const buttons = () => Array.from(menu.querySelectorAll('button'))
-  onMount(() => {
+  onSettled(() => {
     menu.showPopover?.()
     const bounds = menu.getBoundingClientRect()
     menu.style.left = `${Math.max(8, Math.min(props.at.x, window.innerWidth - bounds.width - 8))}px`
@@ -94,12 +93,12 @@ function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; clos
     document.addEventListener('pointerdown', outside, true)
     window.addEventListener('resize', resize)
     window.addEventListener('blur', away)
-    onCleanup(() => {
+    return () => {
       document.removeEventListener('pointerdown', outside, true)
       pointer.destroy()
       window.removeEventListener('resize', resize)
       window.removeEventListener('blur', away)
-    })
+    }
   })
   return (
     <div class="workspace-context-menu" ref={menu} popover="manual" role="menu" aria-label="文件操作" data-activate-on-release
@@ -122,7 +121,7 @@ function ContextMenu(props: { at: SidebarContext; actions: SidebarAction[]; clos
       <For each={props.actions}>{(action) => (
         <>
           <Show when={action.separator}><div class="workspace-menu-separator" role="separator" /></Show>
-          <button type="button" role="menuitem" tabIndex={-1}
+          <button type="button" role="menuitem" tabindex={-1}
             onClick={() => { props.close(true); action.run() }}>{action.label}</button>
         </>
       )}</For>
@@ -208,12 +207,16 @@ export default function WorkspaceSidebar(props: {
     const cutAtStart = clipboard()
     const generation = (requests.get(path) ?? 0) + 1
     requests.set(path, generation)
-    setDirectory(path, { entries: state?.entries, loading: true, error: undefined })
+    setDirectory((draft) => { draft[path] = { entries: draft[path]?.entries, loading: true } })
     try {
       const entries = await desktopWorkspace.entries(root, path)
       if (disposed || requests.get(path) !== generation) return
-      setDirectory(path, 'entries', reconcile(entries, { key: 'path' }))
-      setDirectory(path, 'loading', false)
+      setDirectory((draft) => {
+        const folder = draft[path]
+        if (folder.entries) reconcile(entries, 'path')(folder.entries)
+        else folder.entries = entries
+        folder.loading = false
+      })
       const item = clipboard()
       if (item?.cut && cutAtStart?.cut && !pasting()) {
         const paths = new Set(entries.map((entry) => entry.path))
@@ -225,32 +228,37 @@ export default function WorkspaceSidebar(props: {
       }
     } catch {
       if (disposed || requests.get(path) !== generation) return
-      setDirectory(path, 'loading', false)
-      setDirectory(path, 'error', '目录读取失败')
+      setDirectory((draft) => {
+        draft[path].loading = false
+        draft[path].error = '目录读取失败'
+      })
     }
   }
 
-  createEffect(on(() => [props.active, props.reveal], (paths) => {
+  createEffect(() => [props.active, props.reveal], (paths) => {
     if (!root) return
     const folders = new Set(paths.flatMap((path) => path ? ancestors(root, path) : []))
     if (!folders.size) return
     setExpanded((open) => new Set([...open, ...folders]))
-    for (const folder of folders) void load(folder)
-  }))
+    for (const folder of folders) void untrack(() => load(folder))
+  })
 
-  createEffect(on(() => props.renamed, (rename) => {
+  createEffect(() => props.renamed, (rename) => {
     if (!rename) return
     discardClipboard(rename.source)
     const parent = ancestors(root, rename.source).at(-1) ?? root
     const entries = directories[parent]?.entries
     if (!entries?.some((entry) => entry.path === rename.source)) return
-    setDirectory(parent, 'entries', reconcile(entries.map((entry) => entry.path === rename.source
-      ? { ...entry, path: rename.destination, name: rename.name } : entry), { key: 'path' }))
+    setDirectory((draft) => {
+      const entries = draft[parent]?.entries
+      const entry = entries?.find((entry) => entry.path === rename.source)
+      if (entry) Object.assign(entry, { path: rename.destination, name: rename.name })
+    })
     const order = orders()[parent]
     if (order?.includes(rename.source)) {
       saveOrders({ ...orders(), [parent]: order.map((path) => path === rename.source ? rename.destination : path) })
     }
-  }, { defer: true }))
+  }, { defer: true })
 
   const refresh = () => {
     if (!root) return
@@ -262,8 +270,8 @@ export default function WorkspaceSidebar(props: {
     }
     for (const path of folders) void load(path, true)
   }
-  createEffect(on(() => props.revision, refresh, { defer: true }))
-  createEffect(on(clipboard, (item) => {
+  createEffect(() => props.revision, () => untrack(refresh), { defer: true })
+  createEffect(clipboard, (item) => {
     if (!props.onCopy || !item?.cut) return
     const sources = new Map(item.entries.map(({ entry, parent }) => [entry.path, parent]))
     const folders = new Set(sources.values())
@@ -289,23 +297,25 @@ export default function WorkspaceSidebar(props: {
       // Catch a move that happened before the native watcher was attached.
       refreshCutSource()
     }).catch(() => { /* Refresh on focus if the filesystem cannot be watched. */ })
-    onCleanup(() => {
+    return () => {
       watching = false
       window.removeEventListener('focus', refreshCutSource)
       if (stop) void stop().catch(() => {})
-    })
-  }))
+    }
+  })
 
   createEffect(() => {
     const file = props.reveal
     if (!props.visible || !root || !file || !childOf(file, root)) return
     const folder = ancestors(root, file).at(-1) ?? root
-    if (!directories[folder]?.entries?.some((entry) => entry.path === file)) return
+    if (directories[folder]?.entries?.some((entry) => entry.path === file)) return file
+  }, (file) => {
+    if (!file) return
     const frame = requestAnimationFrame(() => {
       const row = tree.querySelector(`[data-workspace-entry="${CSS.escape(file)}"]`)
       row?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     })
-    onCleanup(() => cancelAnimationFrame(frame))
+    return () => cancelAnimationFrame(frame)
   })
 
   const expand = (path: string) => {
@@ -357,23 +367,21 @@ export default function WorkspaceSidebar(props: {
     return collectFiles((path) => folders.has(path), (path) => paths.has(path))
   })
   const overviewEntries = createMemo(() => selectedEntries().map(({ entry }) => entry))
-  const clearSelection = () => batch(() => {
+  const clearSelection = () => {
     selectionAnchor = undefined
     setKeepOverview(false)
     setSelection(new Set<string>())
-  })
-  createEffect(on(() => props.selectionReset, clearSelection, { defer: true }))
+  }
+  createEffect(() => props.selectionReset, clearSelection, { defer: true })
 
   const removeFromOverview = (path: string) => {
     if (!selection().has(path)) return
-    batch(() => {
-      setKeepOverview(true)
-      setSelection((paths) => new Set([...paths].filter((selected) => selected !== path)))
-    })
-    if (selectionAnchor === path) selectionAnchor = selectedEntries().at(-1)?.entry.path
+    setKeepOverview(true)
+    setSelection((paths) => new Set([...paths].filter((selected) => selected !== path)))
+    if (selectionAnchor === path) selectionAnchor = selectedEntries().findLast(({ entry }) => entry.path !== path)?.entry.path
   }
 
-  const selectFile = (path: string, event: MouseEvent) => batch(() => {
+  const selectFile = (path: string, event: MouseEvent) => {
     setKeepOverview(false)
     const toggle = event.ctrlKey || event.metaKey
     if (event.shiftKey) {
@@ -391,7 +399,7 @@ export default function WorkspaceSidebar(props: {
     if (next.has(path)) next.delete(path)
     else next.add(path)
     setSelection(next)
-  })
+  }
 
   const saveOrders = (updated: Record<string, string[]>) => {
     setOrders(updated)
@@ -418,7 +426,7 @@ export default function WorkspaceSidebar(props: {
     setContext(undefined)
     if (restoreFocus) trigger?.focus({ preventScroll: true })
   }
-  createEffect(on(() => props.visible, (visible) => { if (!visible) closeContext(false) }))
+  createEffect(() => props.visible, (visible) => { if (!visible) untrack(() => closeContext(false)) })
 
   const showContext = (event: MouseEvent | KeyboardEvent, entry?: WorkspaceEntry) => {
     event.preventDefault()
@@ -590,20 +598,22 @@ export default function WorkspaceSidebar(props: {
     const entries = overviewEntries()
     if (notice?.paths.size === entries.length && entries.every(({ path }) => notice.paths.has(path))) return notice.message
   }
-  onMount(() => props.onSelectionReady?.({
-    entries: overviewEntries,
-    showOverview,
-    remove: removeFromOverview,
-    copy: (cut) => { if (canCopyOverview()) copy(selectedEntries(), cut, true) },
-    canCopy: canCopyOverview,
-    cutPaths,
-    message: overviewMessage,
-    onKeyDown: (event) => {
-      if (cancelCutShortcut(event)) return
-      const key = event.key.toLowerCase()
-      if (key === 'c' || key === 'x') clipboardShortcut(event, { fromOverview: true })
-    },
-  }))
+  onSettled(() => {
+    props.onSelectionReady?.({
+      entries: overviewEntries,
+      showOverview,
+      remove: removeFromOverview,
+      copy: (cut) => { if (canCopyOverview()) copy(selectedEntries(), cut, true) },
+      canCopy: canCopyOverview,
+      cutPaths,
+      message: overviewMessage,
+      onKeyDown: (event) => {
+        if (cancelCutShortcut(event)) return
+        const key = event.key.toLowerCase()
+        if (key === 'c' || key === 'x') clipboardShortcut(event, { fromOverview: true })
+      },
+    })
+  })
 
   const actionsFor = ({ entry, trigger }: SidebarContext) => {
     const actions: SidebarAction[] = []
@@ -688,7 +698,7 @@ export default function WorkspaceSidebar(props: {
       if (!childOf(path, entry.path, true)) continue
       // Invalidate pending loads even if another folder is later created at the same path.
       requests.set(path, (requests.get(path) ?? 0) + 1)
-      setDirectory(path, undefined!)
+      setDirectory((draft) => { delete draft[path] })
     }
   }
 
@@ -821,7 +831,7 @@ export default function WorkspaceSidebar(props: {
     if (target) void drop(source, target)
   }
 
-  onMount(() => {
+  onSettled(() => {
     const preventDropClick = (event: MouseEvent) => {
       if (dropRelease && isClickFromRelease(event, dropRelease)) {
         event.preventDefault()
@@ -837,7 +847,7 @@ export default function WorkspaceSidebar(props: {
     window.addEventListener('blur', clearDrag)
     tree.addEventListener('click', preventDropClick, true)
     window.addEventListener('keydown', cancelDrag)
-    onCleanup(() => {
+    return () => {
       clearTimeout(openTimer)
       window.removeEventListener('pointermove', movePointer)
       window.removeEventListener('pointerup', releasePointer)
@@ -845,7 +855,7 @@ export default function WorkspaceSidebar(props: {
       window.removeEventListener('blur', clearDrag)
       tree.removeEventListener('click', preventDropClick, true)
       window.removeEventListener('keydown', cancelDrag)
-    })
+    }
   })
 
   const DirectoryStatus = (state: { path: string; empty: string }) => (
@@ -858,8 +868,8 @@ export default function WorkspaceSidebar(props: {
 
   const EntryIcons = ({ entry }: { entry: WorkspaceEntry }) => (
     <>
-      <span classList={{ 'workspace-chevron': true, 'has-folder': entry.directory, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true" />
-      <span classList={{
+      <span class={{ 'workspace-chevron': true, 'has-folder': entry.directory, 'is-open': entry.directory && expanded().has(entry.path) }} aria-hidden="true" />
+      <span class={{
         'workspace-entry-icon': true,
         'is-folder': entry.directory,
         'is-folder-open': entry.directory && expanded().has(entry.path),
@@ -888,18 +898,17 @@ export default function WorkspaceSidebar(props: {
         <Show when={creation()?.folder !== rows.path}><li><DirectoryStatus path={rows.path} empty="空文件夹" /></li></Show>
       }>
         {(entry) => (<>
-          <li classList={{
+          <li class={{
             'workspace-drop-before': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'before',
             'workspace-drop-after': dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'after',
           }}>
             <div
-              class="workspace-row"
-              classList={{
+              class={['workspace-row', {
                 'workspace-drop-target': props.importTarget === entry.path || (dropTarget()?.anchor === entry.path && dropTarget()?.edge === 'inside'),
                 'workspace-dragged': dragged()?.path === entry.path,
                 'workspace-row-menu-open': context()?.entry?.path === entry.path,
                 'workspace-row-cut': cutPaths().has(entry.path),
-              }}
+              }]}
               data-workspace-folder={entry.directory ? entry.path : undefined}
               data-workspace-entry={entry.path} data-workspace-parent={rows.path}
               onPointerDown={(event) => pressRow(event, entry)}
@@ -921,10 +930,10 @@ export default function WorkspaceSidebar(props: {
                   class="workspace-row-button"
                   title={props.displayName?.(entry) ?? entry.name}
                   disabled={entry.accessible === false}
-                  aria-expanded={entry.directory ? expanded().has(entry.path) : undefined}
+                  aria-expanded={entry.directory ? (expanded().has(entry.path) ? 'true' : 'false') : undefined}
                   aria-current={!entry.directory && props.active === entry.path ? 'page' : undefined}
-                  aria-pressed={entry.directory ? undefined : selection().has(entry.path)}
-                  aria-busy={props.pending === entry.path || undefined}
+                  aria-pressed={entry.directory ? undefined : selection().has(entry.path) ? 'true' : 'false'}
+                  aria-busy={props.pending === entry.path ? 'true' : undefined}
                   onClick={(event) => {
                     const modified = event.shiftKey || event.metaKey || event.ctrlKey
                     // AppKit can count A, B, A as clicks 1, 2, 3 across a row boundary.
@@ -993,10 +1002,10 @@ export default function WorkspaceSidebar(props: {
         setPending(false)
       }
     }
-    onMount(() => {
+    onSettled(() => {
       field.focus({ preventScroll: true })
       field.scrollIntoView({ block: 'nearest' })
-      onInlineNameBlur(field, () => {
+      return onInlineNameBlur(field, () => {
         if (!pending() && !field.value.trim()) {
           setCreation((current) => current === draft ? undefined : current)
         }
@@ -1004,10 +1013,10 @@ export default function WorkspaceSidebar(props: {
     })
     return (
       <li>
-        <div class="workspace-create-row" aria-busy={pending() || undefined}>
-          <span class="workspace-entry-icon" classList={{ 'is-folder': draft.directory, 'is-document': !draft.directory }} aria-hidden="true" />
+        <div class="workspace-create-row" aria-busy={pending() ? 'true' : undefined}>
+          <span class={['workspace-entry-icon', { 'is-folder': draft.directory, 'is-document': !draft.directory }]} aria-hidden="true" />
           <input ref={field} aria-label={label} placeholder={draft.directory ? label : '文件名.md'}
-            aria-invalid={!!issue()} readOnly={pending()} onInput={() => setIssue(undefined)}
+            aria-invalid={!!issue() ? 'true' : 'false'} readonly={pending()} onInput={() => setIssue(undefined)}
             onContextMenu={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
               if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
@@ -1029,7 +1038,7 @@ export default function WorkspaceSidebar(props: {
     let dialog!: HTMLDialogElement
     const [pending, setPending] = createSignal(false)
     const [issue, setIssue] = createSignal<string>()
-    onMount(() => dialog.showModal())
+    onSettled(() => dialog.showModal())
     const confirm = async () => {
       if (pending()) return
       setPending(true)
@@ -1071,8 +1080,8 @@ export default function WorkspaceSidebar(props: {
         contextShortcut(event)
       }}>
       <div
-        class="workspace-title" classList={{ 'workspace-drop-target': props.importTarget === root || dropTarget()?.anchor === root }}
-        data-workspace-folder={root || undefined} tabIndex={root ? 0 : undefined}
+        class={['workspace-title', { 'workspace-drop-target': props.importTarget === root || dropTarget()?.anchor === root }]}
+        data-workspace-folder={root || undefined} tabindex={root ? 0 : undefined}
         onClick={(event) => {
           if (root && !(event.target as HTMLElement).closest('button')) event.currentTarget.focus({ preventScroll: true })
         }}
@@ -1095,7 +1104,7 @@ export default function WorkspaceSidebar(props: {
           </Show>
         </div>
       }>
-        <nav class="workspace-tree" aria-label="文件目录" tabIndex={0} onClick={(event) => {
+        <nav class="workspace-tree" aria-label="文件目录" tabindex={0} onClick={(event) => {
           if (!(event.target as HTMLElement).closest('[data-workspace-entry], button, input')) {
             event.currentTarget.focus({ preventScroll: true })
           }

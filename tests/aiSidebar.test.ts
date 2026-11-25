@@ -1,5 +1,6 @@
 import { createComponent, createSignal } from 'solid-js'
-import { render } from 'solid-js/web'
+import { render } from '@solidjs/web'
+import { afterUiEvent } from './uiEvents'
 import { expect, it, vi } from 'vitest'
 import { captureAiReference } from '../src/core/aiDocument'
 import { createEditor } from '../src/core/editor'
@@ -43,9 +44,9 @@ it.each([
   try {
     const input = host.querySelector<HTMLTextAreaElement>('[aria-label="向 AI 提问"]')!
     input.value = '改成 Onebox'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
+    afterUiEvent(() => input.dispatchEvent(new Event('input', { bubbles: true })))
     await vi.waitFor(() => expect(action('发送')?.disabled).toBe(false))
-    action('发送')!.click()
+    afterUiEvent(() => action('发送')!.click())
     await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
     receive({ method: 'item/completed', params: {
       threadId: 'thread', turnId: 'turn',
@@ -53,25 +54,25 @@ it.each([
         answer: '已生成建议', revision: { reference, markdown: 'Onebox' },
       }) },
     } })
-    receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } })
+    afterUiEvent(() => receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } }))
     expect(page.querySelector(marker)).not.toBeNull()
     expect(handle.toMarkdown()).toBe(markdown)
     expect(onUpdate).not.toHaveBeenCalled()
 
-    action('撤销预览')!.click()
+    afterUiEvent(() => action('撤销预览')!.click())
     expect(page.querySelector(marker)).toBeNull()
     expect(onUpdate).not.toHaveBeenCalled()
-    action(reopen)!.click()
-    action('✓ 确认')!.click()
+    afterUiEvent(() => action(reopen)!.click())
+    afterUiEvent(() => action('✓ 确认')!.click())
     expect(page.querySelector(marker)).toBeNull()
     expect(handle.toMarkdown()).toBe(result)
     expect(onUpdate).toHaveBeenCalledOnce()
-    action('撤销')!.click()
+    afterUiEvent(() => action('撤销')!.click())
     expect(handle.toMarkdown()).toBe(markdown)
     if (reference) {
-      action('查看建议')!.click()
-      action(reopen)!.click()
-      handle.editor.view.dispatch(handle.editor.state.tr.insertText('x', 2))
+      afterUiEvent(() => action('查看建议')!.click())
+      afterUiEvent(() => action(reopen)!.click())
+      afterUiEvent(() => handle.editor.view.dispatch(handle.editor.state.tr.insertText('x', 2)))
       expect(page.querySelector(marker)).toBeNull()
       expect(action('✓ 确认')).toBeUndefined()
       expect(handle.toMarkdown()).toBe('oxnebox 文档')
@@ -108,17 +109,17 @@ it('opens a fresh conversation and restores the previous transcript and draft', 
   }), host)
   let dispose = mount()
   const draft = () => host.querySelector<HTMLTextAreaElement>('[aria-label="向 AI 提问"]')!
-  const toggleList = () => host.querySelector<HTMLButtonElement>('[aria-label="会话列表"]')!.click()
+  const toggleList = () => afterUiEvent(() => host.querySelector<HTMLButtonElement>('[aria-label="会话列表"]')!.click())
   const latestDraft = '这是下一条问题。'
   try {
     draft().value = latestDraft
-    draft().dispatchEvent(new Event('input', { bubbles: true }))
-    host.querySelector<HTMLButtonElement>('[aria-label="新会话"]')!.click()
+    afterUiEvent(() => draft().dispatchEvent(new Event('input', { bubbles: true })))
+    afterUiEvent(() => host.querySelector<HTMLButtonElement>('[aria-label="新会话"]')!.click())
     expect(draft().value).toBe('')
     expect(host.textContent).not.toContain('大纲已整理。')
     expect(host.querySelector('[role="status"]')?.textContent).toBe('可以开始新会话。')
     const newConversationId = history.active
-    host.querySelector<HTMLButtonElement>('[aria-label="新会话"]')!.click()
+    afterUiEvent(() => host.querySelector<HTMLButtonElement>('[aria-label="新会话"]')!.click())
     expect(history.active).toBe(newConversationId)
     expect(history.next).toBe(newConversationId)
     expect(document.activeElement).toBe(draft())
@@ -129,9 +130,9 @@ it('opens a fresh conversation and restores the previous transcript and draft', 
     expect(host.querySelector('[aria-label="过去 30 天"] time')?.textContent).toContain('月')
     const search = host.querySelector<HTMLInputElement>('[aria-label="搜索会话"]')!
     search.value = '大纲'
-    search.dispatchEvent(new Event('input', { bubbles: true }))
+    afterUiEvent(() => search.dispatchEvent(new Event('input', { bubbles: true })))
     expect(options()).toHaveLength(1)
-    options()[0].click()
+    afterUiEvent(() => options()[0].click())
     expect(draft().value).toBe(latestDraft)
     expect(host.textContent).toContain('大纲已整理。')
     dispose()
@@ -160,42 +161,42 @@ it('opens composer menus while a document loads', () => {
   }), host)
   try {
     expect(host.querySelector('.ai-compose')?.hasAttribute('inert')).toBe(false)
-    host.querySelector<HTMLButtonElement>('[aria-label="添加引用"]')!.click()
+    afterUiEvent(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用"]')!.click())
     expect(host.querySelector<HTMLButtonElement>('.ai-quote-popup button')?.disabled).toBe(true)
     const usage = host.querySelector<HTMLButtonElement>('.ai-usage-trigger')!
     const usageMenu = usage.parentElement!
-    usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))
+    afterUiEvent(() => usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' })))
     expect(host.querySelector('.ai-quote-popup')).not.toBeNull()
-    host.querySelector<HTMLButtonElement>('[aria-label="添加引用"]')!.click()
-    usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))
+    afterUiEvent(() => host.querySelector<HTMLButtonElement>('[aria-label="添加引用"]')!.click())
+    afterUiEvent(() => usageMenu.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' })))
     expect(host.querySelector('.ai-usage-popup')).toBeNull()
-    usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    afterUiEvent(() => usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })))
     const popup = host.querySelector('.ai-usage-popup')!
     expect(usage.getAttribute('aria-expanded')).toBe('true')
     const canceledPress = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse' })
     canceledPress.preventDefault()
-    document.body.dispatchEvent(canceledPress)
+    afterUiEvent(() => document.body.dispatchEvent(canceledPress))
     expect(popup.isConnected).toBe(true)
-    host.querySelector('.ai-model-trigger')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+    afterUiEvent(() => host.querySelector('.ai-model-trigger')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' })))
     expect(popup.isConnected).toBe(true)
-    popup.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
-    usageMenu.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))
+    afterUiEvent(() => popup.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' })))
+    afterUiEvent(() => usageMenu.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' })))
     expect(popup.isConnected).toBe(true)
-    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+    afterUiEvent(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' })))
     expect(popup.isConnected).toBe(false)
     expect(usage.getAttribute('aria-expanded')).toBe('false')
-    usage.click()
-    usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    afterUiEvent(() => usage.click())
+    afterUiEvent(() => usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })))
     expect(host.querySelector('.ai-usage-popup')).toBeNull()
-    usage.click()
+    afterUiEvent(() => usage.click())
     expect(host.querySelector('.ai-usage-popup')).not.toBeNull()
     expect(host.querySelector<HTMLButtonElement>('[aria-label="发送"]')?.disabled).toBe(true)
     const sidebar = host.querySelector<HTMLElement>('[aria-label="Onebox AI"]')!
-    sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    afterUiEvent(() => sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(host.querySelector('.ai-usage-popup')).toBeNull()
-    sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    afterUiEvent(() => sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(onClose).toHaveBeenCalledTimes(1)
-    sidebar.querySelector<HTMLButtonElement>('.ai-sidebar-collapse')!.click()
+    afterUiEvent(() => sidebar.querySelector<HTMLButtonElement>('.ai-sidebar-collapse')!.click())
     expect(onClose).toHaveBeenCalledTimes(2)
   } finally {
     dispose()
@@ -225,12 +226,12 @@ it('uses the same AI toggle on initial open, close, and rapid reopen', () => {
       bubbles: true, cancelable: true, pointerId: 1, button: 0, isPrimary: true, pointerType: 'mouse', clientX,
     })
     Object.defineProperty(event, 'timeStamp', { value: timeStamp })
-    button.dispatchEvent(event)
+    afterUiEvent(() => button.dispatchEvent(event))
   }
   const lateClick = (timeStamp: number, clientX: number) => {
     const event = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1, clientX })
     Object.defineProperty(event, 'timeStamp', { value: timeStamp })
-    button.dispatchEvent(event)
+    afterUiEvent(() => button.dispatchEvent(event))
   }
   try {
     pointer('pointerup', 101, 22)
@@ -253,7 +254,7 @@ it('uses the same AI toggle on initial open, close, and rapid reopen', () => {
     pointer('pointerdown', 150, 23)
     pointer('pointerup', 151, 24)
     expect(open()).toBe(true)
-    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    afterUiEvent(() => button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
     expect(open()).toBe(false)
   } finally {
     stop()
@@ -273,14 +274,14 @@ it('keeps the model dropdown open while the pointer crosses the space above its 
   }), host)
   try {
     const button = host.querySelector('button')!
-    button.click()
+    afterUiEvent(() => button.click())
     expect(host.textContent).toContain('模型列表')
 
-    button.parentElement!.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))
+    afterUiEvent(() => button.parentElement!.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' })))
     vi.advanceTimersByTime(250)
     expect(host.textContent).toContain('模型列表')
 
-    button.click()
+    afterUiEvent(() => button.click())
     expect(host.textContent).not.toContain('模型列表')
   } finally {
     dispose()
@@ -304,7 +305,7 @@ it('resizes the right sidebar in the opposite direction and keeps its own width 
   }), host)
   try {
     const handle = host.querySelector('[role="separator"]')!
-    const press = (key: string) => handle.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+    const press = (key: string) => afterUiEvent(() => handle.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })))
     press('ArrowLeft')
     expect(width()).toBe(316)
     expect(initialSidebarWidth('ai')).toBe(316)
@@ -350,18 +351,18 @@ it('saves and closes the menu immediately on a reasoning or model choice', async
   try {
     const trigger = host.querySelector<HTMLButtonElement>('.ai-model-trigger')!
     await vi.waitFor(() => expect(trigger.getAttribute('aria-label')).toContain('思考强度 高'))
-    trigger.click()
+    afterUiEvent(() => trigger.click())
     const tiers = [...host.querySelectorAll<HTMLButtonElement>('.ai-effort-options button')]
     expect(tiers.map((button) => button.textContent)).toEqual(['低', '中', '高'])
     expect(tiers[2].getAttribute('aria-pressed')).toBe('true')
-    tiers[0].click()
+    afterUiEvent(() => tiers[0].click())
     expect(host.querySelector('.ai-model-popup')).toBeNull()
     expect(document.activeElement).toBe(host.querySelector('textarea'))
     expect(localStorage.getItem(key)).toBe('low')
     expect(trigger.getAttribute('aria-label')).toContain('思考强度 低')
 
-    trigger.click()
-    host.querySelectorAll<HTMLButtonElement>('.ai-model-option')[1].click()
+    afterUiEvent(() => trigger.click())
+    afterUiEvent(() => host.querySelectorAll<HTMLButtonElement>('.ai-model-option')[1].click())
     expect(host.querySelector('.ai-model-popup')).toBeNull()
     expect(document.activeElement).toBe(host.querySelector('textarea'))
     expect(localStorage.getItem(modelKey)).toBe(alternative.model)

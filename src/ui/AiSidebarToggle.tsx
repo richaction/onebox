@@ -5,7 +5,7 @@ export default function AiSidebarToggle(props: {
   ref?: (button: HTMLButtonElement) => void
 }) {
   return <div class="file-preview-actions ai-toggle-slot">
-    <button type="button" class="ai-toggle" ref={props.ref} data-activate-on-release aria-expanded={props.open}
+    <button type="button" class="ai-toggle" ref={props.ref} data-activate-on-release aria-expanded={props.open ? 'true' : 'false'}
       aria-label="AI 侧栏" title={props.open ? '收起 AI 侧栏' : '打开 AI 侧栏'} aria-controls="onebox-ai-sidebar"
       onClick={() => (props.open ? props.onClose : props.onOpen)()}
       onKeyDown={(event) => {

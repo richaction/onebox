@@ -1,4 +1,5 @@
-import { createUniqueId, Show, type JSX } from 'solid-js'
+import { createUniqueId, Show } from 'solid-js'
+import type { JSX } from '@solidjs/web'
 
 export type ComposerMenu = 'quote' | 'usage' | 'model'
 
@@ -24,7 +25,7 @@ export default function AiComposerMenu(props: {
       }}>
       <button class={`ai-composer-trigger ai-${props.kind}-trigger`} type="button"
         aria-label={props.label} title={props.kind === 'quote' ? props.label : undefined}
-        aria-expanded={props.open} aria-controls={popupId}
+        aria-expanded={props.open ? 'true' : 'false'} aria-controls={popupId}
         onClick={props.onToggle}>
         {props.trigger}
       </button>

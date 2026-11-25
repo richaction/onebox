@@ -1,5 +1,5 @@
 import type { Editor } from '@tiptap/core'
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createMemo, createSignal, For, onCleanup, onSettled, Show } from 'solid-js'
 import { aiRevisionDiff, decodeAiAnswer } from '../core/aiAnswer'
 import { resolveSavedReasoningEffort } from '../core/aiReasoning'
 import { aiReferenceRange, applyAiRevision, clearAiSource, previewAiChanges, type AiReference, type AiRevision } from '../core/aiDocument'
@@ -108,7 +108,7 @@ export default function InlineAiEditor(props: {
       return
     }
     setSuggestion(revision)
-    try { setInPlace(previewAiChanges(props.editor, props.reference, revision, diff() ?? [])) }
+    try { setInPlace(previewAiChanges(props.editor, props.reference, revision, aiRevisionDiff(props.reference.text, revision.markdown))) }
     catch { setInPlace(false) }
     schedule()
   }
@@ -212,7 +212,7 @@ export default function InlineAiEditor(props: {
     frame = requestAnimationFrame(position)
   }
 
-  onMount(() => {
+  onSettled(() => {
     const resize = new ResizeObserver(schedule)
     resize.observe(panel)
     resize.observe(props.scrollRoot)
@@ -260,7 +260,7 @@ export default function InlineAiEditor(props: {
         if (!disposed && doc.activeElement !== input) focusFrame = requestAnimationFrame(focusWhenVisible)
       })
     }
-    onCleanup(() => {
+    return () => {
       resize.disconnect()
       props.editor.off('transaction', schedule)
       props.scrollRoot.removeEventListener('scroll', schedule, true)
@@ -269,7 +269,7 @@ export default function InlineAiEditor(props: {
       doc.removeEventListener('pointerup', release, true)
       doc.removeEventListener('pointercancel', release, true)
       doc.removeEventListener('click', click, true)
-    })
+    }
   })
 
   onCleanup(() => {

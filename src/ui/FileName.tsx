@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createSignal, onSettled, Show, untrack } from 'solid-js'
 
 export function splitName(name: string, directory?: boolean) {
   const dot = name.lastIndexOf('.')
@@ -48,7 +48,7 @@ export function onInlineNameBlur(input: HTMLInputElement, commit: () => void) {
   doc.addEventListener('pointercancel', release, true)
   doc.addEventListener('click', click, true)
   window.addEventListener('blur', finish)
-  onCleanup(() => {
+  return () => {
     window.clearTimeout(releaseTimer)
     window.clearTimeout(timer)
     input.removeEventListener('blur', blur)
@@ -57,7 +57,7 @@ export function onInlineNameBlur(input: HTMLInputElement, commit: () => void) {
     doc.removeEventListener('pointercancel', release, true)
     doc.removeEventListener('click', click, true)
     window.removeEventListener('blur', finish)
-  })
+  }
 }
 
 export function NameField(props: {
@@ -66,15 +66,15 @@ export function NameField(props: {
   onRename: (stem: string) => Promise<unknown>
   onClose: () => void
 }) {
-  const { stem, suffix } = splitName(props.name, props.directory)
+  const { stem, suffix } = untrack(() => splitName(props.name, props.directory))
   const [draft, setDraft] = createSignal(stem)
   const [pending, setPending] = createSignal(false)
   const [error, setError] = createSignal<string>()
   let input!: HTMLInputElement
-  onMount(() => {
+  onSettled(() => {
     input.focus({ preventScroll: true })
     input.setSelectionRange(stem.length, stem.length)
-    onInlineNameBlur(input, () => { if (!pending() && !error()) void submit() })
+    return onInlineNameBlur(input, () => { if (!pending() && !error()) void submit() })
   })
 
   const submit = async () => {
@@ -107,7 +107,7 @@ export function NameField(props: {
         <span class="filename-inline-stem">
           <span aria-hidden="true">{draft()}</span>
           <input ref={input} value={stem} type="text" autocomplete="off" spellcheck={false}
-            aria-label="新名称" aria-invalid={!!error()} readOnly={pending()}
+            aria-label="新名称" aria-invalid={!!error() ? 'true' : 'false'} readonly={pending()}
             onInput={(event) => {
               setDraft(event.currentTarget.value)
               setError(undefined)
@@ -138,25 +138,32 @@ export interface TitleEdit {
 
 export default function FileName(props: { name: string; edit?: TitleEdit }) {
   const stem = () => props.edit?.stem ?? splitName(props.name).stem
+  const InlineTitleInput = () => {
+    let input!: HTMLInputElement
+    onSettled(() => onInlineNameBlur(input, () => props.edit?.onSave()))
+    return (
+      <input ref={input}
+        value={stem()} type="text" autocomplete="off" spellcheck={false}
+        aria-label="文件名" aria-invalid={!!props.edit?.error ? 'true' : 'false'}
+        onCompositionStart={() => props.edit?.onPause()}
+        onCompositionEnd={(event) => props.edit?.onInput(event.currentTarget.value)}
+        onInput={(event) => { if (!event.isComposing) props.edit?.onInput(event.currentTarget.value) }}
+        onKeyDown={(event) => {
+          if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
+          event.preventDefault()
+          event.stopPropagation()
+          if (event.key === 'Escape') props.edit?.onCancel()
+          event.currentTarget.blur()
+        }} />
+    )
+  }
   return (
     <div class="filename-title">
       <Show when={props.edit} fallback={<strong title={props.name}>{props.name}</strong>}>
         <label class="filename-inline" title={props.name}>
           <span class="filename-inline-stem">
             <span aria-hidden="true">{stem() || ' '}</span>
-            <input ref={(input) => onMount(() => onInlineNameBlur(input, () => props.edit?.onSave()))}
-              value={stem()} type="text" autocomplete="off" spellcheck={false}
-              aria-label="文件名" aria-invalid={!!props.edit?.error}
-              onCompositionStart={() => props.edit?.onPause()}
-              onCompositionEnd={(event) => props.edit?.onInput(event.currentTarget.value)}
-              onInput={(event) => { if (!event.isComposing) props.edit?.onInput(event.currentTarget.value) }}
-              onKeyDown={(event) => {
-                if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
-                event.preventDefault()
-                event.stopPropagation()
-                if (event.key === 'Escape') props.edit?.onCancel()
-                event.currentTarget.blur()
-              }} />
+            <InlineTitleInput />
           </span>
           <span class="filename-inline-suffix">{splitName(props.name).suffix}</span>
         </label>

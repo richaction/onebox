@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, onCleanup, onSettled, Show } from 'solid-js'
 import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 import PreviewLoading from './PreviewLoading'
 import type { ImagePreviewAction, ImagePreviewState } from './previewImage'
@@ -27,15 +27,15 @@ export default function ViewerFrame(props: {
   let url: string | undefined
   const name = props.entry.name
 
-  createEffect(on(() => props.imageCommand, (command) => {
+  createEffect(() => props.imageCommand, (command) => {
     if (command && visible()) frame.contentWindow?.postMessage({ type: 'onebox-preview-image-command', ...command }, '*')
-  }, { defer: true }))
+  }, { defer: true })
 
-  createEffect(on(() => props.pdfOutlineOpen, (open) => {
+  createEffect(() => props.pdfOutlineOpen, (open) => {
     if (visible() && /\.pdf$/iu.test(name)) frame.contentWindow?.postMessage({ type: 'onebox-preview-pdf-outline', open }, '*')
-  }, { defer: true }))
+  }, { defer: true })
 
-  onMount(() => {
+  onSettled(() => {
     const timeout = setTimeout(() => finish('预览未能加载'), 30000)
     const finish = (message = '') => {
       clearTimeout(timeout)
@@ -103,17 +103,17 @@ export default function ViewerFrame(props: {
     }).catch((error: unknown) => {
       if (!disposed) finish(typeof error === 'string' ? error : '无法读取此文件')
     })
-    onCleanup(() => {
+    return () => {
       disposed = true
       clearTimeout(timeout)
       window.removeEventListener('message', receive)
-    })
+    }
   })
 
   return (
-    <div class="preview-surface" classList={{ 'preview-surface-text': /\.txt$/iu.test(props.entry.name) }}>
+    <div class={['preview-surface', { 'preview-surface-text': /\.txt$/iu.test(props.entry.name) }]}>
       <iframe ref={frame} title={`只读预览：${props.entry.name}`}
-        classList={{ 'preview-frame-ready': visible() }} inert={!visible()}
+        class={{ 'preview-frame-ready': visible() }} inert={!visible()}
         src={`${import.meta.env.BASE_URL}preview-frame.html`} sandbox="allow-scripts allow-same-origin" />
       <Show when={loading()}><PreviewLoading label="正在打开预览…" /></Show>
       <Show when={error()}>

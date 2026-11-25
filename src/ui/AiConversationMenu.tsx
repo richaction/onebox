@@ -38,8 +38,8 @@ export default function AiConversationMenu(props: {
     return [{ label: '', items: undated }, ...ranges].filter(({ items }) => items.length)
   })
 
-  createEffect(() => {
-    if (!props.open) { setSearch(''); return }
+  createEffect(() => props.open, (open) => {
+    if (!open) { setSearch(''); return }
     queueMicrotask(() => { if (props.open) searchField?.focus({ preventScroll: true }) })
   })
 
@@ -67,7 +67,7 @@ export default function AiConversationMenu(props: {
       else options[next]?.focus()
     }}>
       <button class="ai-conversation-trigger" type="button" aria-label="会话列表" aria-haspopup="dialog"
-        aria-expanded={props.open} aria-controls={popupId} disabled={props.disabled} onClick={props.onToggle}>
+        aria-expanded={props.open ? 'true' : 'false'} aria-controls={popupId} disabled={props.disabled} onClick={props.onToggle}>
         <span>{props.current.title}</span><i aria-hidden="true" />
       </button>
       <Show when={props.open}>
@@ -82,7 +82,7 @@ export default function AiConversationMenu(props: {
               {(group) => <section aria-label={group.label || undefined}>
                 <Show when={group.label}><h3>{group.label}</h3></Show>
                 <For each={group.items}>{(conversation) =>
-                  <button class="ai-conversation-option" type="button" aria-current={conversation.id === props.current.id}
+                  <button class="ai-conversation-option" type="button" aria-current={conversation.id === props.current.id ? 'true' : 'false'}
                     disabled={props.disabled} title={conversation.title} onClick={() => props.onSelect(conversation.id)}>
                     <i aria-hidden="true" /><span>{conversation.title}</span>
                     <Show when={conversation.updatedAt}>{(time) =>

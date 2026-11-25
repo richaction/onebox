@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount } from 'solid-js'
+import { createSignal, onCleanup, onSettled } from 'solid-js'
 import { reachesDragThreshold } from '../core/buttonClickTolerance'
 
 const minimum = 180
@@ -61,7 +61,7 @@ export default function WorkspaceResizeHandle(props: {
     finish(event)
   }
 
-  onMount(() => {
+  onSettled(() => {
     const resize = () => setAvailable(limit())
     window.addEventListener('resize', resize)
     // A release or the next press can reach the window without hitting the handle.
@@ -69,19 +69,19 @@ export default function WorkspaceResizeHandle(props: {
     window.addEventListener('pointercancel', finish, true)
     window.addEventListener('pointerdown', finish, true)
     window.addEventListener('blur', stopDragging)
-    onCleanup(() => {
+    return () => {
       stopDragging()
       window.removeEventListener('resize', resize)
       window.removeEventListener('pointerup', release, true)
       window.removeEventListener('pointercancel', finish, true)
       window.removeEventListener('pointerdown', finish, true)
       window.removeEventListener('blur', stopDragging)
-    })
+    }
   })
 
   return (
     <div ref={handle} class={`sidebar-resize-handle ${props.sidebar}-resize-handle`} role="separator" aria-label={settings.label}
-      aria-orientation="vertical" aria-controls={settings.controls} tabIndex={0} data-pointer-drag-handle
+      aria-orientation="vertical" aria-controls={settings.controls} tabindex={0} data-pointer-drag-handle
       aria-valuemin={minimum} aria-valuemax={available()} aria-valuenow={current()}
       onPointerDown={(event) => {
         if (event.defaultPrevented || event.button !== 0 || drag) return

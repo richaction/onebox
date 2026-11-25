@@ -1,6 +1,6 @@
 import { fileViewerRenderers } from '@file-viewer/vite-plugin'
 import { defineConfig } from 'vitest/config'
-import solid from 'vite-plugin-solid'
+import solid from '@solidjs/vite-plugin'
 import { codeLanguageIds } from './src/core/codeLanguages.ts'
 import { developmentBridge } from './scripts/dev-bridge.mjs'
 

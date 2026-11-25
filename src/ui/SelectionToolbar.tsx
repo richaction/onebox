@@ -110,7 +110,7 @@ export default function SelectionToolbar(props: {
 
   const iconButton = (label: string, symbol: string, activate: () => void, disabled?: () => boolean, mark?: string) => (
     <button type="button" class="selection-toolbar-icon" title={label} aria-label={label}
-      aria-pressed={mark ? !!textSelection() && editor.isActive(mark) : undefined}
+      aria-pressed={mark ? (textSelection() && editor.isActive(mark) ? 'true' : 'false') : undefined}
       data-action={label} disabled={disabled?.()} onClick={activate}>{symbol}</button>
   )
 
@@ -156,7 +156,7 @@ export default function SelectionToolbar(props: {
       <Match when={panel() === 'blocks'}>
         <div class="selection-toolbar-options" role="group" aria-label="区块类型">
           <For each={blockTypes}>{(item) => (
-            <button type="button" class="selection-toolbar-row" aria-pressed={item === activeBlock} onClick={() => {
+            <button type="button" class="selection-toolbar-row" aria-pressed={item === activeBlock ? 'true' : 'false'} onClick={() => {
               if (item === activeBlock) props.onClose()
               else if (item.icon === 'T') run((chain) => chain.clearNodes())
               else if (item.icon === '❝') run((chain) => quote(chain, null))
@@ -170,7 +170,7 @@ export default function SelectionToolbar(props: {
           <button type="button" class="selection-toolbar-row" disabled={!latex()} onClick={() => math(true)}>
             <span aria-hidden="true">∑</span>公式区块
           </button>
-          <button type="button" class="selection-toolbar-row" aria-pressed={quoteVariant === 'note'}
+          <button type="button" class="selection-toolbar-row" aria-pressed={quoteVariant === 'note' ? 'true' : 'false'}
             onClick={() => run((chain) => quote(chain, 'note'))}><span aria-hidden="true">▣</span>标注</button>
           <button type="button" class="selection-toolbar-row" disabled={!canMark()} onClick={() => { setLinkError(false); setPanel('link') }}>
             <span aria-hidden="true">↗</span>页面链接

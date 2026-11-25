@@ -1,7 +1,8 @@
 import { TextSelection } from '@tiptap/pm/state'
 import { CellSelection, tableEditingKey } from '@tiptap/pm/tables'
 import { createComponent } from 'solid-js'
-import { render } from 'solid-js/web'
+import { render } from '@solidjs/web'
+import { afterUiEvent } from './uiEvents'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blockEditCommands, diagramCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
 import { createEditor, type EditorHandle } from '../src/core/editor'
@@ -25,7 +26,7 @@ function mount(onUpdate = vi.fn()) {
 
 function clickEditorGutter(clientX: number, clientY: number) {
   for (const type of ['mousedown', 'mouseup']) {
-    scrollRoot!.dispatchEvent(new MouseEvent(type, { clientX, clientY, bubbles: true, cancelable: true }))
+    afterUiEvent(() => scrollRoot!.dispatchEvent(new MouseEvent(type, { clientX, clientY, bubbles: true, cancelable: true })))
   }
 }
 
@@ -64,9 +65,9 @@ it('opens the in-document AI editor on first click and applies only after approv
     } as unknown as globalThis.Selection
     const native = vi.spyOn(window, 'getSelection').mockReturnValue(nativeSelection)
     const focus = vi.spyOn(view, 'hasFocus').mockReturnValue(true)
-    const hover = (x: number, buttons = 0) => paragraph.dispatchEvent(new PointerEvent('pointermove', {
+    const hover = (x: number, buttons = 0) => afterUiEvent(() => paragraph.dispatchEvent(new PointerEvent('pointermove', {
       bubbles: true, pointerType: 'mouse', clientX: x, clientY: 70, buttons,
-    }))
+    })))
     const menu = () => document.querySelector<HTMLElement>('.editor-selection-menu')
     const aiButton = () => menu()?.querySelector<HTMLButtonElement>('.selection-toolbar-ai')
     try {
@@ -79,7 +80,7 @@ it('opens the in-document AI editor on first click and applies only after approv
       const scroll = host.querySelector('.editor-scroll')!
       vi.useFakeTimers()
       try {
-        scroll.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))
+        afterUiEvent(() => scroll.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' })))
         vi.advanceTimersByTime(400)
         expect(menu()).not.toBeNull()
       } finally {
@@ -92,15 +93,15 @@ it('opens the in-document AI editor on first click and applies only after approv
       const retryFocus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus').mockImplementationOnce(() => {})
       try {
         const button = aiButton()!
-        button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
-        scroll.dispatchEvent(new Event('scroll'))
+        afterUiEvent(() => button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 })))
+        afterUiEvent(() => scroll.dispatchEvent(new Event('scroll')))
         expect(aiButton()).toBe(button)
-        button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
+        afterUiEvent(() => button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 })))
         // A layout event and a native caret update can follow pointerup before click.
-        scroll.dispatchEvent(new Event('scroll'))
+        afterUiEvent(() => scroll.dispatchEvent(new Event('scroll')))
         view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 12)))
         expect(button.isConnected).toBe(true)
-        button.click()
+        afterUiEvent(() => button.click())
         await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('修改要求'))
         expect(retryFocus.mock.calls.length).toBeGreaterThan(1)
       } finally { retryFocus.mockRestore() }
@@ -110,30 +111,30 @@ it('opens the in-document AI editor on first click and applies only after approv
       expect(document.activeElement).toBe(input)
       expect(view.state.selection.from).toBe(7)
       input.blur()
-      panel.querySelector('.editor-inline-ai-spark')!.dispatchEvent(new PointerEvent('pointerdown', {
+      afterUiEvent(() => panel.querySelector('.editor-inline-ai-spark')!.dispatchEvent(new PointerEvent('pointerdown', {
         bubbles: true, cancelable: true, button: 0,
-      }))
+      })))
       expect(document.activeElement).toBe(input)
       const sendButton = panel.querySelector<HTMLButtonElement>('[aria-label="发送修改要求"]')!
       expect(sendButton.disabled).toBe(true)
       input.value = '   '
-      input.dispatchEvent(new Event('input', { bubbles: true }))
+      afterUiEvent(() => input.dispatchEvent(new Event('input', { bubbles: true })))
       expect(sendButton.disabled).toBe(true)
       expect(panel.style.left).toBe('56px')
       expect(panel.style.width).toBe('708px')
       expect(panel.style.top).toBe('86px')
       contentBounds.mockReturnValue(new DOMRect(22, 24, 276, 180))
       scrollBounds.mockReturnValue(new DOMRect(0, 0, 320, 220))
-      window.dispatchEvent(new Event('resize'))
+      afterUiEvent(() => window.dispatchEvent(new Event('resize')))
       await vi.waitFor(() => expect(panel.style.width).toBe('276px'))
       expect(panel.style.left).toBe('22px')
       expect(document.querySelector('.editor-inline-ai-dismiss')).toBeNull()
       expect(onQuoteSelection).not.toHaveBeenCalled()
       expect(menu()).toBeNull()
       input.value = '改为 Onebox'
-      input.dispatchEvent(new Event('input', { bubbles: true }))
+      afterUiEvent(() => input.dispatchEvent(new Event('input', { bubbles: true })))
       expect(sendButton.disabled).toBe(false)
-      sendButton.click()
+      afterUiEvent(() => sendButton.click())
       expect(document.body.textContent).toContain('正在工作')
       expect(panel.style.width).toBe('276px')
       expect(document.querySelector('.editor-inline-ai-loading')).not.toBeNull()
@@ -145,16 +146,16 @@ it('opens the in-document AI editor on first click and applies only after approv
         item: { id: 'answer', type: 'agentMessage', text: JSON.stringify({
           answer: '已调整大小写', revision: { markdown: 'Onebox', reference: 1 },
         }) } } })
-      receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } })
+      afterUiEvent(() => receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } }))
       expect(document.querySelector('.editor-inline-ai-loading')).toBeNull()
       expect(document.querySelector('[aria-label="确认修改"]')).not.toBeNull()
       expect(panel.style.width).toBe('276px')
       expect(view.dom.querySelector('.editor-ai-added')?.textContent).toBe('O')
       expect(view.dom.querySelector('.editor-ai-removed')?.textContent).toBe('o')
       expect(mounted.toMarkdown()).toBe('onebox sample text')
-      host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+      afterUiEvent(() => host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 })))
       expect(view.dom.querySelector('.editor-ai-added')?.textContent).toBe('O')
-      document.querySelector<HTMLButtonElement>('.editor-inline-ai-apply')!.click()
+      afterUiEvent(() => document.querySelector<HTMLButtonElement>('.editor-inline-ai-apply')!.click())
       expect(mounted.toMarkdown()).toBe('Onebox sample text')
       expect(document.querySelector('.editor-inline-ai')).toBeNull()
       expect(mounted.editor.commands.undo()).toBe(true)
@@ -166,20 +167,20 @@ it('opens the in-document AI editor on first click and applies only after approv
         ...nativeSelection, anchorNode: restoredText, focusNode: restoredText,
       })
       try {
-        scroll.dispatchEvent(new PointerEvent('pointerup', {
+        afterUiEvent(() => scroll.dispatchEvent(new PointerEvent('pointerup', {
           bubbles: true, pointerType: 'mouse', clientX: 87, clientY: 75, button: 0,
-        }))
+        })))
         await vi.waitFor(() => expect(menu()).not.toBeNull())
       } finally { restoredNative.mockRestore() }
-      aiButton()!.click()
+      afterUiEvent(() => aiButton()!.click())
       expect(document.querySelector('.editor-inline-ai')).not.toBeNull()
       const outsideClick = vi.fn()
       host.addEventListener('click', outsideClick)
-      expect(host.dispatchEvent(new PointerEvent('pointerdown', {
+      expect(afterUiEvent(() => host.dispatchEvent(new PointerEvent('pointerdown', {
         bubbles: true, cancelable: true, button: 0, isPrimary: true,
-      }))).toBe(true)
+      })))).toBe(true)
       expect(document.querySelector('.editor-inline-ai')).toBeNull()
-      host.click()
+      afterUiEvent(() => host.click())
       expect(outsideClick).toHaveBeenCalledOnce()
     } finally {
       native.mockRestore()
@@ -202,18 +203,18 @@ it('keeps a block-menu item mounted and applies it to the block where the menu o
   try {
     const { view } = mounted.editor
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 1, inside: 0 })
-    view.dom.querySelector('p')!.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }))
+    afterUiEvent(() => view.dom.querySelector('p')!.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true })))
     const item = [...document.querySelectorAll<HTMLButtonElement>('.block-menu-item')]
       .find((button) => button.textContent?.includes('一级标题'))!
-    item.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    afterUiEvent(() => item.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 })))
     const scroll = host.querySelector('.editor-scroll')!
-    scroll.dispatchEvent(new Event('scroll'))
+    afterUiEvent(() => scroll.dispatchEvent(new Event('scroll')))
     expect(item.isConnected).toBe(true)
-    item.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
-    scroll.dispatchEvent(new Event('scroll'))
+    afterUiEvent(() => item.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 })))
+    afterUiEvent(() => scroll.dispatchEvent(new Event('scroll')))
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.doc.firstChild!.nodeSize + 1)))
     expect(item.isConnected).toBe(true)
-    item.click()
+    afterUiEvent(() => item.click())
     expect(mounted.toMarkdown()).toBe('# paragraph\n\nsecond')
   } finally {
     dispose()
@@ -231,7 +232,7 @@ it('identifies the current heading independently of right-click menu navigation'
   try {
     const { view } = mounted.editor
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
-    view.dom.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }))
+    afterUiEvent(() => view.dom.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true })))
     const headings = Array.from(document.querySelectorAll('[role="option"]'))
       .filter((option) => /^H[1-6]/u.test(option.textContent ?? ''))
     expect(headings.map((option) => option.querySelector('.block-menu-icon')?.textContent)).toEqual(['H1', 'H2', 'H3', 'H4', 'H5'])
@@ -240,7 +241,7 @@ it('identifies the current heading independently of right-click menu navigation'
     expect(current.textContent).toContain('三级标题')
     expect(current.querySelector('.block-menu-check')?.textContent).toBe('✓')
     expect(current.getAttribute('aria-selected')).toBe('true')
-    view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    afterUiEvent(() => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })))
     expect(current.getAttribute('aria-current')).toBe('true')
     expect(current.getAttribute('aria-selected')).toBe('false')
   } finally {
@@ -266,12 +267,12 @@ it('opens the existing AI box from the compact context menu using the original s
     vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(32, 16, 600, 160))
     vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 700, 240))
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 8)))
-    view.dom.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }))
+    afterUiEvent(() => view.dom.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true })))
     const menu = document.querySelector('.block-menu-compact')!
     expect(menu.textContent).toContain('引用到侧栏')
     expect(menu.textContent).not.toMatch(/区块操作|复制区块|删除区块/)
     const edit = Array.from(menu.querySelectorAll('button')).find((button) => button.textContent?.includes('正文编辑'))!
-    edit.click()
+    afterUiEvent(() => edit.click())
     expect(document.querySelector('.block-menu-popup')).toBeNull()
     await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('修改要求'))
     expect(view.dom.querySelector('.editor-ai-source')?.textContent).toBe('example')
@@ -294,9 +295,9 @@ it('applies inline formats to selected text from the context menu', () => {
     vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect')
       .mockReturnValue(new DOMRect(0, 0, 700, 240))
     const point = vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
-    const rightClick = () => view.dom.dispatchEvent(new MouseEvent('contextmenu', {
+    const rightClick = () => afterUiEvent(() => view.dom.dispatchEvent(new MouseEvent('contextmenu', {
       bubbles: true, cancelable: true, button: 2, clientX: 90, clientY: 60,
-    }))
+    })))
     const group = () => document.querySelector('[role="group"][aria-label="行内格式"]')
     const buttons = () => Array.from(group()!.querySelectorAll<HTMLButtonElement>('[role="option"]'))
     rightClick()
@@ -308,14 +309,14 @@ it('applies inline formats to selected text from the context menu', () => {
     expect(Array.from(document.querySelectorAll('.block-menu-results [role="group"]'), (el) => el.getAttribute('aria-label')).slice(0, 3))
       .toEqual(['AI', '行内格式', '转换区块'])
     expect(buttons().map((button) => button.title)).toEqual(['高亮', '粗体', '斜体', '下划线', '删除线'])
-    buttons()[1].click()
+    afterUiEvent(() => buttons()[1].click())
     expect(mounted.toMarkdown()).toBe('before **example** after')
     expect(buttons()[1].getAttribute('aria-label')).toBe('粗体，已应用')
-    buttons()[1].click()
+    afterUiEvent(() => buttons()[1].click())
     expect(mounted.toMarkdown()).toBe('before example after')
-    buttons()[0].click()
+    afterUiEvent(() => buttons()[0].click())
     expect(mounted.toMarkdown()).toBe('before <mark>example</mark> after')
-    view.dom.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }))
+    afterUiEvent(() => view.dom.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })))
     expect(group()).toBeNull()
   } finally {
     dispose()
@@ -335,7 +336,7 @@ it('opens slash commands for typed slash and never from a caret placed beside ex
     view.focus()
     vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 20, top: 60, bottom: 80 })
     const menu = () => document.querySelector('.block-menu-popup')
-    const setCaret = (pos: number) => view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)))
+    const setCaret = (pos: number) => afterUiEvent(() => view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos))))
     // Place the caret both after the existing slash and at the end of its surrounding text.
     setCaret('Existing /'.length + 1)
     setCaret(view.state.doc.firstChild!.nodeSize - 1)
@@ -345,9 +346,9 @@ it('opens slash commands for typed slash and never from a caret placed beside ex
     view.dispatch(view.state.tr.insertText('/table'))
     expect(menu()).toBeNull()
     view.dispatch(view.state.tr.delete(from, view.state.selection.from))
-    view.someProp('handleTextInput', (input) => input(view, from, from, '/', () => view.state.tr.insertText('/')))
+    afterUiEvent(() => view.someProp('handleTextInput', (input) => input(view, from, from, '/', () => view.state.tr.insertText('/'))))
     expect(menu()?.querySelector('.block-menu-query')).not.toBeNull()
-    view.dispatch(view.state.tr.insertText('table'))
+    afterUiEvent(() => view.dispatch(view.state.tr.insertText('table')))
     expect(menu()?.querySelector('.block-menu-query')?.textContent).toBe('/table')
     setCaret(1)
     expect(menu()).toBeNull()
@@ -371,12 +372,12 @@ it('keeps the slash menu open while browsing and selecting a chart', () => {
     view.focus()
     vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 20, top: 60, bottom: 80 })
     view.someProp('handleTextInput', (input) => input(view, 1, 1, '/', () => view.state.tr.insertText('/')))
-    view.dispatch(view.state.tr.insertText('折线图'))
+    afterUiEvent(() => view.dispatch(view.state.tr.insertText('折线图')))
     const parent = document.querySelector('[aria-label="区块命令"]')!
     const group = parent.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!
-    group.click()
+    afterUiEvent(() => group.click())
     const menu = () => document.querySelector('[role="listbox"][aria-label="图表与流程图"]')
-    const press = (key: string) => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    const press = (key: string) => afterUiEvent(() => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
     expect(parent.isConnected).toBe(true)
     expect(menu()?.querySelectorAll('[role="option"]')).toHaveLength(1)
     press('Escape')
@@ -440,7 +441,7 @@ it.each([
       getRangeAt: () => ({ getClientRects: () => [new DOMRect(20, 60, 80, 20)] }),
     } as unknown as globalThis.Selection)
     try {
-      paragraph.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: 40, clientY: 70 }))
+      afterUiEvent(() => paragraph.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: 40, clientY: 70 })))
     } finally { native.mockRestore() }
   }
   try {
@@ -457,17 +458,17 @@ it.each([
     vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 600))
     vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(80, 40, 650, 400))
     const underline = toolbar.querySelector<HTMLButtonElement>('[aria-label="下划线"]')!
-    underline.click()
+    afterUiEvent(() => underline.click())
     expect(mounted.toMarkdown()).toBe('<u>example</u>')
     expect(menu()).toBe(toolbar)
     expect(underline.getAttribute('aria-pressed')).toBe('true')
 
     const bold = toolbar.querySelector<HTMLButtonElement>('[aria-label="粗体"]')!
-    bold.click()
+    afterUiEvent(() => bold.click())
     expect(menu()).toBe(toolbar)
     expect(bold.getAttribute('aria-pressed')).toBe('true')
     const italic = toolbar.querySelector<HTMLButtonElement>('[aria-label="斜体"]')!
-    for (const button of [italic, bold, italic, bold]) button.click()
+    for (const button of [italic, bold, italic, bold]) afterUiEvent(() => button.click())
     expect(bold.getAttribute('aria-pressed')).toBe('true')
     expect(italic.getAttribute('aria-pressed')).toBe('false')
     expect(mounted.editor.state.selection.anchor).toBe(8)
@@ -477,7 +478,7 @@ it.each([
       const event = new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true, pointerId: 1,
         pointerType: 'mouse', button: 0, clientX: x, clientY: y, detail: type === 'click' ? 1 : 0 })
       Object.defineProperty(event, 'timeStamp', { value: timeStamp })
-      return target.dispatchEvent(event)
+      return afterUiEvent(() => target.dispatchEvent(event))
     }
     mouse(italic, 'pointerup', 74, 93, 101)
     mouse(italic, 'click', 74, 93, 101)
@@ -504,7 +505,7 @@ it.each([
     mouse(host, 'click', 102, 135, 206)
     vi.spyOn(panel, 'offsetHeight', 'get').mockReturnValue(44)
     coords.mockReturnValue({ left: 100, right: 100, top: 550, bottom: 570 })
-    window.dispatchEvent(new Event('resize'))
+    afterUiEvent(() => window.dispatchEvent(new Event('resize')))
     await vi.waitFor(() => expect(panel.style.top).toBe('500px'))
     expect(input.isConnected).toBe(true)
     expect(mounted.toMarkdown()).toBe(formatted)
@@ -514,14 +515,14 @@ it.each([
     expect(input.isConnected).toBe(false)
 
     open()
-    menu().querySelector<HTMLButtonElement>('[aria-label="斜体"]')!.click()
-    menu().querySelector<HTMLButtonElement>('[aria-label="粗体"]')!.click()
+    afterUiEvent(() => menu().querySelector<HTMLButtonElement>('[aria-label="斜体"]')!.click())
+    afterUiEvent(() => menu().querySelector<HTMLButtonElement>('[aria-label="粗体"]')!.click())
     expect(mounted.toMarkdown()).toBe('<u>example</u>')
-    menu().querySelector<HTMLButtonElement>('[aria-label="转换区块"]')!.click()
+    afterUiEvent(() => menu().querySelector<HTMLButtonElement>('[aria-label="转换区块"]')!.click())
     const blocks = menu().querySelector('[aria-label="区块类型"]')!
     expect(blocks.textContent).not.toContain('折叠')
     const heading = [...blocks.querySelectorAll('button')].find((button) => button.textContent?.includes('二级标题'))!
-    heading.click()
+    afterUiEvent(() => heading.click())
     expect(view.dom.querySelector('h2')?.textContent).toBe('example')
     expect(mounted.toMarkdown()).toContain('## <u>example</u>')
   } finally {
@@ -549,20 +550,20 @@ it('opens the explicit context menu without selecting the block or showing a dra
     vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 280, 220))
     vi.spyOn(view, 'hasFocus').mockReturnValue(true)
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
-    scroll.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: 15, clientY: 35 }))
+    afterUiEvent(() => scroll.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: 15, clientY: 35 })))
     expect(view.state.selection.empty).toBe(true)
-    view.dom.querySelector('p')!.dispatchEvent(new PointerEvent('pointermove', {
+    afterUiEvent(() => view.dom.querySelector('p')!.dispatchEvent(new PointerEvent('pointermove', {
       bubbles: true, pointerType: 'mouse', clientX: 50, clientY: 35,
-    }))
-    scroll.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 15, clientY: 35 }))
+    })))
+    afterUiEvent(() => scroll.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 15, clientY: 35 })))
     vi.advanceTimersByTime(40)
     expect(toolbar()).toBeNull()
-    view.dom.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 50, clientY: 35 }))
+    afterUiEvent(() => view.dom.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 50, clientY: 35 })))
     expect(document.querySelector('.block-menu-popup')).not.toBeNull()
     expect(view.state.selection.empty).toBe(true)
     expect(document.querySelector('.editor-block-grip')).toBeNull()
     expect(toolbar()).toBeNull()
-    const escape = () => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    const escape = () => afterUiEvent(() => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
     escape()
     expect(document.querySelector('.block-menu-popup')).toBeNull()
     expect(view.state.selection.empty).toBe(true)
@@ -582,9 +583,9 @@ describe('createEditor', () => {
     const grip = image.querySelector<HTMLButtonElement>('[data-side="right"]')!
     vi.spyOn(paragraph, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 500, 200))
     Object.defineProperty(grip, 'setPointerCapture', { value: vi.fn() })
-    const drag = (type: string, x: number) => grip.dispatchEvent(new PointerEvent(type, {
+    const drag = (type: string, x: number) => afterUiEvent(() => grip.dispatchEvent(new PointerEvent(type, {
       pointerId: 1, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, cancelable: true, bubbles: true,
-    }))
+    })))
     expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
     drag('pointerdown', 450)
     drag('pointermove', 400)
@@ -598,7 +599,7 @@ describe('createEditor', () => {
     expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)')
     expect(handle.editor.commands.redo()).toBe(true)
     const leftGrip = image.querySelector<HTMLButtonElement>('[data-side="left"]')!
-    leftGrip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+    afterUiEvent(() => leftGrip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })))
     expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)')
     expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
     expect(handle.editor.commands.undo()).toBe(true)
@@ -656,7 +657,7 @@ describe('createEditor', () => {
     const [first, second] = Array.from(view.dom.querySelectorAll('li p'))
     const gutter = scrollRoot!
     const press = new MouseEvent('mousedown', { clientX: 250, clientY: 80, bubbles: true, cancelable: true })
-    expect(gutter.dispatchEvent(press)).toBe(true)
+    expect(afterUiEvent(() => gutter.dispatchEvent(press))).toBe(true)
     const native = document.getSelection()!
     const range = document.createRange()
     range.setStart(first.firstChild!, 0)
@@ -664,7 +665,7 @@ describe('createEditor', () => {
     native.removeAllRanges()
     native.addRange(range)
     try {
-      gutter.dispatchEvent(new MouseEvent('mouseup', { clientX: 253, clientY: 80, bubbles: true, cancelable: true }))
+      afterUiEvent(() => gutter.dispatchEvent(new MouseEvent('mouseup', { clientX: 253, clientY: 80, bubbles: true, cancelable: true })))
       expect(native.isCollapsed).toBe(false)
     } finally { native.removeAllRanges() }
   })
@@ -680,7 +681,7 @@ describe('createEditor', () => {
         ? new PointerEvent(type, { ...options, isPrimary: true, pointerType: 'mouse', pointerId: 1 })
         : new MouseEvent(type, options)
       Object.defineProperty(event, 'timeStamp', { value: timeStamp })
-      target.dispatchEvent(event)
+      afterUiEvent(() => target.dispatchEvent(event))
       return event
     }
     send('pointerdown', 100, first)
@@ -728,21 +729,21 @@ describe('createEditor', () => {
     vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 120, right: 120, top: 72, bottom: 90 })
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: head, inside: 0 })
     const send = (type: string, x: number, y: number, target: Element, held: number) =>
-      target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true,
-        pointerType: 'mouse', pointerId: 1, button: 0, buttons: held, clientX: x, clientY: y }))
+      afterUiEvent(() => target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true,
+        pointerType: 'mouse', pointerId: 1, button: 0, buttons: held, clientX: x, clientY: y })))
     try {
       send('pointerdown', 160, 80, last, buttons)
       send('pointerup', 160, 80, last, 0)
       expect(view.state.selection.head).toBe(anchor)
       send('pointerdown', 160, 80, last, buttons)
-      if (!buttons) last.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 160, clientY: 80 }))
+      if (!buttons) afterUiEvent(() => last.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 160, clientY: 80 })))
       send('pointermove', 155, 80, last, buttons)
       expect(view.state.selection.empty).toBe(true)
       send('pointermove', 80, 40, first, buttons)
       expect(view.state.selection.anchor).toBe(anchor)
       expect(view.state.selection.head).toBe(head)
       send('pointerup', 80, 40, first, 0)
-      first.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 80, clientY: 40 }))
+      afterUiEvent(() => first.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: 80, clientY: 40 })))
       expect(view.state.selection.anchor).toBe(anchor)
       expect(view.state.selection.head).toBe(head)
       expect(onUpdate).not.toHaveBeenCalled()
@@ -793,7 +794,7 @@ describe('createEditor', () => {
         clientX, clientY: 80,
       })
       Object.defineProperty(event, 'timeStamp', { value: timeStamp })
-      surface.dispatchEvent(event)
+      afterUiEvent(() => surface.dispatchEvent(event))
     }
     send('pointerup', 101, x + 3)
     send('pointerdown', 100, x)
@@ -811,11 +812,11 @@ describe('createEditor', () => {
     vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 2, inside: 0 })
     const gutter = scrollRoot!
-    gutter.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 35, bubbles: true, cancelable: true }))
-    gutter.dispatchEvent(new MouseEvent('dblclick', { clientX: 15, clientY: 35, bubbles: true }))
+    afterUiEvent(() => gutter.dispatchEvent(new MouseEvent('mousedown', { clientX: 15, clientY: 35, bubbles: true, cancelable: true })))
+    afterUiEvent(() => gutter.dispatchEvent(new MouseEvent('dblclick', { clientX: 15, clientY: 35, bubbles: true })))
     for (const [type, clientY] of [['pointerdown', 35], ['pointermove', 95], ['pointerup', 95]] as const) {
-      gutter.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, buttons: type === 'pointerup' ? 0 : 1,
-        isPrimary: true, pointerId: 1, pointerType: 'mouse', clientX: 15, clientY }))
+      afterUiEvent(() => gutter.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+        isPrimary: true, pointerId: 1, pointerType: 'mouse', clientX: 15, clientY })))
     }
     expect(view.state.selection).toBeInstanceOf(TextSelection)
     expect(view.state.selection.empty).toBe(true)
@@ -829,15 +830,15 @@ describe('createEditor', () => {
     const [first, second] = Array.from(view.dom.querySelectorAll('td'))
     const positions = [first, second].map((cell) => view.posAtDOM(cell.querySelector('p')!, 0) + 1)
     vi.spyOn(view, 'posAtCoords').mockImplementation(({ top }) => ({ pos: positions[top < 40 ? 0 : 1], inside: -1 }))
-    const pointer = (type: string, target: Element, y: number, buttons: number) => target.dispatchEvent(new PointerEvent(type, {
+    const pointer = (type: string, target: Element, y: number, buttons: number) => afterUiEvent(() => target.dispatchEvent(new PointerEvent(type, {
       bubbles: true, cancelable: true, pointerType: 'mouse', isPrimary: true, pointerId: 1,
       clientX: 50, clientY: y, button: 0, buttons,
-    }))
+    })))
 
     // A delayed compatibility mousedown must not arm a drag after release.
     pointer('pointerup', first, 38, 0)
-    first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50, clientY: 38 }))
-    second.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 50, clientY: 55, buttons: 0 }))
+    afterUiEvent(() => first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 50, clientY: 38 })))
+    afterUiEvent(() => second.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 50, clientY: 55, buttons: 0 })))
     expect(view.state.selection).not.toBeInstanceOf(CellSelection)
 
     pointer('pointerdown', first, 38, 1)
@@ -861,10 +862,10 @@ describe('createEditor', () => {
     const { handle, element } = mount()
     handle.loadMarkdown('- [ ] first')
     const button = element.querySelector<HTMLButtonElement>('[data-task-toggle]')!
-    button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 40 }))
-    button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 46, buttons: 1 }))
-    button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 46 }))
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 46, detail: 1 }))
+    afterUiEvent(() => button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 40 })))
+    afterUiEvent(() => button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 46, buttons: 1 })))
+    afterUiEvent(() => button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 46 })))
+    afterUiEvent(() => button.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 46, detail: 1 })))
     expect(element.querySelector('[data-task-toggle]')?.getAttribute('aria-checked')).toBe('true')
   })
 
@@ -946,12 +947,12 @@ describe('createEditor', () => {
     const view = handle.editor.view
     const paragraph = view.dom.querySelector('p')!
     vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: 7, inside: 0 })
-    paragraph.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 30, bubbles: true }))
-    paragraph.dispatchEvent(new MouseEvent('mousemove', { clientX: 80, clientY: 30, bubbles: true, buttons: 1 }))
+    afterUiEvent(() => paragraph.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 30, bubbles: true })))
+    afterUiEvent(() => paragraph.dispatchEvent(new MouseEvent('mousemove', { clientX: 80, clientY: 30, bubbles: true, buttons: 1 })))
     // Window selection geometry is supplied by the native browser during this gesture.
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 7)))
-    paragraph.dispatchEvent(new MouseEvent('mouseup', { clientX: 80, clientY: 30, bubbles: true }))
-    paragraph.dispatchEvent(new MouseEvent('click', { detail: 1, clientX: 80, clientY: 30, bubbles: true }))
+    afterUiEvent(() => paragraph.dispatchEvent(new MouseEvent('mouseup', { clientX: 80, clientY: 30, bubbles: true })))
+    afterUiEvent(() => paragraph.dispatchEvent(new MouseEvent('click', { detail: 1, clientX: 80, clientY: 30, bubbles: true })))
     expect(view.state.selection.from).toBe(1)
     expect(view.state.selection.to).toBe(7)
   })
@@ -969,7 +970,7 @@ describe('createEditor', () => {
         clientX: x, clientY: 30,
       })
       Object.defineProperty(event, 'timeStamp', { value: timestamp })
-      paragraph.dispatchEvent(event)
+      afterUiEvent(() => paragraph.dispatchEvent(event))
       return event
     }
     if (gesture === 'reordered tap') {
@@ -1034,12 +1035,12 @@ describe('createEditor', () => {
     handle.loadMarkdown('before $r^2$ after')
     const formula = element.querySelector<HTMLElement>('.markdown-math')!
     const preview = formula.querySelector('button')!
-    preview.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true }))
+    afterUiEvent(() => preview.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true })))
     const source = formula.querySelector('textarea')!
     expect(formula.dataset.mathEdit).toBe('source')
     expect(preview.hidden).toBe(false)
     source.value = 'r^3'
-    source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    afterUiEvent(() => source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     expect(element.querySelector('.markdown-math > button')).toBe(preview)
     expect(formula.dataset.mathEdit).toBeUndefined()
     expect(handle.toMarkdown()).toBe('before $r^3$ after')
@@ -1049,7 +1050,7 @@ describe('createEditor', () => {
     const { handle, element, onUpdate } = mount()
     handle.loadBlocks([{ type: 'codeBlock', content: [{ type: 'text', text: 'code' }] }], true)
     handle.appendBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'next' }] }])
-    element.querySelector<HTMLButtonElement>('.code-continue')!.click()
+    afterUiEvent(() => element.querySelector<HTMLButtonElement>('.code-continue')!.click())
 
     const { selection, doc } = handle.editor.state
     expect(selection.$head.parent.textContent).toBe('next')
@@ -1065,7 +1066,7 @@ describe('createEditor', () => {
     expect(view.state.doc.childCount).toBe(2)
     const gap = element.querySelector<HTMLButtonElement>('.code-continue')!
     expect(gap.tabIndex).toBe(-1)
-    gap.click()
+    afterUiEvent(() => gap.click())
     expect(view.state.doc.childCount).toBe(3)
     expect(view.state.doc.child(1).type.name).toBe('paragraph')
     expect(view.state.selection.$head.parent).toBe(view.state.doc.child(1))
@@ -1107,7 +1108,7 @@ describe('createEditor', () => {
     expect(edit.textContent).toBe('编辑')
     expect(source.hidden).toBe(true)
 
-    edit.click()
+    afterUiEvent(() => edit.click())
     expect(edit.textContent).toBe('完成')
     expect(source.hidden).toBe(false)
     expect(handle.editor.state.selection.$head.parent.type.name).toBe('codeBlock')
@@ -1115,15 +1116,15 @@ describe('createEditor', () => {
     expect(preview.parentElement).toBe(source.parentElement)
 
     editor.commands.setTextSelection(editor.state.selection.head + 'flowchart LR\nA --> B'.length)
-    previewTab.click()
+    afterUiEvent(() => previewTab.click())
     expect(previewTab.getAttribute('aria-pressed')).toBe('true')
     editor.commands.setTextSelection(1)
-    sourceTab.click()
+    afterUiEvent(() => sourceTab.click())
     expect(editor.state.selection.$head.parentOffset).toBe('flowchart LR\nA --> B'.length)
     expect(onUpdate).not.toHaveBeenCalled()
 
     editor.view.dispatch(editor.state.tr.insertText('[Ready]'))
-    edit.click()
+    afterUiEvent(() => edit.click())
     expect(frame.querySelector('.rich-preview')).toBe(preview)
     expect(source.hidden).toBe(true)
     expect(handle.toMarkdown()).toBe('# Other\n\n```mermaid\nflowchart LR\nA --> B[Ready]\n```')
@@ -1136,15 +1137,15 @@ describe('createEditor', () => {
     handle.loadMarkdown(input)
     const select = () => element.querySelector<HTMLButtonElement>('.code-language')!
     const choose = (value: string) => {
-      select().click()
+      afterUiEvent(() => select().click())
       const search = document.querySelector<HTMLInputElement>('[aria-label="搜索语言"]')
       if (!search) return
       expect(document.activeElement).toBe(search)
       search.value = value || '纯文本'
-      search.dispatchEvent(new Event('input', { bubbles: true }))
+      afterUiEvent(() => search.dispatchEvent(new Event('input', { bubbles: true })))
       const options = document.querySelectorAll<HTMLButtonElement>('.code-language-options [role="option"]')
       expect(options).toHaveLength(1)
-      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      afterUiEvent(() => search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     }
     expect(select().dataset.languageId).toBe('custom')
     expect(handle.toMarkdown()).toBe(input)
@@ -1172,27 +1173,27 @@ describe('createEditor', () => {
   it('preserves a pressed language option across search focus loss and editor scrolling', async () => {
     const { handle, element } = mount()
     handle.loadMarkdown('```java\nexample\n```')
-    element.querySelector<HTMLButtonElement>('.code-language')!.click()
+    afterUiEvent(() => element.querySelector<HTMLButtonElement>('.code-language')!.click())
     const search = document.querySelector<HTMLInputElement>('[aria-label="搜索语言"]')!
     const option = document.querySelector<HTMLButtonElement>('.code-language-options [data-language-id="python"]')!
-    option.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
-    expect(option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))).toBe(false)
+    afterUiEvent(() => option.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 })))
+    expect(afterUiEvent(() => option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))).toBe(false)
     search.blur()
     await Promise.resolve()
-    scrollRoot!.dispatchEvent(new Event('scroll'))
+    afterUiEvent(() => scrollRoot!.dispatchEvent(new Event('scroll')))
     expect(option.isConnected).toBe(true)
-    option.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
-    scrollRoot!.dispatchEvent(new Event('scroll'))
+    afterUiEvent(() => option.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 })))
+    afterUiEvent(() => scrollRoot!.dispatchEvent(new Event('scroll')))
     expect(option.isConnected).toBe(true)
-    option.click()
+    afterUiEvent(() => option.click())
     expect(handle.toMarkdown()).toBe('```python\nexample\n```')
     const trigger = element.querySelector<HTMLButtonElement>('.code-language')!
-    trigger.click()
-    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }))
+    afterUiEvent(() => trigger.click())
+    afterUiEvent(() => trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 })))
     document.querySelector<HTMLInputElement>('[aria-label="搜索语言"]')!.blur()
     await Promise.resolve()
-    trigger.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }))
-    trigger.click()
+    afterUiEvent(() => trigger.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 })))
+    afterUiEvent(() => trigger.click())
     expect(trigger.getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -1255,9 +1256,9 @@ describe('createEditor', () => {
     handle.loadBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'first' }] }], true)
     handle.appendBlocks([{ type: 'paragraph', content: [{ type: 'text', text: 'next' }] }])
     handle.editor.commands.setTextSelection(handle.editor.state.doc.firstChild!.nodeSize + 2)
-    handle.editor.view.dom.dispatchEvent(new KeyboardEvent('keydown', {
+    afterUiEvent(() => handle.editor.view.dom.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Backspace', bubbles: true, cancelable: true,
-    }))
+    })))
 
     expect(handle.toMarkdown()).toBe('firstnext')
     expect(handle.editor.commands.undo()).toBe(true)

@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, onSettled, Show } from 'solid-js'
 import { desktopWorkspace, type FileApplications, type WorkspaceEntry } from '../io/tauri'
 import ViewerFrame from './ViewerFrame'
 import FileName, { type TitleEdit } from './FileName'
@@ -35,7 +35,7 @@ export function FilePreviewDialog(props: FilePreviewProps & { trigger: HTMLButto
     props.onClose()
     trigger.focus({ preventScroll: true })
   }
-  onMount(() => {
+  onSettled(() => {
     dialog.focus({ preventScroll: true })
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return
@@ -49,12 +49,12 @@ export function FilePreviewDialog(props: FilePreviewProps & { trigger: HTMLButto
       }
     }
     document.addEventListener('keydown', onKeyDown)
-    onCleanup(() => document.removeEventListener('keydown', onKeyDown))
+    return () => document.removeEventListener('keydown', onKeyDown)
   })
 
   return (
     <div class="file-preview-overlay">
-      <div class="file-preview-dialog" ref={dialog} role="dialog" aria-modal="true" tabIndex={-1}
+      <div class="file-preview-dialog" ref={dialog} role="dialog" aria-modal="true" tabindex={-1}
         aria-label={`预览 ${props.entry?.name ?? ''}`}>
         <FilePreview {...props} onClose={close} showClose />
       </div>
@@ -81,18 +81,17 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
   let openWithButton!: HTMLButtonElement
   let openWithMenu!: HTMLDivElement
   let outlineButton: HTMLButtonElement | undefined
-  createEffect(() => {
-    let disposed = false
-    onCleanup(() => { disposed = true })
-    const path = props.entry?.path
+  createEffect(() => [props.root, props.entry?.path] as const, ([root, path]) => {
     if (!path) return
-    void desktopWorkspace.fileApplications(props.root, path, (list) => {
+    let disposed = false
+    void desktopWorkspace.fileApplications(root, path, (list) => {
       if (!disposed) setApplications(list)
     }).then((icons) => {
       if (!disposed) setApplicationIcons(icons)
     }).catch(() => {
       if (!disposed) setApplications((list) => list ?? { items: [], defaultIcon: null })
     })
+    return () => { disposed = true }
   })
 
   const positionOpenWith = () => {
@@ -177,7 +176,7 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
           </Show>
           <Show when={pdfPreview()}>
             <button type="button" ref={outlineButton} class="file-preview-outline-toggle" title="PDF 目录" aria-label="PDF 目录"
-              aria-expanded={pdfOutlineOpen()} disabled={!previewReady()} onClick={() => setPdfOutlineOpen(!pdfOutlineOpen())}
+              aria-expanded={pdfOutlineOpen() ? 'true' : 'false'} disabled={!previewReady()} onClick={() => setPdfOutlineOpen(!pdfOutlineOpen())}
               onKeyDown={(event) => {
                 if (event.key !== 'Escape' || !pdfOutlineOpen()) return
                 event.stopPropagation()
@@ -193,7 +192,7 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
               <AppIcon src={applications()?.defaultIcon} />
             </button>
             <button type="button" class="file-open-with-toggle" ref={openWithButton} aria-label="打开方式"
-              aria-haspopup="menu" aria-expanded={menuOpen()} aria-controls={menuId}
+              aria-haspopup="menu" aria-expanded={menuOpen() ? 'true' : 'false'} aria-controls={menuId}
               popovertarget={menuId} onClick={positionOpenWith}>
               <span aria-hidden="true" />
             </button>
@@ -222,10 +221,10 @@ export default function FilePreview(props: FilePreviewProps & { showClose?: bool
       <Show when={requested()} keyed>{(frame) => (
           <ViewerFrame root={frame.root} entry={frame.entry} onClose={closePreview} onSaveHint={props.onSaveHint}
             onInteract={dismissOpenWith}
-            onSettled={(ready) => batch(() => {
+            onSettled={(ready) => {
               frame.ready[1](ready)
               if (!ready) frame.outline[1](false)
-            })}
+            }}
             imageCommand={imageCommand()} onImageState={frame.image[1]} pdfOutlineOpen={frame.outline[0]()} />
       )}</Show>
     </section>

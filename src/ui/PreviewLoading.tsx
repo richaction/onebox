@@ -1,16 +1,16 @@
-import { createEffect, createSignal, onCleanup, Show, type Accessor } from 'solid-js'
+import { createEffect, createSignal, Show, type Accessor } from 'solid-js'
 
 const LOADING_HINT_DELAY_MS = 300
 
 export function createLoadingHint(pending: Accessor<boolean>) {
   const [visible, setVisible] = createSignal(false)
-  createEffect(() => {
-    if (!pending()) {
+  createEffect(pending, (loading) => {
+    if (!loading) {
       setVisible(false)
       return
     }
     const timer = setTimeout(() => setVisible(true), LOADING_HINT_DELAY_MS)
-    onCleanup(() => clearTimeout(timer))
+    return () => clearTimeout(timer)
   })
   return visible
 }

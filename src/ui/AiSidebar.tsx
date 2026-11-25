@@ -1,6 +1,5 @@
 import type { Editor } from '@tiptap/core'
-import { batch, createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show } from 'solid-js'
-import { createStore } from 'solid-js/store'
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show, createStore, markRaw, untrack } from 'solid-js'
 import { aiAnswerHtml, aiChangeText, decodeAiAnswer, partialAiAnswer } from '../core/aiAnswer'
 import { resolveSavedReasoningEffort } from '../core/aiReasoning'
 import {
@@ -94,6 +93,9 @@ export default function AiSidebar(props: {
   const [working, setWorking] = createSignal(false)
   const [stopping, setStopping] = createSignal(false)
   const [messages, setMessages] = createStore<Message[]>(initial?.messages.map((message) => ({ ...message })) ?? [])
+  const updateMessage = (index: number, patch: Partial<Message>) => {
+    setMessages((draft) => { if (draft[index]) Object.assign(draft[index], patch) })
+  }
   const savedConversations = createMemo(() => conversations().filter(({ id }) => id !== conversationId()).map((conversation) => ({
     id: conversation.id,
     title: excerpt(conversation.messages[0]?.text || conversation.draft) || '未发送的引用',
@@ -142,7 +144,9 @@ export default function AiSidebar(props: {
     try {
       const next = await ai.models()
       if (!disposed && version === accountVersion) {
-        for (const model of next) setEfforts(model.model, localStorage.getItem(`onebox.ai.effort.${model.model}`) ?? undefined)
+        setEfforts((draft) => {
+          for (const model of next) draft[model.model] = localStorage.getItem(`onebox.ai.effort.${model.model}`) ?? undefined
+        })
         setModels(next)
       }
     } catch (error) {
@@ -168,7 +172,7 @@ export default function AiSidebar(props: {
     if (!model) return
     const key = `onebox.ai.effort.${model.model}`
     localStorage.setItem(key, effort)
-    setEfforts(model.model, effort)
+    setEfforts((draft) => { draft[model.model] = effort })
     finishModelChoice()
   }
 
@@ -196,10 +200,11 @@ export default function AiSidebar(props: {
       if (disposed) return
       if (!next || next.email !== account()?.email) clearAccountData()
       setAccount(next)
-      if (next) {
+      if (next) queueMicrotask(() => {
+        if (disposed) return
         void readModels()
         void readUsage()
-      }
+      })
     } catch (error) {
       if (!disposed) setAccountError(errorText(error))
     } finally {
@@ -240,11 +245,12 @@ export default function AiSidebar(props: {
     setStopping(false)
     const raw = current.final ?? current.latest ?? ''
     const output = status === 'done' ? decodeAiAnswer(raw) : { answer: partialAiAnswer(raw) }
-    setMessages(current.index, {
+    updateMessage(current.index, {
       text: output.answer, revision: output.revision, status,
       error: error ?? (status === 'done' && !output.answer && !output.revision ? '没有收到回复，可以重试。' : undefined),
     })
-    if (output.revision && props.open) previewRevision(current.index)
+    const message = messages[current.index]
+    if (output.revision && props.open && message) previewRevision(current.index, undefined, { ...message, revision: output.revision })
     scrollLatest()
   }
 
@@ -291,7 +297,7 @@ export default function AiSidebar(props: {
           streamFrame = 0
           if (job !== current) return
           const next = partialAiAnswer(current.latest ?? '')
-          if (next) setMessages(current.index, 'text', next)
+          if (next) updateMessage(current.index, { text: next })
           scrollLatest()
         })
         return
@@ -401,13 +407,14 @@ export default function AiSidebar(props: {
 
   function send() {
     const editor = props.editor()
-    if (!editor || !canSend()) return
+    if (!editor || job || !canSend()) return
     clearRevisionPreview()
     const text = draft().trim()
     const request = { text, references: references(), insertion: captureAiInsertion(editor) }
     const index = messages.length
-    setMessages(index, { role: 'user', text, request })
-    setMessages(index + 1, { role: 'assistant', text: '', request, status: 'working' })
+    setMessages((draft) => {
+      draft.push({ role: 'user', text, request }, { role: 'assistant', text: '', request, status: 'working' })
+    })
     setDraft('')
     setConversationUpdatedAt(Date.now())
     setReferences([])
@@ -417,9 +424,9 @@ export default function AiSidebar(props: {
 
   function retry(index: number) {
     const message = messages[index]
-    if (!message || working() || !account() || !selectedModel()) return
+    if (!message || job || working() || !account() || !selectedModel()) return
     clearRevisionPreview()
-    setMessages(index, { text: '', status: 'working', revision: undefined, error: undefined })
+    updateMessage(index, { text: '', status: 'working', revision: undefined, error: undefined })
     void generate(message.request, index)
   }
 
@@ -447,16 +454,15 @@ export default function AiSidebar(props: {
   function showConversation(id: number, conversation?: Conversation) {
     clearRevisionPreview()
     props.history.active = id
-    batch(() => {
-      setConversationId(id)
-      setConversationUpdatedAt(conversation?.updatedAt)
-      setMessages(conversation?.messages.map((message) => ({ ...message })) ?? [])
-      setReferences(conversation?.references ?? [])
-      setDraft(conversation?.draft ?? '')
-      setSourcePreview(undefined)
-      setNotice('')
-      setMenu(undefined)
-    })
+    setConversationId(id)
+    setConversationUpdatedAt(conversation?.updatedAt)
+    const next = conversation?.messages.map((message) => ({ ...message })) ?? []
+    setMessages((draft) => { draft.splice(0, draft.length, ...next) })
+    setReferences(conversation?.references ?? [])
+    setDraft(conversation?.draft ?? '')
+    setSourcePreview(undefined)
+    setNotice('')
+    setMenu(undefined)
     follow = true
     composer?.focus({ preventScroll: true })
     scrollLatest()
@@ -502,9 +508,8 @@ export default function AiSidebar(props: {
     clearAiRevisionPreview(preview.editor, previewOwner)
   }
 
-  function previewRevision(index: number, requestedMethod?: AiRevisionMethod) {
+  function previewRevision(index: number, requestedMethod?: AiRevisionMethod, message = messages[index]) {
     const editor = props.editor()
-    const message = messages[index]
     if (!editor || !message?.revision || message.change) return
     const reference = changeReference(message)
     const method = requestedMethod ?? (reference?.anchor && !reference.shortened ? 'replace' : 'below')
@@ -543,7 +548,7 @@ export default function AiSidebar(props: {
         setNotice(method === 'replace' ? '无法安全替换。原文可能已更改，也可以选择插入下方。' : '插入位置已变化，请重新发起请求。')
         return
       }
-      setMessages(index, { undo, change: 'applied', reviewing: false })
+      updateMessage(index, { undo: markRaw(undo), change: 'applied', reviewing: false })
       setNotice('')
     } catch { setNotice('无法将这条建议写入 Markdown。') }
   }
@@ -555,7 +560,7 @@ export default function AiSidebar(props: {
       setNotice('应用后的文字已变化，无法单独撤销这条建议。')
       return
     }
-    setMessages(index, { undo: undefined, change: 'undone' })
+    updateMessage(index, { undo: undefined, change: 'undone' })
     setNotice('')
   }
 
@@ -564,15 +569,15 @@ export default function AiSidebar(props: {
     catch { setNotice('复制失败。') }
   }
 
-  createEffect(on(() => props.open, (open) => {
-    if (!open) { setMenu(undefined); clearRevisionPreview(); return }
-    if (!initialized) void refreshAccount()
+  createEffect(() => props.open, (open) => {
+    if (!open) { setMenu(undefined); untrack(clearRevisionPreview); return }
+    if (!initialized) void untrack(refreshAccount)
     queueMicrotask(scrollLatest)
-  }))
-  createEffect(on(props.editor, (editor) => {
-    if (activePreview()?.editor !== editor) clearRevisionPreview()
-  }))
-  createEffect(on(activePreview, (preview) => {
+  })
+  createEffect(() => [props.editor(), activePreview()] as const, ([editor, preview]) => {
+    if (preview && preview.editor !== editor) untrack(clearRevisionPreview)
+  })
+  createEffect(activePreview, (preview) => {
     if (!preview) return
     const validate = () => {
       if (activePreview() !== preview || hasAiRevisionPreview(preview.editor, previewOwner)) return
@@ -580,20 +585,20 @@ export default function AiSidebar(props: {
       setNotice('原文或预览已变化，请重新预览。')
     }
     preview.editor.on('transaction', validate)
-    onCleanup(() => { preview.editor.off('transaction', validate) })
-  }))
-  createEffect(on(() => props.open && !props.loading, (ready) => {
+    return () => { preview.editor.off('transaction', validate) }
+  })
+  createEffect(() => props.open && !props.loading, (ready) => {
     if (ready) queueMicrotask(() => {
       if (props.open && !props.loading && !menu()) composer?.focus({ preventScroll: true })
     })
-  }))
-  createEffect(on(() => props.quote, (reference) => {
+  })
+  createEffect(() => props.quote, (reference) => {
     if (!reference) return
-    addReference(reference)
+    untrack(() => addReference(reference))
     props.onQuoteConsumed()
     queueMicrotask(() => composer?.focus({ preventScroll: true }))
-  }))
-  onMount(() => {
+  })
+  onSettled(() => {
     const closeOutside = (event: PointerEvent) => {
       if (event.defaultPrevented) return
       if (event.target instanceof Element && event.target.closest('[data-ai-composer-menu] > button')) return
@@ -603,7 +608,7 @@ export default function AiSidebar(props: {
       }
     }
     document.addEventListener('pointerdown', closeOutside, true)
-    onCleanup(() => document.removeEventListener('pointerdown', closeOutside, true))
+    return () => document.removeEventListener('pointerdown', closeOutside, true)
   })
   onCleanup(() => {
     clearRevisionPreview()
@@ -617,7 +622,7 @@ export default function AiSidebar(props: {
   })
 
   return (
-    <aside id="onebox-ai-sidebar" class="ai-sidebar" data-activate-on-release classList={{ 'ai-sidebar-resizing': resizingSidebar() }}
+    <aside id="onebox-ai-sidebar"  data-activate-on-release class={['ai-sidebar', { 'ai-sidebar-resizing': resizingSidebar() }]}
       aria-label="Onebox AI" inert={!props.open} style={{ '--ai-preferred-width': `${sidebarWidth()}px` }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return
@@ -665,8 +670,8 @@ export default function AiSidebar(props: {
         const el = event.currentTarget
         follow = el.scrollHeight - el.scrollTop - el.clientHeight < 60
       }}>
-        <Index each={messages}>{(message, index) =>
-          <article class="ai-message" classList={{ 'ai-message-user': message().role === 'user' }}>
+        <For keyed={false} each={messages}>{(message, index) =>
+          <article class={['ai-message', { 'ai-message-user': message().role === 'user' }]}>
             <Show when={message().role === 'user'} fallback={
               <>
                 <Show when={message().status === 'working'} fallback={
@@ -700,10 +705,10 @@ export default function AiSidebar(props: {
                         <Show when={message().reviewing} fallback={
                           <ChangeExcerpt before={changeReference(message())?.anchor ? changeReference(message())!.text : ''} after={patch().markdown} side="after" />
                         }>
-                          <textarea aria-label="编辑建议的 Markdown" rows={4} value={patch().markdown} maxLength={120_000}
+                          <textarea aria-label="编辑建议的 Markdown" rows={4} value={patch().markdown} maxlength={120_000}
                             onInput={(event) => {
                               if (activePreview()?.index === index) clearRevisionPreview()
-                              setMessages(index, 'revision', { ...patch(), markdown: event.currentTarget.value })
+                              updateMessage(index, { revision: { ...patch(), markdown: event.currentTarget.value } })
                             }} />
                         </Show>
                       </div>
@@ -719,15 +724,15 @@ export default function AiSidebar(props: {
                         <Show when={!(activePreview()?.index === index && activePreview()?.method === 'below')}>
                           <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'below')}>预览插入</button>
                         </Show>
-                        <button type="button" class="ai-subtle" aria-expanded={!!message().reviewing}
-                          onClick={() => setMessages(index, 'reviewing', !message().reviewing)}>{message().reviewing ? '查看对照' : '编辑建议'}</button>
+                        <button type="button" class="ai-subtle" aria-expanded={!!message().reviewing ? 'true' : 'false'}
+                          onClick={() => updateMessage(index, { reviewing: !message().reviewing })}>{message().reviewing ? '查看对照' : '编辑建议'}</button>
                         <Show when={activePreview()?.index !== index}>
-                          <button type="button" class="ai-subtle" onClick={() => setMessages(index, { change: 'dismissed', reviewing: false })}>放弃</button>
+                          <button type="button" class="ai-subtle" onClick={() => updateMessage(index, { change: 'dismissed', reviewing: false })}>放弃</button>
                         </Show>
                       </div>
                     </Show>
                     <Show when={message().change === 'dismissed' || message().change === 'undone'}>
-                      <button type="button" class="ai-subtle" onClick={() => setMessages(index, 'change', undefined)}>查看建议</button>
+                      <button type="button" class="ai-subtle" onClick={() => updateMessage(index, { change: undefined })}>查看建议</button>
                     </Show>
                   </div>}
                 </Show>
@@ -751,7 +756,7 @@ export default function AiSidebar(props: {
               <div>{message().text}</div>
             </Show>
           </article>
-        }</Index>
+        }</For>
       </div>
 
       <form class="ai-compose" onSubmit={(event) => { event.preventDefault(); send() }}>
@@ -769,7 +774,7 @@ export default function AiSidebar(props: {
             }</For>
           </div>
         </Show>
-        <textarea ref={composer} aria-label="向 AI 提问" placeholder="问 Onebox AI…" rows={2} maxLength={4000}
+        <textarea ref={composer} aria-label="向 AI 提问" placeholder="问 Onebox AI…" rows={2} maxlength={4000}
           value={draft()} onInput={(event) => {
             setDraft(event.currentTarget.value)
             setConversationUpdatedAt(Date.now())

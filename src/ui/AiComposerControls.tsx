@@ -9,7 +9,7 @@ function planName(plan: string) {
 }
 
 function Battery(props: { level?: number }) {
-  return <span class="ai-battery" classList={{ 'ai-battery-low': (props.level ?? 100) <= 15 }} aria-hidden="true">
+  return <span class={['ai-battery', { 'ai-battery-low': (props.level ?? 100) <= 15 }]} aria-hidden="true">
     <i style={{ width: `${props.level ?? 0}%` }} />
   </span>
 }
@@ -127,7 +127,7 @@ export default function AiComposerControls(props: {
               <div class="ai-model-options" aria-label="可用模型">
                 <For each={props.models}>{(model) =>
                   <button class="ai-popup-option ai-model-option" type="button"
-                    aria-pressed={model.model === props.model?.model} disabled={props.working}
+                    aria-pressed={model.model === props.model?.model ? 'true' : 'false'} disabled={props.working}
                     onClick={() => props.onChooseModel(model)}>
                     <ModelLabel text={model.displayName || model.model} model={model} />
                     <Show when={model.model === props.model?.model}><span aria-hidden="true">✓</span></Show>
@@ -140,7 +140,7 @@ export default function AiComposerControls(props: {
                   <div class="ai-effort-options" role="group" aria-label="思考强度">
                     <For each={reasoningTiers}>{(tier) => {
                       const option = () => supportedReasoningEffort(props.model, tier)
-                      return <button class="ai-composer-trigger" type="button" aria-pressed={!!option() && effort() === tier.label}
+                      return <button class="ai-composer-trigger" type="button" aria-pressed={!!option() && effort() === tier.label ? 'true' : 'false'}
                         disabled={props.working || !option()} title={option()?.description} onClick={() => {
                           const next = option()
                           if (next) props.onChooseEffort(next.reasoningEffort)
