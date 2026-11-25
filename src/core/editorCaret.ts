@@ -77,13 +77,14 @@ export function caretAtEditorPoint(view: EditorView, x: number, y: number) {
   return point ? nearestCaret(view, point.pos, y) : undefined
 }
 
-export function taskCaretAtPoint(view: EditorView, x: number, y: number, whitespaceOnly = false) {
+export function taskCaretAtPoint(view: EditorView, x: number, y: number) {
   const document = view.dom.ownerDocument
   const hit = document.elementFromPoint(x, y)
   const task = hit?.closest('li[data-checked]')
   if (!task || !view.dom.contains(task)) return
-  const paragraph = task.querySelector(':scope > div > p')
-  if (!paragraph) return
+  const content = task.querySelector(':scope > div')
+  const paragraph = hit === task || hit === content ? content?.querySelector(':scope > p') : hit?.closest('p')
+  if (!paragraph || paragraph.parentElement !== content) return
   const end = view.posAtDOM(paragraph, paragraph.childNodes.length)
   const edge = view.coordsAtPos(end, -1)
   const rtl = getComputedStyle(paragraph).direction === 'rtl'
@@ -102,7 +103,6 @@ export function taskCaretAtPoint(view: EditorView, x: number, y: number, whitesp
     if (!rect.width || !rect.height) continue
     const dy = Math.max(rect.top - y, y - rect.bottom, 0)
     const dx = Math.max(rect.left - x, x - rect.right, 0)
-    if (whitespaceOnly && dx === 0 && dy === 0) return
     if (dy < verticalDistance || (dy === verticalDistance && dx < horizontalDistance)) {
       closest = rect
       verticalDistance = dy

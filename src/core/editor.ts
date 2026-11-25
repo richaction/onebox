@@ -224,10 +224,15 @@ export function createEditor(opts: {
   observer = createViewportObserver(editor.view, opts.scrollRoot, 200, viewportMetrics)
   for (const child of editor.view.dom.children) observer.observe(child)
   const scrollRoot = opts.scrollRoot
-  type SelectionPointer = { event: PointerEvent; selection: Selection; nativeRange?: Range; received: number }
-  let pointerDown: { event: PointerEvent; press?: SelectionPointer; taskAnchor?: TextSelection; mouseHeld?: boolean } | undefined
+  type SelectionPress = { event: MouseEvent; selection: Selection; nativeRange?: Range }
+  type SelectionPointer = SelectionPress & { event: PointerEvent; received: number }
+  type Drag = { press?: SelectionPress; anchor?: TextSelection; recovered?: boolean }
+  let pointerDown: (Drag & { event: PointerEvent; mouseHeld?: boolean }) | undefined
+  let mouseOnlyDrag: Drag | undefined
+  let releasedTapPointer: number | undefined
   let earlyRelease: SelectionPointer | undefined
   let latestEditorPress = -Infinity
+  let latestPointerRelease = -Infinity
   const insideEditor = (event: Event) => event.target instanceof globalThis.Node && scrollRoot.contains(event.target)
   const discardStaleMouseEvent = (event: MouseEvent) => {
     if (event.button !== 0 || event.timeStamp >= latestEditorPress || !insideEditor(event)) return false
@@ -236,14 +241,14 @@ export function createEditor(opts: {
     event.stopImmediatePropagation()
     return true
   }
-  const selectionPointer = (event: PointerEvent): SelectionPointer | undefined => {
+  const selectionPress = (event: MouseEvent): SelectionPress | undefined => {
     const view = editor.view
     const target = event.target
     if (!(target instanceof Element) || !scrollRoot.contains(target) || !isCaretClick(view, event) ||
       (!canCollapseSelection(view, event) && !isGutterPress(view, event, scrollRoot) && !target.closest('li[data-checked]'))) return
-    return { event, selection: view.state.selection, nativeRange: nativeTextRange(view)?.cloneRange(), received: performance.now() }
+    return { event, selection: view.state.selection, nativeRange: nativeTextRange(view)?.cloneRange() }
   }
-  const collapseTap = (press: SelectionPointer, release: PointerEvent) => {
+  const collapseTap = (press: SelectionPress, release: PointerEvent) => {
     const view = editor.view
     const { event, selection } = press
     const current = view.state.selection
@@ -260,17 +265,20 @@ export function createEditor(opts: {
     if (discardStaleMouseEvent(event)) return
     if (insideEditor(event)) latestEditorPress = event.timeStamp
     const release = earlyRelease
+    releasedTapPointer = undefined
     earlyRelease = undefined
-    const press = selectionPointer(event)
-    if (press && release && isReorderedPointerRelease(event, release.event, press.received - release.received) &&
-      press.selection.eq(release.selection) && collapseTap(press, release.event)) {
+    mouseOnlyDrag = undefined
+    const press = selectionPress(event)
+    if (release && insideEditor(event) && isReorderedPointerRelease(event, release.event, performance.now() - release.received)) {
       // WKWebView can deliver pointerup before pointerdown. The gesture has already ended.
-      event.preventDefault()
+      pointerDown = undefined
+      releasedTapPointer = event.pointerId
+      if (press && press.selection.eq(release.selection) && collapseTap(press, release.event)) event.preventDefault()
       return
     }
     pointerDown = { event, press }
   }
-  const extendTaskDrag = (anchor: TextSelection, event: PointerEvent) => {
+  const extendTextDrag = (anchor: TextSelection, event: MouseEvent) => {
     const view = editor.view
     if (!view.editable || view.composing || anchor.$anchor.doc !== view.state.doc) return
     const head = caretAtEditorPoint(view, event.clientX, event.clientY)
@@ -283,17 +291,23 @@ export function createEditor(opts: {
     if (discardStaleMouseEvent(event)) return
     const down = pointerDown
     if (down && (down.event.pointerId !== event.pointerId || event.timeStamp < down.event.timeStamp)) return
+    if (insideEditor(event) || down?.press || down?.anchor) latestPointerRelease = event.timeStamp
     pointerDown = undefined
-    if (down?.taskAnchor) {
-      extendTaskDrag(down.taskAnchor, event)
+    releasedTapPointer = undefined
+    const completed = down ?? mouseOnlyDrag
+    mouseOnlyDrag = undefined
+    if (completed?.anchor) {
+      extendTextDrag(completed.anchor, event)
       return
     }
-    const release = selectionPointer(event)
-    earlyRelease = down ? undefined : release
+    const release = selectionPress(event)
+    earlyRelease = !completed && release ? { ...release, event, received: performance.now() } : undefined
     if (release && down?.press) collapseTap(down.press, event)
   }
   const cancelSelectionTap = () => {
+    releasedTapPointer = undefined
     pointerDown = undefined
+    mouseOnlyDrag = undefined
     earlyRelease = undefined
   }
   const updateMousePress = (event: MouseEvent) => {
@@ -302,37 +316,68 @@ export function createEditor(opts: {
       mousePress.dragged = true
     }
   }
-  const moveMousePress = (event: MouseEvent) => {
-    updateMousePress(event)
-    if (pointerDown?.taskAnchor && event.timeStamp >= pointerDown.event.timeStamp) event.preventDefault()
-  }
-  const moveSelectionTap = (event: PointerEvent) => {
-    const down = pointerDown
-    if (!down || event.pointerId !== down.event.pointerId || event.timeStamp < down.event.timeStamp) return
-    // Some WebKit drag streams report zero buttons between the mouse press and release.
-    const held = (event.buttons & 1) !== 0 || down.mouseHeld
-    if (down.taskAnchor) {
-      if (held) extendTaskDrag(down.taskAnchor, event)
+  const moveTextDrag = (down: Drag, event: MouseEvent) => {
+    if (down.anchor) {
+      extendTextDrag(down.anchor, event)
       return
     }
     const { press } = down
     if (!press || !reachesDragThreshold(event.clientX - press.event.clientX, event.clientY - press.event.clientY)) return
     down.press = undefined
     const view = editor.view
-    // A task's whitespace can place a caret without starting native text selection.
-    if (!held || !view.editable || view.composing || press.selection.$from.doc !== view.state.doc ||
+    // Keep a native selection that has already grown. If WebKit leaves the
+    // caret collapsed, resolve the drag from where the pointer first pressed.
+    if (!view.editable || view.composing || press.selection.$from.doc !== view.state.doc ||
       nativeRangeChanged(view, press.nativeRange) || (!view.state.selection.empty && !view.state.selection.eq(press.selection))) return
-    const anchor = taskCaretAtPoint(view, press.event.clientX, press.event.clientY, true)
-    if (!anchor) return
-    down.taskAnchor = anchor
+    const { clientX, clientY } = press.event
+    const anchor = down.recovered || isGutterPress(view, press.event, scrollRoot)
+      ? caretAtEditorPoint(view, clientX, clientY)
+      : taskCaretAtPoint(view, clientX, clientY)
+    if (!(anchor instanceof TextSelection)) return
+    down.anchor = anchor
     mousePress ??= { x: press.event.clientX, y: press.event.clientY, selection: press.selection,
       nativeRange: press.nativeRange, dragged: true }
     mousePress.dragged = true
     if (!view.hasFocus()) view.focus()
-    extendTaskDrag(anchor, event)
+    extendTextDrag(anchor, event)
+  }
+  const moveSelectionTap = (event: PointerEvent) => {
+    // After an up-before-down tap, WKWebView can report the next three-finger
+    // press as a pointermove with buttons=1. Hover coordinates belong to neither drag.
+    if (releasedTapPointer === event.pointerId && event.isPrimary && event.pointerType === 'mouse' && event.buttons !== 0) {
+      releasedTapPointer = undefined
+      const view = editor.view
+      const target = event.target
+      if (event.buttons === 1 && !event.defaultPrevented && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey &&
+        view.editable && !view.composing && target instanceof Element && scrollRoot.contains(target) &&
+        !target.closest('button,input,textarea,a,[contenteditable="false"],td,th') &&
+        (target.closest('p,h1,h2,h3,h4,h5,h6,li') || target === scrollRoot || target === view.dom || target === view.dom.parentElement)) {
+        latestEditorPress = event.timeStamp
+        mousePress = undefined
+        pointerDown = { event, recovered: true, press: { event, selection: view.state.selection,
+          nativeRange: nativeTextRange(view)?.cloneRange() } }
+      }
+    }
+    const down = pointerDown
+    if (!down || event.pointerId !== down.event.pointerId || event.timeStamp < down.event.timeStamp) return
+    // A primary pointerdown is itself a press, even before a compatibility mousedown.
+    if (down.mouseHeld !== false) moveTextDrag(down, event)
+  }
+  const moveMousePress = (event: MouseEvent) => {
+    updateMousePress(event)
+    if (event.timeStamp < latestEditorPress) return
+    // WebKit may deliver movement through either stream. A matching mousedown
+    // remains held until release, including dragged events reporting buttons=0.
+    const down = pointerDown?.mouseHeld ? pointerDown : mouseOnlyDrag
+    if (!down) return
+    moveTextDrag(down, event)
+    if (down.anchor) event.preventDefault()
   }
   const endMousePress = (event: MouseEvent) => {
     if (event.button !== 0 || discardStaleMouseEvent(event)) return
+    const anchor = pointerDown?.anchor ?? mouseOnlyDrag?.anchor
+    if (anchor) extendTextDrag(anchor, event)
+    mouseOnlyDrag = undefined
     if (pointerDown && event.timeStamp >= pointerDown.event.timeStamp) pointerDown.mouseHeld = false
     updateMousePress(event)
     const view = editor.view
@@ -343,16 +388,22 @@ export function createEditor(opts: {
   const resetMousePress = () => {
     mousePress = undefined
     latestEditorPress = -Infinity
+    latestPointerRelease = -Infinity
     cancelSelectionTap()
   }
   const recordMousePress = (event: MouseEvent) => {
     if (discardStaleMouseEvent(event)) return
+    // A delayed compatibility press for a completed tap must not arm a hover drag.
+    if (event.button === 0 && !pointerDown && event.timeStamp <= latestPointerRelease) return
+    if (pointerDown?.mouseHeld === false) pointerDown = undefined
     mousePress = undefined
+    mouseOnlyDrag = undefined
     const target = event.target as Element | null
     // Task toggles use the native button click. Text and gutter presses still track drag selection.
     if (event.button === 0 && !target?.closest?.('[data-task-toggle]')) {
       latestEditorPress = event.timeStamp
       if (pointerDown && event.timeStamp >= pointerDown.event.timeStamp) pointerDown.mouseHeld = true
+      else if (!pointerDown) mouseOnlyDrag = { press: selectionPress(event) }
       mousePress = { x: event.clientX, y: event.clientY, selection: editor.state.selection,
         nativeRange: nativeTextRange(editor.view)?.cloneRange(), dragged: false }
     }

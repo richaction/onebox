@@ -750,6 +750,133 @@ describe('createEditor', () => {
     } finally { hit.mockRestore() }
   })
 
+  it.each(['mouse movement', 'mouse only', 'pointer only', 'page margin'])('can select again immediately after collapsing a task range (%s)', (stream) => {
+    const { handle, onUpdate } = mount()
+    handle.loadMarkdown('- [ ] 第一行待办\n- [ ] 第二行待办')
+    const { view } = handle.editor
+    const [first, last] = Array.from(view.dom.querySelectorAll('li p'))
+    const anchor = view.posAtDOM(last, 0) + last.textContent!.length
+    const head = view.posAtDOM(first, 0) + 2
+    const margin = stream === 'page margin'
+    const start = margin ? scrollRoot! : last
+    const x = margin ? 260 : 180
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
+    vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 120, right: 120, top: 72, bottom: 90 })
+    vi.spyOn(view, 'posAtCoords').mockImplementation(({ top }) => ({ pos: top < 70 ? head : anchor, inside: 0 }))
+    const hit = vi.spyOn(document, 'elementFromPoint').mockImplementation((_x, y) => y >= 70 ? start : null)
+    const send = (type: string, target: Element, clientX: number, clientY: number) => {
+      const init = { bubbles: true, cancelable: true, button: 0, buttons: 0, clientX, clientY, detail: 1 }
+      const event = type.startsWith('pointer')
+        ? new PointerEvent(type, { ...init, pointerId: 1, isPrimary: true, pointerType: 'mouse' })
+        : new MouseEvent(type, init)
+      afterUiEvent(() => target.dispatchEvent(event))
+    }
+    try {
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, head, anchor)))
+      send('pointerdown', start, x, 80)
+      send('pointerup', start, x, 80)
+      expect(view.state.selection.empty).toBe(true)
+      expect(view.state.selection.head).toBe(anchor)
+      if (stream !== 'mouse only') send('pointerdown', start, x, 80)
+      if (stream !== 'pointer only') send('mousedown', start, x, 80)
+      const move = stream === 'pointer only' ? 'pointermove' : 'mousemove'
+      send(move, start, x - 3, 80)
+      expect(view.state.selection.empty).toBe(true)
+      send(move, first, 80, 40)
+      expect(view.state.selection.anchor).toBe(anchor)
+      expect(view.state.selection.head).toBe(head)
+      if (stream !== 'mouse only') send('pointerup', first, 80, 40)
+      send('mouseup', first, 80, 40)
+      send('click', first, 80, 40)
+      send('mousemove', last, x, 80)
+      expect(view.state.selection.anchor).toBe(anchor)
+      expect(view.state.selection.head).toBe(head)
+      expect(onUpdate).not.toHaveBeenCalled()
+    } finally { hit.mockRestore() }
+  })
+
+  it.each([false, true])('drags forward from task text after a tap (native selection=%s)', (nativeSelection) => {
+    const { handle, onUpdate } = mount()
+    handle.loadMarkdown('- [ ] 打开 Word 或 PowerPoint，验证右侧直接显示分页预览。\n- [ ] 打开多页 PDF\n- [ ] 确认滚动与保存正常。')
+    const { view } = handle.editor
+    const [first, , last] = Array.from(view.dom.querySelectorAll('li p'))
+    const anchorOffset = first.textContent!.indexOf('验证') + 1
+    const headOffset = last.textContent!.indexOf('保存') + 1
+    const anchor = view.posAtDOM(first, 0) + anchorOffset
+    const head = view.posAtDOM(last, 0) + headOffset
+    const native = TextSelection.create(view.state.doc, anchor, head - 1)
+    const hit = vi.spyOn(document, 'elementFromPoint').mockImplementation((_x, y) => y < 50 ? first : last)
+    const rects = vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      return [new DOMRect(30, first.contains(this.startContainer) ? 20 : 70, 200, 20)] as unknown as DOMRectList
+    })
+    vi.spyOn(view, 'coordsAtPos').mockImplementation((pos) => ({ left: 230, right: 230,
+      top: pos < head ? 20 : 70, bottom: pos < head ? 40 : 90 }))
+    const previous = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint')
+    Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: (_x: number, y: number) =>
+      y < 50 ? { offsetNode: first.firstChild, offset: anchorOffset } : { offsetNode: last.firstChild, offset: headOffset } })
+    const send = (type: string, row: Element, clientX: number, clientY: number) =>
+      afterUiEvent(() => row.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+        pointerType: 'mouse', isPrimary: true, pointerId: 1, buttons: 0, clientX, clientY })))
+    try {
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, anchor - 5, head)))
+      send('pointerdown', first, 130, 30)
+      send('pointerup', first, 130, 30)
+      expect(view.state.selection.head).toBe(anchor)
+      expect(view.state.selection.empty).toBe(true)
+
+      send('pointerdown', first, 130, 30)
+      send('pointermove', first, 133, 30)
+      expect(view.state.selection.empty).toBe(true)
+      if (nativeSelection) view.dispatch(view.state.tr.setSelection(native))
+      send('pointermove', last, 180, 80)
+      expect(view.state.selection.anchor).toBe(anchor)
+      expect(view.state.selection.head).toBe(nativeSelection ? native.head : head)
+      send('pointerup', last, 180, 80)
+      expect(view.state.selection.head).toBe(nativeSelection ? native.head : head)
+      expect(onUpdate).not.toHaveBeenCalled()
+    } finally {
+      if (previous) Object.defineProperty(document, 'caretPositionFromPoint', previous)
+      else Reflect.deleteProperty(document, 'caretPositionFromPoint')
+      hit.mockRestore()
+      rects.mockRestore()
+    }
+  })
+
+  it('starts a new text drag on the first held move following a reversed trackpad tap', () => {
+    const { handle, onUpdate } = mount()
+    handle.loadMarkdown('一段正文用于测试反复选择和点击')
+    const view = handle.editor.view
+    const row = view.dom.querySelector('p')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockImplementation(({ left }) => ({ pos: left < 490 ? 3 : left < 700 ? 7 : 12, inside: 0 }))
+    const send = (type: string, x: number, time: number, buttons: number) => {
+      const event = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'mouse',
+        pointerId: 1, isPrimary: true, button: type === 'pointermove' ? -1 : 0, buttons, clientX: x, clientY: 40 })
+      Object.defineProperty(event, 'timeStamp', { value: time })
+      afterUiEvent(() => row.dispatchEvent(event))
+    }
+    try {
+      for (let round = 0; round < 5; round++) {
+        const time = round * 3000
+        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 3, 12)))
+        send('pointerup', 684, time + 619, 0)
+        // Compatibility mouseup can collapse the selection before the delayed down.
+        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 7)))
+        send('pointerdown', 684, time + 618, 0)
+        send('pointermove', 762, time + 955, 0)
+        expect(view.state.selection.empty).toBe(true)
+        send('pointermove', 762, time + 1152, 1)
+        send('pointermove', 760, time + 1160, 1)
+        expect(view.state.selection.empty).toBe(true)
+        send('pointermove', 484, time + 1600, 1)
+        expect([view.state.selection.anchor, view.state.selection.head]).toEqual([12, 3])
+        send('pointerup', 484, time + 1800, 0)
+        send('pointermove', 684, time + 1900, 0)
+        expect([view.state.selection.anchor, view.state.selection.head]).toEqual([12, 3])
+      }
+      expect(onUpdate).not.toHaveBeenCalled()
+    } finally { hit.mockRestore() }
+  })
+
   it('keeps the horizontal click position when a task padding hit is reported at the line start', () => {
     const { handle } = mount()
     handle.loadMarkdown('- [ ] previous\n- [ ] 播放音视频，重新播放。')
