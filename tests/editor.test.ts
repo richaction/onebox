@@ -1,4 +1,4 @@
-import { TextSelection } from '@tiptap/pm/state'
+import { NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { CellSelection, tableEditingKey } from '@tiptap/pm/tables'
 import { createComponent } from 'solid-js'
 import { render } from '@solidjs/web'
@@ -575,6 +575,48 @@ it('opens the explicit context menu without selecting the block or showing a dra
 })
 
 describe('createEditor', () => {
+  it('selects the image on a lightweight tap without selecting it when the pointer enters', () => {
+    const { handle, element, onUpdate } = mount()
+    handle.loadMarkdown('![山雾](assets/mountain.jpg)')
+    const image = element.querySelector('.editor-image img')!
+    const send = (type: string, time: number) => {
+      const event = new PointerEvent(type, { bubbles: true, pointerId: 1, pointerType: 'mouse', button: 0 })
+      Object.defineProperty(event, 'timeStamp', { value: time })
+      afterUiEvent(() => image.dispatchEvent(event))
+    }
+    send('pointerover', 50)
+    expect(handle.editor.state.selection).not.toBeInstanceOf(NodeSelection)
+    send('pointerup', 102)
+    send('pointerdown', 101)
+    expect(handle.editor.state.selection).toBeInstanceOf(NodeSelection)
+    expect(element.querySelector('.editor-image')?.classList.contains('ProseMirror-selectednode')).toBe(true)
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('reserves the image dimensions before a resized block remounts', () => {
+    const { handle, element, onUpdate } = mount()
+    handle.loadMarkdown('![山雾](assets/mountain.jpg)\n\n下一段')
+    const { view } = handle.editor
+    const original = element.querySelector('.editor-image img')!
+    Object.defineProperties(original, {
+      naturalWidth: { value: 1200 },
+      naturalHeight: { value: 680 },
+    })
+    original.dispatchEvent(new Event('load'))
+    const grip = element.querySelector('[data-side="right"]')!
+    grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    const imageBlock = view.state.doc.firstChild!
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, imageBlock.nodeSize + 1)))
+    expect(element.querySelector('.editor-image img')).toBeNull()
+    view.dispatch(view.state.tr.setMeta(visibilityKey, { visible: new Set([0]) }))
+    const next = element.querySelector('.editor-image img')!
+    expect(next).not.toBe(original)
+    expect(next.getAttribute('width')).toBe('1200')
+    expect(next.getAttribute('height')).toBe('680')
+    expect(handle.toMarkdown()).toContain('<!--onebox-image-width:85-->')
+    expect(onUpdate).toHaveBeenCalledOnce()
+  })
+
   it('resizes a standalone image from its edges and stores one undoable width change', () => {
     const { handle, element, onUpdate } = mount()
     handle.loadMarkdown('![山雾](assets/mountain.jpg)')
@@ -590,6 +632,7 @@ describe('createEditor', () => {
     drag('pointerdown', 450)
     drag('pointermove', 400)
     expect(image.style.getPropertyValue('--editor-image-width')).toBe('60%')
+    expect(image.querySelector('.editor-image-ratio')?.textContent).toBe('60%')
     expect(onUpdate).not.toHaveBeenCalled()
     drag('pointerup', 400)
     expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)<!--onebox-image-width:60-->')
@@ -604,6 +647,43 @@ describe('createEditor', () => {
     expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
     expect(handle.editor.commands.undo()).toBe(true)
     expect(image.style.getPropertyValue('--editor-image-width')).toBe('60%')
+  })
+
+  it.each([false, true])('resets a resized image from two trackpad taps without a dblclick (release first=%s)', (releaseFirst) => {
+    const disableClickTolerance = enableButtonClickTolerance(document)
+    const { handle, element, onUpdate } = mount()
+    const markdown = '![山雾](assets/mountain.jpg)'
+    handle.loadMarkdown(markdown + '<!--onebox-image-width:55-->')
+    const paragraph = element.querySelector('p[data-standalone-image]')!
+    const image = paragraph.querySelector<HTMLElement>('.editor-image')!
+    const grip = image.querySelector<HTMLButtonElement>('[data-side="right"]')!
+    vi.spyOn(paragraph, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 500, 200))
+    const capture = vi.fn()
+    Object.defineProperty(grip, 'setPointerCapture', { value: capture })
+    const tap = (x: number, time: number) => {
+      for (const type of releaseFirst ? ['pointerup', 'pointerdown'] : ['pointerdown', 'pointerup']) {
+        const down = type === 'pointerdown'
+        const event = new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true,
+          pointerType: 'mouse', pointerId: 1, button: 0, buttons: down ? 1 : 0, clientX: x + Number(!down) })
+        Object.defineProperty(event, 'timeStamp', { value: time + Number(!down) })
+        afterUiEvent(() => grip.dispatchEvent(event))
+      }
+    }
+    try {
+      tap(385, 100)
+      expect(image.style.getPropertyValue('--editor-image-width')).toBe('55%')
+      expect(onUpdate).not.toHaveBeenCalled()
+      tap(388, 260)
+      expect(handle.toMarkdown()).toBe(markdown)
+      expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+      expect(image.hasAttribute('data-resizing')).toBe(false)
+      expect(capture).toHaveBeenCalledTimes(releaseFirst ? 0 : 2)
+      expect(onUpdate).toHaveBeenCalledOnce()
+      expect(handle.editor.commands.undo()).toBe(true)
+      expect(image.style.getPropertyValue('--editor-image-width')).toBe('55%')
+    } finally {
+      disableClickTolerance()
+    }
   })
 
   it('renders existing fold markup expanded and preserves it when saving', () => {
@@ -1186,9 +1266,10 @@ describe('createEditor', () => {
     expect(onUpdate).not.toHaveBeenCalled()
   })
 
-  it('inserts a paragraph between adjacent code blocks only when their gap is clicked', () => {
-    const { handle, element } = mount()
-    handle.loadMarkdown('```js\na\n```\n\n```js\nb\n```')
+  it('restores an unused gap between code blocks and saves only typed content', () => {
+    const { handle, element, onUpdate } = mount()
+    const markdown = '```js\na\n```\n\n```js\nb\n```'
+    handle.loadMarkdown(markdown)
     const { view } = handle.editor
     expect(view.state.doc.childCount).toBe(2)
     const gap = element.querySelector<HTMLButtonElement>('.code-continue')!
@@ -1197,6 +1278,76 @@ describe('createEditor', () => {
     expect(view.state.doc.childCount).toBe(3)
     expect(view.state.doc.child(1).type.name).toBe('paragraph')
     expect(view.state.selection.$head.parent).toBe(view.state.doc.child(1))
+    expect(handle.toMarkdown()).toBe(markdown)
+    expect(onUpdate).not.toHaveBeenCalled()
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1)))
+    expect(view.state.doc.childCount).toBe(2)
+    expect(onUpdate).not.toHaveBeenCalled()
+
+    afterUiEvent(() => element.querySelector<HTMLButtonElement>('.code-continue')!.click())
+    expect(view.state.selection.$head.parent.type.name).toBe('paragraph')
+    view.dispatch(view.state.tr.insertText('新的正文'))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1)))
+    expect(view.state.doc.childCount).toBe(3)
+    expect(handle.toMarkdown()).toBe(markdown.replace('\n\n', '\n\n新的正文\n\n'))
+    expect(onUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('closes an empty line below a formula when focus leaves the editor', async () => {
+    const { handle, onUpdate } = mount()
+    const markdown = '$$a+b$$'
+    handle.loadMarkdown(markdown)
+    const { view } = handle.editor
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 20, 200, 100))
+    clickEditorGutter(110, 175)
+    expect(view.state.doc.childCount).toBe(2)
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    try {
+      outside.focus()
+      await Promise.resolve()
+      expect(view.state.doc.childCount).toBe(1)
+      expect(handle.toMarkdown()).toBe(markdown)
+      expect(onUpdate).not.toHaveBeenCalled()
+    } finally { outside.remove() }
+  })
+
+  it('alternates between heading whitespace and the code gap with reversed trackpad taps', () => {
+    const disableClickTolerance = enableButtonClickTolerance(document)
+    const { handle, element, onUpdate } = mount()
+    const markdown = '## 代码与公式\n\n```\na\n```\n\n```\nb\n```'
+    handle.loadBlocks([
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '代码与公式' }] },
+      { type: 'codeBlock', content: [{ type: 'text', text: 'a' }] },
+      { type: 'codeBlock', content: [{ type: 'text', text: 'b' }] },
+    ], true)
+    const { view } = handle.editor
+    const coords = vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 170, right: 170, top: 20, bottom: 45 })
+    const tap = (target: Element, x: number, y: number, time: number) => {
+      for (const type of ['pointerup', 'pointerdown']) {
+        const event = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'mouse',
+          isPrimary: true, pointerId: 1, clientX: x, clientY: y })
+        Object.defineProperty(event, 'timeStamp', { value: time + Number(type === 'pointerup') })
+        afterUiEvent(() => target.dispatchEvent(event))
+      }
+    }
+    const replayStarted = performance.now() - 3_000
+    try {
+      for (let i = 0; i < 4; i++) {
+        tap(element.querySelector('.code-continue')!, 65, 80, replayStarted + i * 600 + 100)
+        expect(view.state.selection.$head.parent.type.name).toBe('paragraph')
+        expect(view.state.doc.firstChild?.childCount).toBe(4)
+        tap(element.querySelector('h2')!, 350, 32, replayStarted + i * 600 + 400)
+        expect(view.state.selection.$head.parent.type.name).toBe('heading')
+        expect(view.state.selection.$head.parentOffset).toBe('代码与公式'.length)
+        expect(view.state.doc.firstChild?.childCount).toBe(3)
+      }
+      expect(handle.toMarkdown()).toBe(markdown)
+      expect(onUpdate).not.toHaveBeenCalled()
+    } finally {
+      coords.mockRestore()
+      disableClickTolerance()
+    }
   })
 
   it('keeps editor-only code and table controls outside exported content', () => {

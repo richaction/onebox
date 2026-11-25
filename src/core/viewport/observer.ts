@@ -3,6 +3,9 @@ import type { ViewportMetrics } from '../metrics'
 import type { ViewportObserver } from './blockNodeView'
 import { sameSet, visibilityKey } from './visibility'
 
+const compactBlockLimit = 64
+const compactContentLimit = 32_768
+
 export function nextVisibleSet(
   prev: ReadonlySet<number>,
   next: ReadonlySet<number>,
@@ -19,14 +22,22 @@ export function blockPosOf(view: EditorView, el: Element): number {
 export function createViewportObserver(
   view: EditorView,
   root: HTMLElement,
-  rootMargin = 200,
-  metrics?: ViewportMetrics,
+  { rootMargin = 200, metrics, mountCompactDocuments = true }:
+    { rootMargin?: number; metrics?: ViewportMetrics; mountCompactDocuments?: boolean } = {},
 ): ViewportObserver {
   const blocks = view.dom.getElementsByClassName('onebox-block')
   let raf = 0
   let disconnected = false
   const schedule = () => {
     if (!disconnected && !raf) raf = requestAnimationFrame(flush)
+  }
+  const isCompact = () => {
+    const { doc } = view.state
+    return mountCompactDocuments && doc.childCount <= compactBlockLimit && doc.content.size <= compactContentLimit
+      && doc.firstChild?.type.name !== 'viewportGroup'
+  }
+  const onScroll = () => {
+    if (!isCompact() || visibilityKey.getState(view.state)?.visible.size !== view.state.doc.childCount) schedule()
   }
 
   const flush = () => {
@@ -37,24 +48,28 @@ export function createViewportObserver(
       return
     }
     if (!root.isConnected) return
-    const viewport = root.getBoundingClientRect()
-    const top = viewport.top - rootMargin
-    const bottom = viewport.bottom + rootMargin
-
-    // The editor stacks block wrappers vertically. Search their live DOM order
-    // instead of registering an intersection target for every placeholder.
-    let first = 0
-    let end = blocks.length
-    while (first < end) {
-      const middle = (first + end) >>> 1
-      if (blocks[middle].getBoundingClientRect().bottom < top) first = middle + 1
-      else end = middle
-    }
     const next = new Set<number>()
-    for (let index = first; index < blocks.length; index++) {
-      const block = blocks[index]
-      if (block.getBoundingClientRect().top > bottom) break
-      next.add(blockPosOf(view, block))
+    if (isCompact()) {
+      // An unloaded image temporarily loses its intrinsic height. Keep small
+      // documents mounted so turning around mid-scroll can reuse their layout.
+      view.state.doc.forEach((_node, pos) => { next.add(pos) })
+    } else {
+      const viewport = root.getBoundingClientRect()
+      const top = viewport.top - rootMargin
+      const bottom = viewport.bottom + rootMargin
+      // Search live block order without observing each placeholder.
+      let first = 0
+      let end = blocks.length
+      while (first < end) {
+        const middle = (first + end) >>> 1
+        if (blocks[middle].getBoundingClientRect().bottom < top) first = middle + 1
+        else end = middle
+      }
+      for (let index = first; index < blocks.length; index++) {
+        const block = blocks[index]
+        if (block.getBoundingClientRect().top > bottom) break
+        next.add(blockPosOf(view, block))
+      }
     }
     // 与 plugin 的【权威】可见集比较，不自存一份 prev。plugin 会在每个 docChanged
     // transaction 里自行 map+filter，私有副本必然与它漂移：一旦 DOM 算出的 next
@@ -79,7 +94,7 @@ export function createViewportObserver(
   const resize = new ResizeObserver(schedule)
   resize.observe(root)
   resize.observe(view.dom)
-  root.addEventListener('scroll', schedule, { passive: true })
+  root.addEventListener('scroll', onScroll, { passive: true })
 
   return {
     observe() {
@@ -95,7 +110,7 @@ export function createViewportObserver(
       if (raf) cancelAnimationFrame(raf)
       raf = 0
       resize.disconnect()
-      root.removeEventListener('scroll', schedule)
+      root.removeEventListener('scroll', onScroll)
     },
   }
 }

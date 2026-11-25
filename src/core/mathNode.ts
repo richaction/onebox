@@ -3,6 +3,7 @@ import { TextSelection } from '@tiptap/pm/state'
 import type { MathfieldElement } from 'mathlive'
 import { bindMathPointer } from './mathPointer'
 import { mathSource } from './mathMarkdown'
+import { paintPreview } from './previewPaint'
 
 let visual: typeof import('./mathliveEngine') | undefined
 let preparing: Promise<typeof import('./mathliveEngine')> | undefined
@@ -12,6 +13,9 @@ function prepareVisualMath() {
     throw error
   })
 }
+
+const formulaCache = new Map<string, string>()
+let typesetter: typeof import('./katexEngine').default | undefined
 
 const richCommands = /\\(?:href|url|includegraphics|html\w*|class|cssId|style)\b/u
 
@@ -58,76 +62,64 @@ export const MarkdownMath = Node.create({
       dom.append(preview)
       let disposed = false
       let rendering = false
-      let typesetter: typeof import('./katexEngine').default | undefined
       let field: MathfieldElement | undefined
       let readValue: string | undefined
       let active: MathfieldElement | HTMLTextAreaElement | undefined
 
       const canRenderVisually = () => node.attrs.latex.length < 4_000 && !richCommands.test(node.attrs.latex)
 
-      function paint() {
-        if (typesetter && node.attrs.latex.length <= 20_000) {
-          try {
-            typesetter.render(node.attrs.latex, preview, {
-              displayMode: node.attrs.display, throwOnError: false, trust: false, maxExpand: 100, maxSize: 25,
-            })
-            return
-          } catch { /* Show the original source if typesetting fails. */ }
+      const keyOf = () => JSON.stringify([node.attrs.display, node.attrs.latex])
+      function paint(key: string) {
+        if (!typesetter || disposed || keyOf() !== key) return
+        let html = formulaCache.get(key)
+        if (html === undefined) {
+          html = typesetter.renderToString(node.attrs.latex, {
+            displayMode: node.attrs.display, throwOnError: false, trust: false, maxExpand: 100, maxSize: 25,
+          })
+          if (html.length < 32_768) {
+            if (formulaCache.size >= 128) formulaCache.delete(formulaCache.keys().next().value!)
+            formulaCache.set(key, html)
+          }
         }
-        preview.textContent = mathSource(node.attrs.latex, node.attrs.display)
+        preview.innerHTML = html
       }
 
       async function render() {
-        if (rendering || disposed) return
+        if (rendering || disposed || node.attrs.latex.length > 20_000) return
         rendering = true
+        const key = keyOf()
         try {
-          if (canRenderVisually()) {
-            try {
-              const engine = visual ?? await prepareVisualMath()
-              if (disposed) return
-              if (!active && installField(engine)) return
-            } catch { /* KaTeX also handles formulas unsupported in the editor. */ }
-          }
-          if (node.attrs.latex.length <= 20_000) {
-            const { default: katex } = await import('./katexEngine')
-            if (!disposed) {
-              typesetter = katex
-              paint()
-            }
-          }
+          typesetter ??= (await import('./katexEngine')).default
+          if (formulaCache.has(key)) paint(key)
+          else await paintPreview(() => paint(key))
         } finally {
           rendering = false
+          if (!disposed && key !== keyOf()) void render().catch(() => {})
         }
       }
 
-      const observer = typeof IntersectionObserver === 'undefined' ? undefined
+      const observer = typeof IntersectionObserver === 'undefined' || formulaCache.has(keyOf()) ? undefined
         : new IntersectionObserver((entries) => {
           if (!entries.some((entry) => entry.isIntersecting)) return
           observer?.disconnect()
           void render().catch(() => {})
-        }, { rootMargin: '100px' })
+        }, { rootMargin: '240px' })
       if (observer) observer.observe(dom)
       else void render().catch(() => {})
 
       function stopEditing() {
         const input = active
         active = undefined
-        if (input && input === field) {
-          input.readOnly = true
-          input.style.removeProperty('inline-size')
-          input.style.removeProperty('block-size')
-        } else {
-          input?.remove()
-        }
+        input?.remove()
+        field = undefined
         delete dom.dataset.mathEdit
-        preview.hidden = !!field
+        preview.hidden = false
       }
 
       function finish(save: boolean, latex: string, direction?: 'backward' | 'forward') {
         const pos = getPos()
         const editable = !disposed && editor.isEditable && pos !== undefined
         const changed = editable && save && latex !== node.attrs.latex
-        if (!changed && active === field && field && field.value !== readValue) field.setValue(node.attrs.latex)
         stopEditing()
         if (!editable) return
         const { view } = editor
@@ -176,7 +168,7 @@ export const MarkdownMath = Node.create({
         return !disposed
       }
 
-      function installField(engine: typeof import('./mathliveEngine')) {
+      function installField(engine: typeof import('./mathliveEngine'), bounds: DOMRect) {
         if (field) return field
         const input = engine.createMathfield(node.attrs.display)
         input.readOnly = true
@@ -195,7 +187,7 @@ export const MarkdownMath = Node.create({
           }
           if (active === input) return true
           if (!pinFormula()) return false
-          const { width, height } = input.getBoundingClientRect()
+          const { width, height } = bounds
           input.style.inlineSize = `${width}px`
           input.style.blockSize = `${height}px`
           active = input
@@ -237,15 +229,29 @@ export const MarkdownMath = Node.create({
         field = input
         readValue = input.value
         preview.hidden = true
+        if (!activate(false)) { stopEditing(); return }
         return field
       }
 
       preview.onmousedown = (event) => {
         if (event.button === 0 && editor.isEditable) event.preventDefault()
       }
-      preview.onclick = () => {
+      preview.onclick = async (event) => {
         if (active || !pinFormula()) return
-        editSource()
+        if (event.altKey || !canRenderVisually()) { editSource(); return }
+        const bounds = preview.getBoundingClientRect()
+        const pos = getPos()
+        try {
+          const engine = visual ?? await prepareVisualMath()
+          if (disposed || active || !editor.isEditable || editor.state.selection.head !== pos) return
+          const input = installField(engine, bounds)
+          if (input) {
+            const at = event.detail ? input.getOffsetFromPoint(event.clientX, event.clientY) : -1
+            input.position = at < 0 ? input.lastOffset : at
+            return
+          }
+        } catch { /* Fall back to the source editor if visual editing is unavailable. */ }
+        if (!disposed && !active && editor.isEditable && editor.state.selection.head === pos) editSource()
       }
       return {
         dom,
@@ -259,18 +265,8 @@ export const MarkdownMath = Node.create({
           }
           if (active) return false
           node = next
-          if (field && canRenderVisually()) {
-            if (field.value !== node.attrs.latex) field.setValue(node.attrs.latex)
-            if (!field.errors.length) {
-              readValue = field.value
-              return true
-            }
-          }
-          field?.remove()
-          field = undefined
-          preview.hidden = false
-          paint()
-          if (!typesetter) void render().catch(() => {})
+          preview.textContent = mathSource(node.attrs.latex, node.attrs.display)
+          void render().catch(() => {})
           return true
         },
         destroy() {

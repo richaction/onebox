@@ -7,6 +7,7 @@ import type { Node } from '@tiptap/pm/model'
 import { createEffect, createSignal, flush as flushSolid, onCleanup, onSettled, Show } from 'solid-js'
 import { relativeReferences, rewriteAttachmentLinks } from './core/attachmentLinks'
 import type { EditorHandle } from './core/editor'
+import { closeEmptyContinuation, documentWithoutEmptyContinuation } from './core/editorCaret'
 import { developmentSession, type DevelopmentSnapshot } from './core/developmentSession'
 import { EditorState, Selection } from '@tiptap/pm/state'
 import { schema } from './core/schema'
@@ -42,6 +43,7 @@ function inWorkspace(path: string, root: string) {
 }
 
 function setEditable(handle: EditorHandle, editable: boolean) {
+  if (!editable) closeEmptyContinuation(handle.editor.view)
   handle.editor.setEditable(editable, false)
   handle.editor.view.dom.setAttribute('aria-readonly', String(!editable))
 }
@@ -188,8 +190,9 @@ export default function App() {
       if (!await writer) return false
     }
     const target = path()
-    const doc = handle?.editor.state.doc
-    if (!target || !doc || readonly() || doc === savedDoc) return true
+    if (!target || !handle || readonly()) return true
+    const doc = documentWithoutEmptyContinuation(handle.editor.state)
+    if (savedDoc && doc.eq(savedDoc)) return true
 
     writer = writeDocument(target, doc)
     try {

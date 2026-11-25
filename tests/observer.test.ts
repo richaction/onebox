@@ -46,7 +46,7 @@ function runFrames() {
 const para = (text: string) => schema.node('paragraph', null, [schema.text(text)])
 const mounted: { view: EditorView; root: HTMLElement; observer: ViewportObserver }[] = []
 
-function mount(blocks: Node[]) {
+function mount(blocks: Node[], mountCompactDocuments = false) {
   const root = document.createElement('div')
   const element = document.createElement('div')
   root.appendChild(element)
@@ -69,7 +69,7 @@ function mount(blocks: Node[]) {
       const index = Array.from(view.dom.children).indexOf(this)
       return new DOMRect(0, index * 100, 500, 100)
     })
-  observer = createViewportObserver(view, root, 0)
+  observer = createViewportObserver(view, root, { rootMargin: 0, mountCompactDocuments })
   for (const child of view.dom.children) observer.observe(child)
 
   const entry = { view, root, observer }
@@ -107,6 +107,20 @@ afterEach(() => {
 })
 
 describe('createViewportObserver', () => {
+  it('keeps a compact document mounted and skips geometry reads during repeated scrolling', () => {
+    const { view, scroll, visible, measure } = mount([para('aaa'), para('bbb'), para('ccc')], true)
+    runFrames()
+    runFrames()
+    const settled = view.state
+    expect(visible()).toEqual([0, 5, 10])
+    for (let pass = 0; pass < 4; pass++) {
+      scroll(200, 299)
+      scroll(0, 99)
+      runFrames()
+    }
+    expect(view.state).toBe(settled)
+    expect(measure).not.toHaveBeenCalled()
+  })
   it('dispatches the visible blocks as visibilityKey metadata', () => {
     const { scroll, visible } = mount([para('aaa'), para('bbb'), para('ccc')])
     scroll(0, 299)
@@ -165,7 +179,7 @@ describe('createViewportObserver', () => {
   })
 
   it('binary-searches a large stack with few geometry reads', () => {
-    const { scroll, visible, measure } = mount(Array.from({ length: 1000 }, () => para('abc')))
+    const { scroll, visible, measure } = mount(Array.from({ length: 1000 }, () => para('abc')), true)
     scroll(50_001, 50_200)
     runFrames()
     expect(visible()).toEqual([2500, 2505, 2510])

@@ -80,7 +80,7 @@ export function createBlockNodeView(
 
   const placeholderHeight = (block: Node) => {
     const cached = heights.get(block)
-    return cached && cached > 0 ? cached : estimateHeight(block)
+    return cached && cached > 0 ? cached : estimateHeight(block, dom.ownerDocument.defaultView?.innerHeight)
   }
 
   if (visible) {

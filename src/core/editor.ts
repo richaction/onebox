@@ -10,10 +10,10 @@ import { aiDocumentPlugin, aiInlineSourcePlugin } from './aiDocument'
 import { isBlockSelection } from './blockSelection'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
-import { editorImage } from './editorImage'
+import { editorImage, type ImageDimensions } from './editorImage'
 import { createCodeHighlight } from './codeHighlight'
 import { developmentSession } from './developmentSession'
-import { caretAtEditorPoint, isGutterPress, nearestCaret, placeCaretInGutter, taskCaretAtPoint } from './editorCaret'
+import { caretAtEditorPoint, documentWithoutEmptyContinuation, emptyContinuationPlugin, isGutterPress, nearestCaret, placeCaretInGutter, taskCaretAtPoint } from './editorCaret'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import type { ViewportMetrics } from './metrics'
 import { MarkdownImage } from './markdownNodes'
@@ -97,12 +97,14 @@ export function createEditor(opts: {
     (mousePress.dragged || nativeRangeChanged(view, mousePress.nativeRange) ||
       (!view.state.selection.empty && !view.state.selection.eq(mousePress.selection)))
   const localImages = new Set<() => void>()
+  const imageDimensions = new WeakMap<Node, ImageDimensions>()
   const viewport = Extension.create({
     name: 'oneboxViewport',
     addProseMirrorPlugins() {
       // Tiptap 在创建 EditorView 时会覆盖 editorProps.nodeViews。
       return [
         createVisibilityPlugin(),
+        emptyContinuationPlugin(),
         aiDocumentPlugin(),
         aiInlineSourcePlugin(),
         listSelectionPlugin(opts.scrollRoot),
@@ -125,7 +127,7 @@ export function createEditor(opts: {
   const inlineImage = MarkdownImage.extend({
     addNodeView() {
       return ({ node, view, getPos }) => editorImage(node, view, getPos, {
-        read: opts.readImage, context: opts.imageContext, refreshers: localImages,
+        read: opts.readImage, context: opts.imageContext, refreshers: localImages, dimensions: imageDimensions,
       })
     },
   })
@@ -218,10 +220,14 @@ export function createEditor(opts: {
         },
       },
     },
-    onUpdate: ({ editor }) => opts.onUpdate(editor.state.doc),
+    onUpdate: ({ editor, transaction, appendedTransactions }) => {
+      if (transaction.docChanged || appendedTransactions.some((tr) => tr.docChanged && !tr.getMeta('preventUpdate'))) {
+        opts.onUpdate(documentWithoutEmptyContinuation(editor.state))
+      }
+    },
   })
 
-  observer = createViewportObserver(editor.view, opts.scrollRoot, 200, viewportMetrics)
+  observer = createViewportObserver(editor.view, opts.scrollRoot, { metrics: viewportMetrics })
   for (const child of editor.view.dom.children) observer.observe(child)
   const scrollRoot = opts.scrollRoot
   type SelectionPress = { event: MouseEvent; selection: Selection; nativeRange?: Range }
@@ -268,6 +274,11 @@ export function createEditor(opts: {
     releasedTapPointer = undefined
     earlyRelease = undefined
     mouseOnlyDrag = undefined
+    if (event.defaultPrevented) {
+      // A control may already have paired this delayed press with its release.
+      pointerDown = undefined
+      return
+    }
     const press = selectionPress(event)
     if (release && insideEditor(event) && isReorderedPointerRelease(event, release.event, performance.now() - release.received)) {
       // WKWebView can deliver pointerup before pointerdown. The gesture has already ended.
@@ -468,7 +479,7 @@ export function createEditor(opts: {
     refreshImages() {
       for (const refresh of localImages) refresh()
     },
-    toMarkdown: () => serializeMarkdown(editor.state.doc),
+    toMarkdown: () => serializeMarkdown(documentWithoutEmptyContinuation(editor.state)),
     destroy() {
       scrollRoot.removeEventListener('mousedown', recordMousePress, true)
       scrollRoot.removeEventListener('click', discardStaleClick, true)

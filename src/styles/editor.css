@@ -1649,7 +1649,7 @@ body {
   display: none;
   position: absolute;
   inset-block-start: calc(100% + 1px);
-  inset-inline: 0;
+  inset-inline: calc(-1 * var(--ob-page-padding-inline));
   height: var(--code-continue-height);
   border: 0;
   padding: 0;
@@ -1722,7 +1722,7 @@ body {
 }
 
 .ProseMirror .code-frame:not([data-rich]) > pre {
-  padding-block: 2.05rem;
+  padding-block: 1.125rem;
 }
 
 .code-language-picker {
@@ -2025,7 +2025,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   }
 
   .ProseMirror .code-frame:not([data-rich]) > pre {
-    padding-block: 2.75rem;
+    padding-block: 1.625rem;
   }
 
   .ProseMirror td,
@@ -2091,7 +2091,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   place-items: center;
   inset-block-start: 50%;
   block-size: min(64px, 80%);
-  inline-size: 18px;
+  inline-size: 30px;
   padding: 0;
   border: 0;
   transform: translateY(-50%);
@@ -2101,8 +2101,8 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   touch-action: none;
 }
 
-.editor-image-resize[data-side='left'] { left: 0; }
-.editor-image-resize[data-side='right'] { right: 0; }
+.editor-image-resize[data-side='left'] { left: -6px; }
+.editor-image-resize[data-side='right'] { right: -6px; }
 .editor-image-resize::before {
   content: '';
   inline-size: 5px;
@@ -2114,6 +2114,23 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 
 .ProseMirror[contenteditable='true'] p[data-standalone-image] .editor-image-resize { display: grid; }
 .editor-image:is(:hover, :focus-within, [data-resizing], .ProseMirror-selectednode) .editor-image-resize { opacity: 1; }
+
+.editor-image-ratio {
+  display: none;
+  position: absolute;
+  inset-block-start: 8px;
+  inset-inline-end: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.68);
+  color: white;
+  font: 500 12px/1.4 var(--ob-font-sans);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.ProseMirror[contenteditable='true'] p[data-standalone-image]
+  .editor-image:is(:hover, :focus-within, [data-resizing]) .editor-image-ratio { display: block; }
 
 .editor-image.ProseMirror-selectednode img,
 img.ProseMirror-selectednode {
@@ -2343,7 +2360,6 @@ img.ProseMirror-selectednode {
 
 .rich-preview[data-engine='mermaid'] {
   background: var(--ob-bg);
-  min-block-size: var(--mermaid-height, 180px);
 }
 
 .mermaid-workspace:not([data-editing]) .rich-preview[data-engine='mermaid']:has(> svg) {
@@ -2450,6 +2466,8 @@ img.ProseMirror-selectednode {
 
 .ProseMirror p[data-display-math] {
   position: relative;
+  margin-block: 0;
+  padding-block: 0;
   text-align: center;
 }
 
@@ -2457,6 +2475,7 @@ img.ProseMirror-selectednode {
 .ProseMirror p[data-display-math] > .markdown-math[data-display] {
   position: static;
   display: inline-block;
+  padding-block: 0;
   vertical-align: middle;
 }
 

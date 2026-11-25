@@ -1,10 +1,63 @@
 import { closeHistory } from '@tiptap/pm/history'
-import { Selection, TextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, Selection, TextSelection, type EditorState } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 
 export function isDisplayMath(node: import('@tiptap/pm/model').Node) {
   return node.type.name === 'paragraph' && node.childCount === 1
     && node.firstChild?.type.name === 'math' && node.firstChild.attrs.display
+}
+
+const emptyContinuation = new PluginKey<number | null>('onebox-empty-continuation')
+
+function removeEmptyContinuation(state: EditorState) {
+  const pos = emptyContinuation.getState(state)
+  if (pos == null) return
+  const paragraph = state.doc.nodeAt(pos)!
+  return state.tr.delete(pos, pos + paragraph.nodeSize)
+    .setMeta(emptyContinuation, null).setMeta('addToHistory', false).setMeta('preventUpdate', true)
+}
+
+export function closeEmptyContinuation(view: EditorView) {
+  const cleanup = removeEmptyContinuation(view.state)
+  if (cleanup) view.dispatch(cleanup)
+}
+
+export function documentWithoutEmptyContinuation(state: EditorState) {
+  return removeEmptyContinuation(state)?.doc ?? state.doc
+}
+
+export function emptyContinuationPlugin() {
+  return new Plugin<number | null>({
+    key: emptyContinuation,
+    state: {
+      init: () => null,
+      apply(tr, previous) {
+        const opened = tr.getMeta(emptyContinuation) as number | null | undefined
+        if (opened !== undefined) return opened
+        if (previous === null || !tr.docChanged) return previous
+        const mapped = tr.mapping.mapResult(previous)
+        const paragraph = mapped.deleted ? null : tr.doc.nodeAt(mapped.pos)
+        return paragraph?.type === tr.doc.type.schema.nodes.paragraph && !paragraph.content.size
+          ? mapped.pos : null
+      },
+    },
+    appendTransaction(_transactions, _oldState, state) {
+      const pos = emptyContinuation.getState(state)
+      const { from, to } = state.selection
+      if (pos != null && (from !== pos + 1 || to !== pos + 1)) return removeEmptyContinuation(state)
+    },
+    props: {
+      handleDOMEvents: {
+        blur(view) {
+          // Let the click reach its target before closing the line changes the layout.
+          if (emptyContinuation.getState(view.state) != null) queueMicrotask(() => {
+            if (!view.isDestroyed && !view.hasFocus() && !view.composing) closeEmptyContinuation(view)
+          })
+          return false
+        },
+      },
+    },
+  })
 }
 
 export function continueAfterBlock(view: EditorView, pos: number) {
@@ -15,21 +68,37 @@ export function continueAfterBlock(view: EditorView, pos: number) {
   const end = pos + block.nodeSize
   const after = doc.resolve(end)
   const paragraph = schema.nodes.paragraph
-  let caret = after.nodeAfter?.type === paragraph ? end + 1 : undefined
+  const isTextParagraph = (next: typeof after.nodeAfter) => next?.type === paragraph && !isDisplayMath(next)
+  let caret = isTextParagraph(after.nodeAfter) ? end + 1 : undefined
   if (!after.nodeAfter && after.parent.type.name === 'viewportGroup') {
     const boundary = after.after()
     const next = doc.resolve(boundary).nodeAfter
-    if (next?.type === paragraph) caret = boundary + 1
-    else if (next?.type.name === 'viewportGroup' && next.firstChild?.type === paragraph) caret = boundary + 2
+    if (isTextParagraph(next)) caret = boundary + 1
+    else if (next?.type.name === 'viewportGroup' && isTextParagraph(next.firstChild)) caret = boundary + 2
   }
   if (caret === undefined) {
     if (!after.parent.canReplaceWith(after.index(), after.index(), paragraph)) return false
-    closeHistory(tr).insert(end, paragraph.create())
-    caret = end + 1
+    // Switching gaps replaces the previous unused paragraph in the same transaction.
+    const cleanup = removeEmptyContinuation(view.state)
+    if (cleanup) for (const step of cleanup.steps) tr.step(step)
+    const insert = tr.mapping.map(end)
+    closeHistory(tr).insert(insert, paragraph.create())
+      .setMeta(emptyContinuation, insert).setMeta('addToHistory', false).setMeta('preventUpdate', true)
+    caret = insert + 1
   }
   view.dispatch(tr.setSelection(TextSelection.create(tr.doc, caret)).scrollIntoView())
   view.focus()
   return true
+}
+
+function headingEndInWhitespace(view: EditorView, event: MouseEvent) {
+  const heading = (event.target as Element | null)?.closest?.('h1, h2, h3, h4, h5, h6')
+  if (!heading || !view.dom.contains(heading)) return
+  const end = view.posAtDOM(heading, heading.childNodes.length)
+  const caret = view.coordsAtPos(end, -1)
+  const rtl = getComputedStyle(heading).direction === 'rtl'
+  if (caret.top <= event.clientY && event.clientY <= caret.bottom &&
+    (rtl ? event.clientX < caret.left : event.clientX > caret.right)) return end
 }
 
 export function isGutterPress(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
@@ -38,14 +107,17 @@ export function isGutterPress(view: EditorView, event: MouseEvent, scrollRoot: H
   const target = event.target
   return target instanceof HTMLElement &&
     (target === scrollRoot || target === view.dom.parentElement || target === view.dom ||
-      target.matches('.onebox-block, .viewport-group'))
+      target.matches('.onebox-block, .viewport-group') || headingEndInWhitespace(view, event) !== undefined)
 }
 
 export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
   if (!isGutterPress(view, event, scrollRoot)) return false
   const bounds = view.dom.getBoundingClientRect()
   const { doc } = view.state
-  if (event.clientY >= bounds.bottom) {
+  const headingEnd = headingEndInWhitespace(view, event)
+  if (headingEnd !== undefined) {
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, headingEnd)))
+  } else if (event.clientY >= bounds.bottom) {
     const grouped = doc.lastChild?.type.name === 'viewportGroup'
     const last = grouped ? doc.lastChild?.lastChild : doc.lastChild
     const continued = last && continueAfterBlock(view, doc.content.size - last.nodeSize - (grouped ? 1 : 0))

@@ -84,7 +84,12 @@ export function enableButtonClickTolerance(document: Document) {
       if (!nativeClicked && buttonAt(event) === button) activate(button, release)
       return
     }
-    if (event.defaultPrevented || event.ctrlKey || !(event.target instanceof Element)) return
+    if (event.defaultPrevented) {
+      // The editor can pair a delayed press with a release before it bubbles here.
+      primaryDown = undefined
+      return
+    }
+    if (event.ctrlKey || !(event.target instanceof Element)) return
     const button = buttonAt(event)
     if (!button || button.hasPointerCapture(event.pointerId) || event.target.hasPointerCapture(event.pointerId)) return
     const activateOnRelease = event.pointerType === 'mouse' && !!button.closest('[data-activate-on-release]')

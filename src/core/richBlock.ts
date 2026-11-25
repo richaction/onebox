@@ -1,4 +1,5 @@
 import type { EChartsCoreOption } from 'echarts/core'
+import { paintPreview } from './previewPaint'
 
 type RichLanguage = 'echarts' | 'mermaid'
 
@@ -92,7 +93,7 @@ async function diagram(source: string, isCurrent: () => boolean) {
         })
         mermaidDark = dark
       }
-      return mermaid.render(id, prepared, scratch)
+      return paintPreview(() => isCurrent() ? mermaid.render(id, prepared, scratch) : undefined)
     })
     mermaidQueue = task.then(() => {}, () => {})
     const result = await task
@@ -123,6 +124,7 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
   let timer: ReturnType<typeof setTimeout> | undefined
   let disposeChart: (() => void) | undefined
   let lastDiagram: string | undefined
+  let renderedSource: string | undefined
   const stop = () => {
     revision++
     clearTimeout(timer)
@@ -133,7 +135,6 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
     target.replaceChildren()
   }
   const showDiagram = (svg?: string) => {
-    target.style.removeProperty('--mermaid-height')
     if (!svg) {
       target.textContent = '暂无预览'
     } else if (svg !== lastDiagram || !target.firstElementChild) {
@@ -169,10 +170,12 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
       } else {
         if (value.length > 4_000_000) throw new Error('ECharts 数据超过 4 MB')
         const [option, { drawChart }] = await Promise.all([parseChart(value), import('./echartsEngine')])
-        if (expected !== revision) return
-        clear()
-        // Reuse the name for this chart's inline GeoJSON between edits.
-        disposeChart = drawChart(target, option, target.id)
+        await paintPreview(() => {
+          if (!isCurrent()) return
+          clear()
+          // Reuse the name for this chart's inline GeoJSON between edits.
+          disposeChart = drawChart(target, option, target.id)
+        })
       }
     } catch (error) {
       if (!isCurrent()) return
@@ -190,20 +193,21 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
   }
   const schedule = (delay: number) => {
     stop()
-    if (visible) {
+    if (visible && source !== renderedSource) {
       const expected = revision
-      timer = setTimeout(() => void render(expected), delay)
+      const input = source
+      timer = setTimeout(() => {
+        void render(expected).then(() => {
+          if (expected === revision) renderedSource = input
+        })
+      }, delay)
     }
   }
   const observer = new IntersectionObserver(([entry]) => {
     if (visible === entry.isIntersecting) return
     visible = entry.isIntersecting
-    if (!visible && !mermaid?.visibilityTarget.hasAttribute('data-editing')) {
-      if (language === 'mermaid' && target.firstElementChild) {
-        target.style.setProperty('--mermaid-height', `${target.offsetHeight}px`)
-      }
-      clear()
-    }
+    // Leave the finished preview mounted. The editor tears down the node view
+    // when it leaves the viewport of a large document or the document closes.
     schedule(0)
   }, { rootMargin: '160px' })
   observer.observe(mermaid?.visibilityTarget ?? target)

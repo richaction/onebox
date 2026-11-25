@@ -169,6 +169,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     continueButton.type = 'button'
     continueButton.className = 'code-continue'
     continueButton.contentEditable = 'false'
+    continueButton.setAttribute('data-activate-on-release', '')
     continueButton.tabIndex = -1
     continueButton.setAttribute('aria-hidden', 'true')
     continueButton.onmousedown = (event) => { if (event.button === 0) event.preventDefault() }

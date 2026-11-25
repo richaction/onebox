@@ -51,6 +51,18 @@ describe('estimateHeight', () => {
     expect(estimateHeight(code)).toBe(240)
   })
 
+  it('reserves the chart frame height before a preview is drawn', () => {
+    const chart = schema.node('codeBlock', { language: 'ECharts' }, [schema.text('{}')])
+    expect(estimateHeight(chart, 760)).toBe(372)
+    expect(estimateHeight(chart, 400)).toBe(250)
+  })
+
+  it('reserves extra height for a displayed fraction', () => {
+    const display = (latex: string) => schema.node('paragraph', null, [schema.node('math', { display: true, latex })])
+    expect(estimateHeight(display('a+b'))).toBe(32)
+    expect(estimateHeight(display('\\frac{a}{b}'))).toBe(48)
+  })
+
   it('counts nested textblocks so a multi-item list is not one line', () => {
     const list = schema.node(
       'bulletList',

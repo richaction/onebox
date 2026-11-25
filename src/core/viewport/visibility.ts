@@ -54,6 +54,17 @@ export function sameSet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean
 }
 
 export function createVisibilityPlugin(): Plugin<VisibilityState> {
+  let indexedDoc: Node | undefined
+  let blockSizes = new Map<number, number>()
+  const topLevelSizes = (doc: Node) => {
+    if (doc !== indexedDoc) {
+      const sizes = new Map<number, number>()
+      doc.forEach((block, pos) => { sizes.set(pos, block.nodeSize) })
+      indexedDoc = doc
+      blockSizes = sizes
+    }
+    return blockSizes
+  }
   let cache: {
     doc: Node
     visible: ReadonlySet<number>
@@ -76,12 +87,12 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
         // ReplaceAroundStep，assoc=1 时本块起点被判 deleted、assoc=-1 时下一块
         // 起点被判 deleted，两种都会误踢在屏块。deleted 表达的是位置映射语义，
         // 不是块的存在性。改为 map 取新位置，再按新文档真实的顶层块起点过滤。
-        const mapped = new Set<number>()
-        for (const pos of value.visible) mapped.add(tr.mapping.map(pos))
+        const sizes = topLevelSizes(tr.doc)
         const kept = new Set<number>()
-        tr.doc.forEach((_node, pos) => {
-          if (mapped.has(pos)) kept.add(pos)
-        })
+        for (const pos of value.visible) {
+          const mapped = tr.mapping.map(pos)
+          if (sizes.has(mapped)) kept.add(mapped)
+        }
         return { visible: kept }
       },
     },
@@ -98,12 +109,11 @@ export function createVisibilityPlugin(): Plugin<VisibilityState> {
           return cache.deco
         }
         const decos: Decoration[] = []
-        state.doc.forEach((node, pos) => {
-          // 占位块默认隐藏。添加或移除可见装饰都能触发 nodeView.update。
-          if (visible.has(pos) || forced.has(pos)) {
-            decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-visible': 'true' }, { visible: true }))
-          }
-        })
+        const sizes = topLevelSizes(state.doc)
+        for (const pos of new Set([...visible, ...forced])) {
+          const size = sizes.get(pos)
+          if (size !== undefined) decos.push(Decoration.node(pos, pos + size, { 'data-visible': 'true' }, { visible: true }))
+        }
         const deco = DecorationSet.create(state.doc, decos)
         cache = { doc: state.doc, visible, forced, deco }
         return deco
