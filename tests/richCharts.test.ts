@@ -21,6 +21,20 @@ it.each(chartExamples)('renders %s to SVG', (_label, source) => {
   }
 })
 
+it('keeps inline and expanded map registrations separate when reusing chart data', () => {
+  const option = {
+    geoJSON: { type: 'FeatureCollection', features: [] },
+    geo: { roam: true },
+    series: [{ type: 'map' }],
+  }
+  const inline = chartConfiguration(option, 'onebox-inline-map')
+  const expanded = chartConfiguration(option, 'onebox-expanded-map')
+  expect(inline).toMatchObject({ geo: { roam: true, map: 'onebox-inline-map' } })
+  expect(expanded).toMatchObject({ series: [{ type: 'map', map: 'onebox-expanded-map' }] })
+  expect(option.geo).toEqual({ roam: true })
+  expect(option.series).toEqual([{ type: 'map' }])
+})
+
 it('parses 50,000 values in the worker, samples dense lines, and rejects unsafe keys', async () => {
   const postMessage = vi.fn()
   const scope = { postMessage, onmessage: (_event: { data: object }) => {} }

@@ -1691,15 +1691,16 @@ body {
 }
 
 .code-toolbar {
-  position: absolute;
+  position: relative;
   z-index: 1;
-  inset-block-start: 4px;
-  inset-inline-end: 5px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  padding: 2px;
+  inline-size: max-content;
+  max-inline-size: calc(100% - 8px);
+  margin-block-start: 2px;
+  margin-inline: auto 4px;
+  gap: 2px;
+  padding: 1px 2px;
   border: 1px solid var(--ob-border);
   border-radius: 6px;
   background: var(--ob-bg-overlay);
@@ -1722,11 +1723,12 @@ body {
 }
 
 .ProseMirror .code-frame:not([data-rich]) > pre {
-  padding-block: 1.125rem;
+  padding-block: 0.25rem 0.8rem;
 }
 
 .code-language-picker {
   position: relative;
+  display: flex;
   min-inline-size: 0;
   color: var(--code-accent);
 }
@@ -1734,9 +1736,9 @@ body {
 .code-language-picker::after {
   position: absolute;
   inset-block-start: calc(50% - 0.25rem);
-  inset-inline-end: 0.65rem;
-  inline-size: 0.38rem;
-  block-size: 0.38rem;
+  inset-inline-end: 0.45rem;
+  inline-size: 0.3rem;
+  block-size: 0.3rem;
   border: solid currentColor;
   border-width: 0 1.5px 1.5px 0;
   transform: rotate(45deg);
@@ -1747,15 +1749,15 @@ body {
 .code-language {
   appearance: none;
   max-inline-size: 100%;
-  min-block-size: 24px;
+  min-block-size: 22px;
   overflow: hidden;
-  padding: 0.16rem 0.55rem;
-  padding-inline-end: 1.65rem;
+  padding: 0 0.35rem;
+  padding-inline-end: 1.15rem;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: inherit;
-  font: 600 0.75rem/1.5 var(--ob-font-sans);
+  font: 600 0.6875rem/1.4 var(--ob-font-sans);
   cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1804,27 +1806,28 @@ body {
 .code-actions {
   display: flex;
   flex: none;
-  gap: 0.2rem;
+  gap: 1px;
 }
 
 .code-actions button {
-  min-block-size: 24px;
-  padding: 0.16rem 0.46rem;
+  min-block-size: 22px;
+  padding: 0 0.35rem;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--ob-text);
-  font: 500 0.75rem/1.4 var(--ob-font-sans);
+  font: 500 0.6875rem/1.4 var(--ob-font-sans);
   cursor: pointer;
 }
 
-.code-actions :is(.code-copy, .code-next) {
+.code-actions :is(.code-copy, .code-next, .code-expand) {
   position: relative;
-  inline-size: 24px;
+  inline-size: 22px;
   padding-inline: 0;
   color: var(--ob-text-secondary);
 }
-.code-actions .code-next { font-size: .9rem; }
+.code-actions :is(.code-next, .code-expand) { font-size: .8rem; }
+.code-expand:disabled { display: none; }
 .code-copy::before, .code-copy::after {
   position: absolute;
   inline-size: 8px;
@@ -1833,10 +1836,10 @@ body {
   border-radius: 2px;
   content: '';
 }
-.code-copy::before { inset: 6px auto auto 6px; }
-.code-copy::after { inset: 9px auto auto 9px; background: var(--ob-bg-overlay); }
+.code-copy::before { inset: calc(50% - 6px) auto auto 4px; }
+.code-copy::after { inset: calc(50% - 3px) auto auto 7px; background: var(--ob-bg-overlay); }
 .code-copy[data-result]::before { content: none; }
-.code-copy[data-result]::after { inset: 0; inline-size: auto; block-size: auto; border: 0; background: none; line-height: 22px; }
+.code-copy[data-result]::after { inset: 0; inline-size: auto; block-size: auto; border: 0; background: none; display: grid; place-items: center; }
 .code-copy[data-result='success']::after { content: '✓'; }
 .code-copy[data-result='error']::after { content: '!'; }
 .ProseMirror[contenteditable='false'] .code-next { display: none; }
@@ -2011,21 +2014,8 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
     border-block-end: 1px solid var(--ob-border);
   }
 
-  .code-toolbar {
-    padding-inline: 0.55rem;
-  }
-
-  .code-language,
-  .code-actions button {
-    min-block-size: 36px;
-  }
-
   .ProseMirror .code-frame pre {
     padding-inline: 0.75rem;
-  }
-
-  .ProseMirror .code-frame:not([data-rich]) > pre {
-    padding-block: 1.625rem;
   }
 
   .ProseMirror td,
@@ -2063,6 +2053,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   display: inline-block;
   max-inline-size: 100%;
   vertical-align: bottom;
+  cursor: default;
 }
 
 .ProseMirror p[data-standalone-image] {
@@ -2072,21 +2063,54 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 
 .ProseMirror p[data-standalone-image] .editor-image {
   display: block;
-  inline-size: var(--editor-image-width, 80%);
+  inline-size: var(--editor-image-width, 90%);
   margin-inline: auto;
 }
 
 .ProseMirror p[data-standalone-image] .editor-image img {
   display: block;
   inline-size: 100%;
+  -webkit-user-drag: none;
+}
+
+.ProseMirror p[data-standalone-image] .editor-image img:not([width][height]) {
+  aspect-ratio: auto 16 / 9;
 }
 
 .ProseMirror p[data-standalone-image] > br.ProseMirror-trailingBreak {
   display: none;
 }
 
+.editor-image-expand {
+  position: absolute;
+  z-index: 1;
+  inset-block-end: 8px;
+  inset-inline-end: 8px;
+  display: none;
+  place-items: center;
+  inline-size: 28px;
+  block-size: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: rgb(0 0 0 / 68%);
+  color: white;
+  opacity: 0;
+  pointer-events: none;
+  cursor: zoom-in;
+  font: 1rem/1 var(--ob-font-sans);
+}
+
+.ProseMirror p[data-standalone-image] .editor-image-expand:not([hidden]) { display: grid; }
+.editor-image:is(:hover, :focus-within, .ProseMirror-selectednode) .editor-image-expand { opacity: 1; pointer-events: auto; }
+
+@media (hover: none) {
+  .editor-image-expand { opacity: 1; pointer-events: auto; }
+}
+
 .editor-image-resize {
   position: absolute;
+  z-index: 1;
   display: none;
   place-items: center;
   inset-block-start: 50%;
@@ -2118,6 +2142,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 .editor-image-ratio {
   display: none;
   position: absolute;
+  z-index: 1;
   inset-block-start: 8px;
   inset-inline-end: 8px;
   padding: 2px 6px;
@@ -2132,9 +2157,21 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 .ProseMirror[contenteditable='true'] p[data-standalone-image]
   .editor-image:is(:hover, :focus-within, [data-resizing]) .editor-image-ratio { display: block; }
 
-.editor-image.ProseMirror-selectednode img,
-img.ProseMirror-selectednode {
-  opacity: 0.8;
+.ProseMirror p[data-standalone-image] > .editor-image.ProseMirror-selectednode { outline: none; }
+
+.ProseMirror p[data-standalone-image] > .editor-image.ProseMirror-selectednode::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--ob-image-radius);
+  background: light-dark(rgb(35 131 226 / 0.16), rgb(82 155 235 / 0.22));
+  box-shadow: inset 0 0 0 1px var(--ob-accent);
+  pointer-events: none;
+}
+
+.editor-mount .ProseMirror p[data-standalone-image]:has(> .editor-image.ProseMirror-selectednode)::selection,
+.editor-mount .ProseMirror p[data-standalone-image]:has(> .editor-image.ProseMirror-selectednode) *::selection {
+  background: transparent;
 }
 
 /* 脚注：Notion 无原生脚注，此处沿用正文色系做弱化处理 */
@@ -2252,10 +2289,16 @@ img.ProseMirror-selectednode {
 .block-menu-icon {
   display: grid;
   place-items: center;
-  flex: 0 0 18px;
-  height: 18px;
+  flex: 0 0 22px;
+  height: 22px;
   color: var(--ob-text-secondary);
   font: 600 11px var(--ob-font-mono);
+}
+
+.block-menu-icon > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ob-text);
 }
 
 .block-menu-arrow,
@@ -2322,7 +2365,7 @@ img.ProseMirror-selectednode {
 
 .code-frame[data-rich] > pre[hidden],
 .mermaid-panes > pre[hidden],
-.markdown-math > button[hidden] {
+.mermaid-diagnostic[hidden] {
   display: none;
 }
 
@@ -2336,19 +2379,9 @@ img.ProseMirror-selectednode {
   border-color: var(--ob-border);
 }
 
-.code-frame[data-rich]:has(> .code-toolbar .code-actions button[aria-expanded='true']) > .code-toolbar {
-  position: relative;
-  inset: auto;
-  padding-inline: 5px;
-  border: 0;
-  border-block-end: 1px solid var(--ob-border);
-  border-radius: 0;
-  background: transparent;
-}
-
 .rich-preview {
   box-sizing: border-box;
-  padding: 8px;
+  padding: 4px 6px 6px;
   overflow: auto;
   overflow-wrap: anywhere;
   min-height: 180px;
@@ -2359,31 +2392,128 @@ img.ProseMirror-selectednode {
 }
 
 .rich-preview[data-engine='mermaid'] {
+  display: block;
+  inline-size: 100%;
+  appearance: none;
+  border: 0;
   background: var(--ob-bg);
+  color: inherit;
+  font: inherit;
 }
+
+.rich-preview[data-engine='mermaid']:has(> svg) {
+  padding: 2px 0 4px;
+}
+
+.rich-preview[data-expandable], .rich-preview[data-expandable] canvas { cursor: zoom-in; }
+.rich-preview:focus-visible { outline: 2px solid var(--ob-scrollbar); outline-offset: -2px; }
 
 .mermaid-workspace:not([data-editing]) .rich-preview[data-engine='mermaid']:has(> svg) {
   min-block-size: 0;
-  padding-block-start: 28px;
 }
 
-.rich-preview > svg {
+.rich-preview[data-engine='mermaid'] > svg {
   display: block;
   margin-inline: auto;
-  max-width: 100%;
+  width: 90%;
+  max-width: 100% !important; /* Mermaid generates an inline maximum based on the diagram's intrinsic width. */
   height: auto;
+  max-height: min(145dvh, 64rem);
 }
 
+.mermaid-workspace[data-editing] .rich-preview > svg { max-height: none; }
+
+.rich-preview-dialog {
+  box-sizing: border-box;
+  inline-size: min(96dvw, 88rem);
+  max-inline-size: none;
+  max-block-size: calc(100dvh - 28px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ob-border);
+  border-radius: 10px;
+  background: var(--ob-bg);
+  color: var(--ob-text);
+  box-shadow: var(--ob-shadow-menu);
+}
+
+.rich-preview-dialog[open] { display: flex; flex-direction: column; }
+.rich-preview-dialog::backdrop { background: rgb(0 0 0 / 46%); }
+
+.rich-preview-dialog-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 4px 12px;
+  border-block-end: 1px solid var(--ob-border);
+  font: 600 0.8125rem/1.4 var(--ob-font-sans);
+}
+
+.rich-preview-dialog-bar button {
+  inline-size: 28px;
+  block-size: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: 1.25rem/1 var(--ob-font-sans);
+  cursor: pointer;
+}
+
+.rich-preview-dialog-bar button:is(:hover, :focus-visible) { background: var(--ob-bg-hover); }
+
+.rich-preview-dialog-viewport {
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+}
+
+.rich-preview-dialog-viewport:focus-visible { outline-offset: -2px; }
+
+.rich-preview-dialog-content > :is(svg, img) {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  max-width: none !important;
+}
+
+.rich-preview-dialog-content[data-kind='echarts'] { block-size: min(82dvh, 50rem); }
+
 .mermaid-workspace {
+  --mermaid-columns: minmax(0, 1fr) minmax(0, 1fr);
   container-type: inline-size;
-  border-radius: 0 0 var(--ob-code-radius) var(--ob-code-radius);
   overflow: clip;
 }
 
+.mermaid-pane-labels,
 .mermaid-tabs {
   display: none;
-  gap: 0.2rem;
-  padding: 0.24rem 0.55rem;
+  margin-block-start: 4px;
+  border-block: 1px solid var(--ob-table-border);
+}
+
+.mermaid-workspace[data-editing] .mermaid-pane-labels {
+  display: grid;
+  grid-template-columns: var(--mermaid-columns);
+  background: var(--ob-bg-sidebar);
+  color: var(--ob-text-secondary);
+  font: 600 0.6875rem/1.4 var(--ob-font-sans);
+}
+
+.mermaid-pane-labels > span {
+  padding: 0.32rem 0.65rem;
+}
+
+.mermaid-pane-labels > span + span {
+  border-inline-start: 1px solid var(--ob-border);
+}
+
+.mermaid-tabs {
+  gap: 4px;
+  padding: 2px 6px;
   border-block-end: 1px solid var(--ob-table-border);
 }
 
@@ -2393,7 +2523,7 @@ img.ProseMirror-selectednode {
 
 .mermaid-workspace[data-editing] .mermaid-panes {
   display: grid;
-  grid-template: minmax(0, 1fr) 1.9rem / minmax(0, 2fr) minmax(0, 3fr);
+  grid-template: minmax(0, 1fr) / var(--mermaid-columns);
   block-size: clamp(16rem, 44dvh, 30rem);
 }
 
@@ -2402,26 +2532,31 @@ img.ProseMirror-selectednode {
   min-inline-size: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  padding: 0.65rem;
+  border-radius: 0;
+  background: var(--ob-bg-code);
 }
 
 .mermaid-workspace[data-editing] .rich-preview {
-  grid-area: 1 / 2 / -1;
+  grid-area: 1 / 2;
   min-inline-size: 0;
   min-block-size: 0;
+  border-inline-start: 1px solid var(--ob-border);
   overscroll-behavior: contain;
 }
 
 .mermaid-diagnostic {
-  grid-area: 2 / 1;
-  overflow: hidden;
-  padding: 0.3rem 0.75rem;
+  border-block-start: 1px solid var(--ob-table-border);
+  padding: 0.35rem 0.65rem;
   color: light-dark(#a4332b, #f6a29a);
   font: 500 0.75rem/1.4 var(--ob-font-sans);
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
-@container (width < 36rem) {
+@container (width < 28rem) {
+  .mermaid-workspace[data-editing] .mermaid-pane-labels {
+    display: none;
+  }
+
   .mermaid-workspace[data-editing] .mermaid-tabs {
     display: flex;
   }
@@ -2431,12 +2566,8 @@ img.ProseMirror-selectednode {
   }
 
   .mermaid-workspace[data-editing] .rich-preview {
-    grid-area: 1 / 1 / -1;
-  }
-
-  .mermaid-workspace[data-editing] .mermaid-diagnostic {
-    z-index: 1;
-    background: var(--ob-bg-code);
+    grid-area: 1 / 1;
+    border-inline-start: 0;
   }
 
   .mermaid-workspace[data-editing][data-pane='source'] .rich-preview,
@@ -2473,10 +2604,13 @@ img.ProseMirror-selectednode {
 
 /* Keep ProseMirror's caret helpers on the same line as a standalone formula. */
 .ProseMirror p[data-display-math] > .markdown-math[data-display] {
-  position: static;
   display: inline-block;
   padding-block: 0;
   vertical-align: middle;
+}
+
+.ProseMirror p[data-display-math] > .markdown-math[data-math-edit='source'] {
+  position: static;
 }
 
 .markdown-math[data-display] > button .katex-display {
@@ -2501,6 +2635,11 @@ img.ProseMirror-selectednode {
   user-select: none;
 }
 
+/* Keep KaTeX's box in the line so swapping renderers cannot change the baseline. */
+.markdown-math[data-math-edit='visual'] > button {
+  visibility: hidden;
+}
+
 .markdown-math > textarea {
   appearance: none;
   border: 0;
@@ -2517,30 +2656,25 @@ img.ProseMirror-selectednode {
 }
 
 .markdown-math > math-field {
-  display: inline-block;
+  position: absolute;
+  inset: 0;
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
   box-sizing: border-box;
   max-inline-size: 100%;
   overflow: hidden;
   border: 0;
   outline: 0;
-  padding: 0 2px;
+  padding: 0;
   color: inherit;
   background: transparent;
   font-size: 1.21em;
-  vertical-align: baseline;
   cursor: text;
   --caret-color: var(--ob-text);
   --selection-color: var(--ob-text);
   --selection-background-color: var(--ob-selection);
   --contains-highlight-background-color: transparent;
-}
-
-.markdown-math:not([data-display]) > math-field {
-  vertical-align: -0.42em;
-}
-
-.markdown-math[data-math-edit='visual'] > math-field::part(container) {
-  block-size: 100%;
 }
 
 .markdown-math[data-math-edit='source'] > textarea {
@@ -2555,6 +2689,11 @@ img.ProseMirror-selectednode {
 }
 
 .markdown-math > math-field::part(container) {
+  position: absolute;
+  inset: 0 2px;
+  display: flex;
+  inline-size: auto;
+  block-size: 100%;
   min-block-size: 0;
   padding: 0;
 }
@@ -2562,7 +2701,7 @@ img.ProseMirror-selectednode {
 .markdown-math > math-field::part(content) {
   box-sizing: border-box;
   min-inline-size: 0;
-  padding-inline: 0;
+  padding: 0;
 }
 
 .markdown-math > math-field::part(menu-toggle),

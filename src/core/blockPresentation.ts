@@ -128,6 +128,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     const toolbar = document.createElement('div')
     toolbar.className = 'code-toolbar'
     toolbar.contentEditable = 'false'
+    toolbar.dataset.activateOnRelease = ''
     const picker = document.createElement('div')
     picker.className = 'code-language-picker'
     const lowerName = language.name.toLowerCase()
@@ -182,24 +183,36 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     let mermaidEditor: ReturnType<typeof mountMermaidEditor> | undefined
     if (rich) {
       frame.dataset.rich = rich
-      const preview = document.createElement('div')
+      const preview = document.createElement(rich === 'mermaid' ? 'button' : 'div')
       preview.className = 'rich-preview'
       preview.dataset.engine = rich
       preview.id = `onebox-chart-${++nextRichBlock}`
       preview.contentEditable = 'false'
-      preview.setAttribute('aria-label', rich === 'mermaid' ? 'Mermaid 图' : 'ECharts 图表')
+      const label = rich === 'mermaid' ? 'Mermaid 图' : 'ECharts 图表'
+      const expand = document.createElement('button')
+      expand.type = 'button'
+      expand.className = 'code-expand'
+      expand.textContent = '⤢'
+      expand.title = `放大${label}`
+      expand.setAttribute('aria-label', expand.title)
+      actions.prepend(expand)
+      preview.setAttribute('aria-label', preview instanceof HTMLButtonElement ? expand.title : label)
+      if (preview instanceof HTMLButtonElement) {
+        preview.type = 'button'
+        preview.dataset.activateOnRelease = ''
+      }
       preview.textContent = '正在载入预览…'
       if (rich === 'mermaid') {
         mermaidEditor = mountMermaidEditor(frame, dom, preview, view, getPos)
         mermaidEditors.add(mermaidEditor)
         actions.prepend(mermaidEditor.button)
-        richPreview = watchRichBlock(preview, rich, node.textContent, {
+        richPreview = watchRichBlock(preview, rich, node.textContent, expand, {
           visibilityTarget: mermaidEditor.workspace,
           report: mermaidEditor.report,
         })
       } else {
         frame.append(preview)
-        richPreview = watchRichBlock(preview, rich, node.textContent)
+        richPreview = watchRichBlock(preview, rich, node.textContent, expand)
         const source = document.createElement('button')
         source.type = 'button'
         source.textContent = '源码'

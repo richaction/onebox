@@ -5,6 +5,7 @@ import type { EditorView, NodeView } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
 import { isReorderedPointerRelease, reachesDragThreshold } from './buttonClickTolerance'
 import { defaultImageWidth, imageWidthPercent, maxImageWidth, minImageWidth } from './markdownNodes'
+import { showExpandedPreview } from './expandedPreview'
 
 export type ImageDimensions = { context: string | null | undefined; width: number; height: number }
 
@@ -23,13 +24,22 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
   image.alt = alt
   if (title) image.title = title
   image.decoding = 'async'
-  dom.append(image)
+  const expand = document.createElement('button')
+  expand.type = 'button'
+  expand.className = 'editor-image-expand'
+  expand.textContent = '⤢'
+  expand.title = '放大图片'
+  expand.setAttribute('aria-label', expand.title)
+  expand.dataset.activateOnRelease = ''
+  expand.hidden = true
+  dom.append(image, expand)
 
   let current = node
   let objectUrl: string | undefined
   let disposed = false
   let request = 0
   let previousContext: string | null | undefined
+  let closeExpanded: (() => void) | undefined
   const setDimensions = (dimensions: ImageDimensions | undefined) => {
     if (dimensions) {
       image.width = dimensions.width
@@ -44,7 +54,9 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     const dimensions = { context: previousContext, width: image.naturalWidth, height: image.naturalHeight }
     assets.dimensions.set(current, dimensions)
     setDimensions(dimensions)
+    expand.hidden = false
   }
+  image.onerror = () => { expand.hidden = true }
   const refresh = () => {
     const context = assets.context?.()
     if (request > 0 && previousContext === context) return
@@ -53,6 +65,9 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     setDimensions(cached?.context === context ? cached : undefined)
     const generation = ++request
     if (objectUrl) {
+      closeExpanded?.()
+      closeExpanded = undefined
+      expand.hidden = true
       image.removeAttribute('src')
       URL.revokeObjectURL(objectUrl)
       objectUrl = undefined
@@ -81,7 +96,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     if (pos === undefined || view.state.doc.nodeAt(pos) !== current) return
     const selection = NodeSelection.create(view.state.doc, pos)
     if (!selection.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(selection))
-    view.focus()
+    if (!view.hasFocus()) view.focus()
   }
   image.addEventListener('click', (event) => {
     if (isImageTap(event)) selectImage()
@@ -91,8 +106,10 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     const release = imageRelease
     imageRelease = undefined
     imagePress = undefined
-    if (release && isReorderedPointerRelease(event, release.event, now() - release.received)) selectImage()
-    else imagePress = event
+    if (release && isReorderedPointerRelease(event, release.event, now() - release.received)) {
+      event.preventDefault()
+      selectImage()
+    } else imagePress = event
   })
   image.addEventListener('pointerup', (event) => {
     if (!isImageTap(event) || event.pointerType !== 'mouse') return
@@ -107,7 +124,26 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     imageRelease = undefined
   }
   image.addEventListener('pointercancel', cancelImageTap)
-  image.addEventListener('dragstart', cancelImageTap)
+  const standaloneParagraph = () => dom.closest('p[data-standalone-image]')
+  const openExpanded = () => {
+    if (closeExpanded || expand.hidden || !standaloneParagraph()) return false
+    closeExpanded = showExpandedPreview(expand, 'image', (content) => {
+      const copy = document.createElement('img')
+      copy.alt = image.alt
+      copy.src = image.currentSrc || image.src
+      copy.draggable = false
+      content.append(copy)
+    }, () => { closeExpanded = undefined })
+    return true
+  }
+  expand.onclick = openExpanded
+  image.ondblclick = (event) => {
+    if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && openExpanded()) event.preventDefault()
+  }
+  dom.addEventListener('dragstart', (event) => {
+    cancelImageTap()
+    if (standaloneParagraph()) event.preventDefault()
+  })
 
   const savedWidth = () => imageWidthPercent(current.attrs.widthPercent) ?? defaultImageWidth
   const clamp = (width: number) => Math.min(maxImageWidth, Math.max(minImageWidth, Math.round(width)))
@@ -121,7 +157,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     grip.className = 'editor-image-resize'
     grip.dataset.side = side < 0 ? 'left' : 'right'
     grip.dataset.pointerDragHandle = ''
-    grip.title = '拖动调整宽度，双击恢复 80%'
+    grip.title = `拖动调整宽度，双击恢复 ${defaultImageWidth}%`
     grip.setAttribute('role', 'slider')
     grip.setAttribute('aria-label', side < 0 ? '从左侧调整图片宽度' : '从右侧调整图片宽度')
     grip.setAttribute('aria-valuemin', String(minImageWidth))
@@ -163,42 +199,39 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     const direction = index === 0 ? -1 : 1
     let drag: { press: PointerEvent; available: number; initial: number; width: number; moved: boolean } | undefined
     let earlyRelease: { event: PointerEvent; received: number } | undefined
-    grip.onpointerdown = (event) => {
-      if (!view.editable || drag || event.button !== 0 || event.ctrlKey) return
+    grip.addEventListener('pointerdown', (event) => {
+      if (!isImageTap(event) || drag) return
       const release = earlyRelease
       earlyRelease = undefined
       if (release && isReorderedPointerRelease(event, release.event, now() - release.received)) {
-        // The release can arrive before the press without a native double-click.
+        // A delayed press can finish a handle tap without a native double-click.
         event.preventDefault()
         registerTap(grip, release.event)
         return
       }
       if (event.defaultPrevented) return
-      const paragraph = dom.closest('p[data-standalone-image]')
-      const available = paragraph?.getBoundingClientRect().width ?? 0
+      const available = standaloneParagraph()?.getBoundingClientRect().width ?? 0
       if (!available) return
       event.preventDefault()
       const width = savedWidth()
       grip.setPointerCapture(event.pointerId)
       drag = { press: event, available, initial: width, width, moved: false }
       dom.setAttribute('data-resizing', '')
-    }
-    grip.onpointermove = (event) => {
+    })
+    grip.addEventListener('pointermove', (event) => {
       if (!drag || event.pointerId !== drag.press.pointerId || event.timeStamp < drag.press.timeStamp) return
-      if (!(event.buttons & 1)) { cancel(event); return }
       const dx = event.clientX - drag.press.clientX
       if (!drag.moved && !reachesDragThreshold(dx, 0, event.pointerType)) return
       drag.moved = true
       lastTap = undefined
-      const delta = dx / drag.available * 100
-      const width = clamp(drag.initial + 2 * direction * delta)
+      const width = clamp(drag.initial + 200 * direction * dx / drag.available)
       if (drag.width !== width) {
         drag.width = width
         paint(width)
       }
-    }
-    grip.onpointerup = (event) => {
-      if (!view.editable || event.button !== 0 || event.ctrlKey) return
+    })
+    grip.addEventListener('pointerup', (event) => {
+      if (!isImageTap(event)) return
       if (!drag) {
         if (event.pointerType === 'mouse') earlyRelease = { event, received: now() }
         return
@@ -211,7 +244,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
       else if (!reachesDragThreshold(event.clientX - press.clientX, event.clientY - press.clientY, event.pointerType)) {
         registerTap(grip, event)
       } else lastTap = undefined
-    }
+    })
     const cancel = (event: PointerEvent) => {
       if (event.pointerId === earlyRelease?.event.pointerId) earlyRelease = undefined
       if (!drag || event.pointerId !== drag.press.pointerId) return
@@ -220,8 +253,8 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
       dom.removeAttribute('data-resizing')
       paint(savedWidth())
     }
-    grip.onpointercancel = cancel
-    grip.onlostpointercapture = cancel
+    grip.addEventListener('pointercancel', cancel)
+    grip.addEventListener('lostpointercapture', cancel)
     grip.ondblclick = (event) => {
       event.preventDefault()
       lastTap = undefined
@@ -240,17 +273,19 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
 
   return {
     dom,
-    stopEvent: (event) => event.target instanceof Element && !!event.target.closest('.editor-image-resize'),
+    stopEvent: (event) => event.target === expand || (event.target instanceof Element && !!event.target.closest('.editor-image-resize')),
     update(next) {
       if (next.type !== current.type || next.attrs.src !== src || next.attrs.alt !== alt || next.attrs.title !== title) return false
       const dimensions = assets.dimensions.get(current)
       if (dimensions) assets.dimensions.set(next, dimensions)
+      const changedWidth = current.attrs.widthPercent !== next.attrs.widthPercent
       current = next
-      paint(savedWidth())
+      if (changedWidth) paint(savedWidth())
       return true
     },
     destroy() {
       disposed = true
+      closeExpanded?.()
       assets.refreshers.delete(refresh)
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     },

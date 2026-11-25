@@ -97,7 +97,7 @@ export default function WorkspaceSelectionPreview(props: {
   return (
     <section class="file-preview selection-preview" aria-label="多选预览"
       onKeyDown={(event) => { if (!previewEntry()) props.selection.onKeyDown(event) }}>
-      <header class="file-preview-toolbar selection-preview-toolbar" inert={!!previewEntry()}>
+      <header class="file-preview-toolbar selection-preview-toolbar" data-activate-on-release inert={!!previewEntry()}>
         <strong role="status">已选中 {entries().length} 个文件</strong>
         <div class="selection-preview-message" role="status">{props.selection.message()}</div>
         <div class="file-preview-actions" role="group" aria-label="选中项操作">

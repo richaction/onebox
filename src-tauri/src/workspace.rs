@@ -168,6 +168,12 @@ fn seed_demo_workspace(path: &Path) -> io::Result<()> {
     for (version, directory, names) in [
         ("demo-excel-v1", "04 文件预览", &["Excel 冻结窗格与两万行.xlsx"][..]),
         ("demo-charts-v1", "01 编辑器", &["图表数字与公式.md"][..]),
+        (
+            "demo-mermaid-v1",
+            "01 编辑器",
+            &["Mermaid 多场景编辑.md", "Mermaid 联调与压力样张.md"][..],
+        ),
+        ("demo-formulas-v1", "01 编辑器", &["公式专项验收.md"][..]),
         ("demo-format-v1", "01 编辑器", &["全格式验收.md"][..]),
         (
             "demo-images-v1",

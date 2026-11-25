@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from 'solid-js'
 import type { MenuItem } from '../core/blockCommands'
+import BlockMenuIcon from './BlockMenuIcon'
 
 function viewportBounds() {
   const viewport = window.visualViewport
@@ -139,7 +140,7 @@ export default function BlockMenu(props: {
                     >
                       <Show when={group.layout === 'inline'} fallback={
                         <>
-                          <span class="block-menu-icon" aria-hidden="true">{item.icon}</span>
+                          <BlockMenuIcon name={item.icon} />
                           <span>{item.label}</span>
                           <Show when={'children' in item}><span class="block-menu-arrow" aria-hidden="true">›</span></Show>
                           <Show when={!item.headingLevel && item.shortcut}><kbd>{item.shortcut}</kbd></Show>
@@ -165,7 +166,7 @@ export default function BlockMenu(props: {
                   data-index={index()} data-activate-on-release aria-selected={index() === submenu().active ? 'true' : 'false'}
                   onPointerEnter={(event) => { if (event.pointerType === 'mouse') props.onHighlightSubmenu(index()) }}
                   onClick={() => props.onChooseSubmenu(index())}>
-                  <span class="block-menu-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>
+                  <BlockMenuIcon name={item.icon} /><span>{item.label}</span>
                 </button>
               )}</For>
             </div>

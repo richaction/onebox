@@ -6,6 +6,57 @@ import WorkspaceSidebar, { type WorkspaceSelection } from '../src/ui/WorkspaceSi
 import WorkspaceResizeHandle from '../src/ui/WorkspaceResizeHandle'
 import FileName from '../src/ui/FileName'
 import { desktopWorkspace } from '../src/io/tauri'
+import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
+import WorkspaceSelectionPreview from '../src/ui/WorkspaceSelectionPreview'
+import { customizeArchivePreview } from '../src/ui/archivePreview'
+
+function tapToolbar(button: HTMLButtonElement) {
+  Object.defineProperty(button, 'setPointerCapture', { value: vi.fn() })
+  for (const type of ['pointerdown', 'pointerup']) {
+    afterUiEvent(() => button.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+      pointerType: 'mouse', isPrimary: true, pointerId: 1, buttons: type === 'pointerdown' ? 1 : 0 })))
+  }
+}
+
+it('cuts and copies from the multiselection preview on release', () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const stop = enableButtonClickTolerance(document)
+  const copy = vi.fn()
+  const dispose = render(() => createComponent(WorkspaceSelectionPreview, {
+    selection: { entries: () => [], showOverview: () => true, canCopy: () => true, cutPaths: () => new Set(),
+      copy, remove: vi.fn(), message: () => undefined, onKeyDown: vi.fn() },
+    onFilePreviewOpenChange: vi.fn(), onOpenExternal: vi.fn(), onSaveHint: vi.fn(), saveHint: '',
+  }), host)
+  try {
+    const [cut, duplicate] = host.querySelectorAll<HTMLButtonElement>('header button')
+    tapToolbar(cut)
+    tapToolbar(duplicate)
+    expect(copy.mock.calls).toEqual([[true], [false]])
+  } finally {
+    dispose()
+    stop()
+    host.remove()
+  }
+})
+
+it('returns from an archive entry to the directory on release', () => {
+  const shell = document.createElement('div')
+  shell.innerHTML = `<div class="archive-sidebar"><input class="archive-search"><div class="archive-list"></div></div>
+    <div class="archive-preview"><div class="archive-preview-toolbar"></div></div>`
+  document.body.append(shell)
+  const stop = enableButtonClickTolerance(document)
+  const dispose = customizeArchivePreview(shell)
+  try {
+    shell.classList.add('ob-archive-detail')
+    tapToolbar(shell.querySelector('.ob-archive-back')!)
+    expect(shell.classList.contains('ob-archive-detail')).toBe(false)
+  } finally {
+    dispose?.()
+    stop()
+    shell.remove()
+  }
+})
 
 it('ends a sidebar resize when the release misses the handle and lets the other handle drag', () => {
   const host = document.createElement('div')

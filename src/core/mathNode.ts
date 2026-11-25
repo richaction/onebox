@@ -56,6 +56,7 @@ export const MarkdownMath = Node.create({
       dom.toggleAttribute('data-display', node.attrs.display)
       const preview = document.createElement('button')
       preview.type = 'button'
+      preview.dataset.activateOnRelease = ''
       preview.title = '编辑公式'
       preview.setAttribute('aria-label', '编辑公式')
       preview.textContent = mathSource(node.attrs.latex, node.attrs.display)
@@ -113,7 +114,6 @@ export const MarkdownMath = Node.create({
         input?.remove()
         field = undefined
         delete dom.dataset.mathEdit
-        preview.hidden = false
       }
 
       function finish(save: boolean, latex: string, direction?: 'backward' | 'forward') {
@@ -168,7 +168,7 @@ export const MarkdownMath = Node.create({
         return !disposed
       }
 
-      function installField(engine: typeof import('./mathliveEngine'), bounds: DOMRect) {
+      function installField(engine: typeof import('./mathliveEngine')) {
         if (field) return field
         const input = engine.createMathfield(node.attrs.display)
         input.readOnly = true
@@ -187,9 +187,6 @@ export const MarkdownMath = Node.create({
           }
           if (active === input) return true
           if (!pinFormula()) return false
-          const { width, height } = bounds
-          input.style.inlineSize = `${width}px`
-          input.style.blockSize = `${height}px`
           active = input
           dom.dataset.mathEdit = 'visual'
           input.readOnly = false
@@ -228,7 +225,6 @@ export const MarkdownMath = Node.create({
         }
         field = input
         readValue = input.value
-        preview.hidden = true
         if (!activate(false)) { stopEditing(); return }
         return field
       }
@@ -239,12 +235,11 @@ export const MarkdownMath = Node.create({
       preview.onclick = async (event) => {
         if (active || !pinFormula()) return
         if (event.altKey || !canRenderVisually()) { editSource(); return }
-        const bounds = preview.getBoundingClientRect()
         const pos = getPos()
         try {
           const engine = visual ?? await prepareVisualMath()
           if (disposed || active || !editor.isEditable || editor.state.selection.head !== pos) return
-          const input = installField(engine, bounds)
+          const input = installField(engine)
           if (input) {
             const at = event.detail ? input.getOffsetFromPoint(event.clientX, event.clientY) : -1
             input.position = at < 0 ? input.lastOffset : at

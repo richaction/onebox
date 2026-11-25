@@ -31,4 +31,6 @@ export const chartTemplates = [
       { source: '访问', target: '注册', value: 30 }, { source: '注册', target: '付费', value: 12 },
     ] }],
   } },
-]
+] as const
+
+export type ChartTemplateKey = (typeof chartTemplates)[number]['key']

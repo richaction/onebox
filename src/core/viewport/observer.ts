@@ -1,5 +1,6 @@
 import type { EditorView } from '@tiptap/pm/view'
 import type { ViewportMetrics } from '../metrics'
+import { markPreviewScroll } from '../previewPaint'
 import type { ViewportObserver } from './blockNodeView'
 import { sameSet, visibilityKey } from './visibility'
 
@@ -36,7 +37,9 @@ export function createViewportObserver(
     return mountCompactDocuments && doc.childCount <= compactBlockLimit && doc.content.size <= compactContentLimit
       && doc.firstChild?.type.name !== 'viewportGroup'
   }
+  const markScrollInput = () => markPreviewScroll(root)
   const onScroll = () => {
+    markScrollInput()
     if (!isCompact() || visibilityKey.getState(view.state)?.visible.size !== view.state.doc.childCount) schedule()
   }
 
@@ -95,6 +98,7 @@ export function createViewportObserver(
   resize.observe(root)
   resize.observe(view.dom)
   root.addEventListener('scroll', onScroll, { passive: true })
+  root.addEventListener('wheel', markScrollInput, { passive: true })
 
   return {
     observe() {
@@ -111,6 +115,7 @@ export function createViewportObserver(
       raf = 0
       resize.disconnect()
       root.removeEventListener('scroll', onScroll)
+      root.removeEventListener('wheel', markScrollInput)
     },
   }
 }

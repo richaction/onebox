@@ -1,5 +1,6 @@
 import { TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
+import { unwrapMermaidFence } from './mermaidFence'
 
 export function mountMermaidEditor(
   frame: HTMLElement, pre: HTMLElement, preview: HTMLElement, view: EditorView, getPos: () => number | undefined,
@@ -17,6 +18,7 @@ export function mountMermaidEditor(
   const tabs = document.createElement('div')
   tabs.className = 'mermaid-tabs code-actions'
   tabs.contentEditable = 'false'
+  tabs.dataset.activateOnRelease = ''
   tabs.setAttribute('role', 'group')
   tabs.setAttribute('aria-label', 'Mermaid 编辑视图')
   tabs.onmousedown = (event) => event.preventDefault()
@@ -40,8 +42,18 @@ export function mountMermaidEditor(
   diagnostic.setAttribute('aria-atomic', 'true')
   diagnostic.hidden = true
   pre.hidden = true
-  panes.append(pre, preview, diagnostic)
-  workspace.append(tabs, panes)
+  const labels = document.createElement('div')
+  labels.className = 'mermaid-pane-labels'
+  labels.contentEditable = 'false'
+  labels.setAttribute('aria-hidden', 'true')
+  for (const tab of [sourceTab, previewTab]) {
+    const label = document.createElement('span')
+    label.textContent = tab.textContent
+    labels.append(label)
+  }
+  pre.setAttribute('aria-label', 'Mermaid 源码')
+  panes.append(pre, preview)
+  workspace.append(labels, tabs, panes, diagnostic)
   frame.append(workspace)
 
   let editing = false
@@ -79,7 +91,6 @@ export function mountMermaidEditor(
     editing = !editing
     workspace.toggleAttribute('data-editing', editing)
     pre.hidden = !editing
-    preview.tabIndex = editing ? 0 : -1
     button.setAttribute('aria-expanded', String(editing))
     refreshButton()
     if (editing) {
@@ -98,6 +109,17 @@ export function mountMermaidEditor(
     previewTab.focus({ preventScroll: true })
     showPane('preview')
   }
+  pre.addEventListener('paste', (event) => {
+    if (!editing || !view.editable || view.composing || !event.clipboardData || event.clipboardData.files.length) return
+    const source = unwrapMermaidFence(event.clipboardData.getData('text/plain'))
+    if (source === undefined) return
+    const { selection, tr } = view.state
+    const start = getPos()
+    const { $from, $to } = selection
+    if (start === undefined || $from.parent.type.name !== 'codeBlock' || !$from.sameParent($to) || $from.before() !== start) return
+    event.preventDefault()
+    view.dispatch(tr.insertText(source).scrollIntoView())
+  })
 
   return {
     button, workspace, refreshButton,
@@ -106,7 +128,8 @@ export function mountMermaidEditor(
       diagnostic.hidden = !message
     },
     stopEvent(event: Event) {
-      return tabs.contains(event.target as Node | null) || diagnostic.contains(event.target as Node | null)
+      const target = event.target as Node | null
+      return labels.contains(target) || tabs.contains(target) || diagnostic.contains(target)
     },
   }
 }

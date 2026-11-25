@@ -46,7 +46,7 @@ export const MarkdownImage = Node.create({
   },
 })
 
-export const defaultImageWidth = 80
+export const defaultImageWidth = 90
 export const minImageWidth = 20
 export const maxImageWidth = 100
 

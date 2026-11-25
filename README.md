@@ -1,20 +1,25 @@
 # Onebox
 
-Onebox 是一款本地桌面 Markdown 编辑器与文件工作区。可以在同一个窗口写笔记、整理文件和查看 PDF、Office 文档、图片与压缩包。笔记直接保存为磁盘上的 `.md` 或 `.markdown` 文件。
+Onebox 是一款本地桌面 Markdown 编辑器与文件工作区。你可以在同一个窗口写笔记、整理文件，查看 PDF、Office 文档、图片和压缩包。笔记直接保存为磁盘上的 `.md` 或 `.markdown` 文件。
 
-[核心功能](#核心功能) · [界面截图](#界面截图) · [快速开始](#快速开始) · [连接 AI](#连接-ai) · [本地开发](#本地开发)
+[项目状态](#项目状态) · [核心功能](#核心功能) · [界面截图](#界面截图) · [快速开始](#快速开始) · [连接 AI](#连接-ai) · [本地开发](#本地开发)
 
-![Onebox Markdown 编辑器。左侧是工作树，右侧显示表格、LaTeX 公式与 Mermaid 流程图](docs/screenshots/workspace.png)
+![Onebox 调试样例。左侧是工作树，正文显示 Markdown 表格](docs/screenshots/editor-workspace.png)
+
+## 项目状态
+
+**Markdown 编辑器完成度约 70%。** 这是对编辑体验的当前估计。日常写作、表格、代码块、公式与图表已可使用。中文输入、触控板选区、复杂 Markdown 的保存保真度和长文档滚动仍在打磨。
 
 ## 核心功能
 
 ### Markdown 编辑
 
-- **块式编辑**。单击正文左侧空白选中对应区块或列表项，在列表左侧拖动可连选多项。直接在列表文字上拖动时只选文字。拖动单个区块的手柄可调整顺序。输入 `/` 或右键打开区块菜单，插入标题、列表、待办、引用、代码块、表格和附件。支持代码高亮、脚注、嵌套列表，以及表格行列编辑。
-- **公式与图表**。在正文中渲染行内和块级 LaTeX、Mermaid 流程图和 ECharts 图表。鼠标移入公式会显示编辑边界，移入图表会显示工具条，可就地编辑公式、图表源码和配置。
-- **代码块**。鼠标移入代码块时，右上角显示语言、复制和继续写正文的操作。语言列表支持搜索。
-- **本地保存**。编辑已有文档时自动保存，也可另存为。遇到可能无法安全写回的 Markdown 语法，会以只读方式打开。大文档使用分批解析与按视口渲染，样例包含十万字符和百万字符文档。
-- **图片与附件**。可以插入、拖入或粘贴本地附件。应用导入的附件保存在文档旁的 `assets/`，正文以相对路径引用。
+- **正文与区块**。拖动可选中文字。输入 `/` 或右键打开区块菜单，插入标题、待办、引用、代码块、表格和附件。表格可编辑行列，正文支持脚注、嵌套列表和常见行内格式。
+- **代码块**。移入代码块后，顶部工具条显示语言选择、复制和继续写正文。语言列表可搜索，正文会按语言高亮。
+- **LaTeX 公式**。支持行内和独立公式。单击可在原位置编辑，按住 Option 单击可改 LaTeX 源码。调试样例包含矩阵、多行推导、分段函数和混排公式。
+- **Mermaid 与 ECharts**。Mermaid 编辑时左侧写源码，右侧实时预览。语法出错时会显示诊断并保留上次成功预览。ECharts 可在正文显示图表并编辑配置。单击图表即可打开遮罩放大预览。
+- **图片与附件**。支持插入、拖入或粘贴本地附件。独立图片和 Mermaid 默认占内容宽度的 90%。图片可从边缘拖动缩放，比例实时显示并随文档保存。双击图片或点悬停时出现的放大按钮，可在遮罩中查看。导入的附件保存在文档旁的 `assets/`，以相对路径引用。
+- **本地保存**。编辑已有文档时自动保存，也可另存为。包含当前无法安全写回的语法时，Onebox 会以只读方式打开。长文档使用分批加载和按视口渲染，调试样例包含十万字符和百万字符文档。
 
 ### 文件工作区
 
@@ -44,11 +49,17 @@ Onebox 是一款本地桌面 Markdown 编辑器与文件工作区。可以在同
 
 ## 界面截图
 
-### 代码、公式与图表
+### Mermaid 源码与实时预览
 
-![Onebox 正文中的公式和流程图，以及代码块右上角展开的语言搜索浮层](docs/screenshots/code-toolbar.jpg)
+![审核状态图在 Onebox 中编辑。左侧是 Mermaid 源码，右侧是带嵌套状态的实时预览](docs/screenshots/mermaid-editor.png)
 
-以上两张界面示意使用同一份样例文档，分别展示 AI 运行和代码语言选择。
+在图上方点击「编辑」打开分栏。较窄的窗口中可用「源码」和「预览」切换。调试样例还有并发时序、实体关系和发布计划等图表。
+
+### 复杂公式
+
+![公式专项样张中的矩阵二次型、分段函数和贝叶斯后验公式](docs/screenshots/formula-editor.png)
+
+这份样张覆盖行内公式、矩阵、分段函数和多行推导，可直接点击公式测试光标、选区和编辑。
 
 ### AI 写作与修改建议
 
@@ -66,7 +77,7 @@ Onebox 是一款本地桌面 Markdown 编辑器与文件工作区。可以在同
 
 ## 快速开始
 
-项目目前处于早期开发阶段，可以从源码运行。准备 Git、Node.js（建议 24 或 26）、pnpm 和通过 `rustup` 安装的 Rust 稳定工具链。macOS 可用 `xcode-select --install` 安装命令行工具。Windows 和 Linux 的桌面依赖见 [Tauri v2 环境准备](https://v2.tauri.app/start/prerequisites/)。
+可以从源码运行当前开发版。准备 Git、Node.js（建议 24 或 26）、pnpm 和通过 `rustup` 安装的 Rust 稳定工具链。macOS 可用 `xcode-select --install` 安装命令行工具。其它平台的桌面依赖见 [Tauri v2 环境准备](https://v2.tauri.app/start/prerequisites/)。
 
 ```sh
 git clone https://github.com/richaction/onebox.git
@@ -75,7 +86,7 @@ pnpm install --frozen-lockfile
 pnpm dev:app
 ```
 
-启动后，在侧栏点击「打开文件夹…」选择本地目录。也可以选「打开调试样例」，体验 Markdown、Office、PDF、图片、音视频和大文档。开发版第一次打开样例时会创建独立的可编辑副本。
+启动后，在侧栏点击「打开文件夹…」选择本地目录。也可以选「打开调试样例」，在独立的可编辑副本中体验公式、Mermaid、多格式文件预览和大文档。
 
 ### 连接 AI
 
@@ -91,6 +102,9 @@ AI 连接默认跟随系统代理。发送时，提问和添加的引用会交�
 | --- | --- |
 | 打开文件或工作区 | ⌘O 打开文件，⌘⇧O 打开工作区 |
 | 插入区块 | 在正文输入 `/`，也可以右键打开区块菜单 |
+| 编辑 Mermaid | 点击图上方的「编辑」，改完点「完成」 |
+| 编辑公式 | 单击公式，按住 Option 单击可编辑 LaTeX 源码 |
+| 调整正文图片宽度 | 悬停后拖动左右边缘，双击边缘恢复 90% |
 | 多选文件 | Shift 连选，Ctrl 或 ⌘ 点选 |
 | 复制、剪切和粘贴 | ⌘C、⌘X、⌘V，也可以用工作树右键菜单。点击工作区名称后粘贴到根目录 |
 | 保存与另存为 | 编辑时自动保存，⌘S 查看保存提示，⌘⇧S 另存为 |
@@ -123,11 +137,12 @@ open src-tauri/target/release/bundle/macos/Onebox.app
 
 `pnpm dev:app` 维护一个桌面调试实例。前端热更新会保留文档、光标、滚动位置和撤销记录。Rust 或原生配置变更后，调试进程先保存文档，再重启并恢复工作区。文件对话框、剪贴板和磁盘操作请在桌面窗口中验证。
 
-项目使用 Tauri v2、Rust、SolidJS 和 Tiptap。编辑器和 Markdown 转换在 [`src/core/`](src/core)，界面在 [`src/ui/`](src/ui)，桌面文件操作在 [`src-tauri/src/`](src-tauri/src)，多格式预览使用 Flyfish Full。
+桌面端使用 Tauri 2 和 Rust，界面使用 SolidJS 2，Markdown 编辑基于 Tiptap 3 和 ProseMirror。编辑与 Markdown 转换在 [`src/core/`](src/core)，界面在 [`src/ui/`](src/ui)，桌面文件操作在 [`src-tauri/src/`](src-tauri/src)。多格式预览使用 Flyfish Full。
 
 ### 设计与验证资料
 
 - [调试样例与操作清单](examples/manual-testing/00%20开始测试.md)
+- [Mermaid 多场景编辑](examples/manual-testing/01%20编辑器/Mermaid%20多场景编辑.md) · [Mermaid 联调与压力样张](examples/manual-testing/01%20编辑器/Mermaid%20联调与压力样张.md) · [公式专项验收](examples/manual-testing/01%20编辑器/公式专项验收.md)
 - [原始需求与技术方案](docs/高性能块式Markdown编辑器技术方案.md)
 - [第一阶段验收](docs/superpowers/plans/2026-11-15-onebox-foundation-verification.md)
 - [第二阶段计划与验收](docs/superpowers/plans/2026-11-15-onebox-phase-two.md)

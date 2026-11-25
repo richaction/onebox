@@ -53,8 +53,8 @@ describe('estimateHeight', () => {
 
   it('reserves the chart frame height before a preview is drawn', () => {
     const chart = schema.node('codeBlock', { language: 'ECharts' }, [schema.text('{}')])
-    expect(estimateHeight(chart, 760)).toBe(372)
-    expect(estimateHeight(chart, 400)).toBe(250)
+    expect(estimateHeight(chart, 760)).toBe(400)
+    expect(estimateHeight(chart, 400)).toBe(278)
   })
 
   it('reserves extra height for a displayed fraction', () => {

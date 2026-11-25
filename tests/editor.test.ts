@@ -271,6 +271,9 @@ it('opens the existing AI box from the compact context menu using the original s
     const menu = document.querySelector('.block-menu-compact')!
     expect(menu.textContent).toContain('引用到侧栏')
     expect(menu.textContent).not.toMatch(/区块操作|复制区块|删除区块/)
+    const aiIcons = menu.querySelectorAll('[aria-label="AI"] .block-menu-icon svg path')
+    expect(aiIcons).toHaveLength(2)
+    expect(aiIcons[0].getAttribute('d')).not.toBe(aiIcons[1].getAttribute('d'))
     const edit = Array.from(menu.querySelectorAll('button')).find((button) => button.textContent?.includes('正文编辑'))!
     afterUiEvent(() => edit.click())
     expect(document.querySelector('.block-menu-popup')).toBeNull()
@@ -371,13 +374,18 @@ it('keeps the slash menu open while browsing and selecting a chart', () => {
     const { view } = mounted.editor
     view.focus()
     vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 20, right: 20, top: 60, bottom: 80 })
-    view.someProp('handleTextInput', (input) => input(view, 1, 1, '/', () => view.state.tr.insertText('/')))
-    afterUiEvent(() => view.dispatch(view.state.tr.insertText('折线图')))
+    afterUiEvent(() => view.someProp('handleTextInput', (input) => input(view, 1, 1, '/', () => view.state.tr.insertText('/'))))
     const parent = document.querySelector('[aria-label="区块命令"]')!
-    const group = parent.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!
-    afterUiEvent(() => group.click())
+    const openGroup = () => afterUiEvent(() => parent.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!.click())
     const menu = () => document.querySelector('[role="listbox"][aria-label="图表与流程图"]')
     const press = (key: string) => afterUiEvent(() => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
+    openGroup()
+    const icons = Array.from(menu()!.querySelectorAll('.block-menu-icon svg path'), (icon) => icon.getAttribute('d'))
+    expect(icons).toHaveLength(diagramCommands.length)
+    expect(new Set(icons).size).toBe(diagramCommands.length)
+    press('Escape')
+    afterUiEvent(() => view.dispatch(view.state.tr.insertText('折线图')))
+    openGroup()
     expect(parent.isConnected).toBe(true)
     expect(menu()?.querySelectorAll('[role="option"]')).toHaveLength(1)
     press('Escape')
@@ -613,8 +621,61 @@ describe('createEditor', () => {
     expect(next).not.toBe(original)
     expect(next.getAttribute('width')).toBe('1200')
     expect(next.getAttribute('height')).toBe('680')
-    expect(handle.toMarkdown()).toContain('<!--onebox-image-width:85-->')
+    expect(handle.toMarkdown()).toContain('<!--onebox-image-width:95-->')
     expect(onUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the selected image at its original width when dragging its body', () => {
+    const { handle, element, onUpdate } = mount()
+    const markdown = '![山雾](assets/mountain.jpg)\n\n后面的段落'
+    handle.loadMarkdown(markdown)
+    const { view } = handle.editor
+    const picture = element.querySelector<HTMLElement>('.editor-image')!
+    const image = picture.querySelector('img')!
+    vi.spyOn(image.closest('p')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 500, 200))
+    const capture = vi.fn()
+    Object.defineProperty(image, 'setPointerCapture', { value: capture })
+    const pointer = (type: string, clientX: number) => image.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX,
+    }))
+    image.click()
+    expect(view.state.selection).toBeInstanceOf(NodeSelection)
+    pointer('pointerdown', 200)
+    expect(image.dispatchEvent(new Event('dragstart', { bubbles: true, cancelable: true }))).toBe(false)
+    pointer('pointermove', 250)
+    expect(picture.hasAttribute('data-resizing')).toBe(false)
+    expect(picture.querySelector('.editor-image-ratio')?.textContent).toBe('90%')
+    pointer('pointerup', 250)
+    expect(capture).not.toHaveBeenCalled()
+    expect(view.state.selection).toBeInstanceOf(NodeSelection)
+    expect(handle.toMarkdown()).toBe(markdown)
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('opens a loaded image in the expanded preview without changing its saved width', () => {
+    const { handle, element, onUpdate } = mount()
+    const markdown = '![山雾](assets/mountain.jpg)'
+    handle.loadMarkdown(markdown)
+    const wrapper = element.querySelector<HTMLElement>('.editor-image')!
+    const image = wrapper.querySelector('img')!
+    const expand = wrapper.querySelector<HTMLButtonElement>('.editor-image-expand')!
+    Object.defineProperties(image, { naturalWidth: { value: 1200 }, naturalHeight: { value: 680 } })
+    image.dispatchEvent(new Event('load'))
+
+    afterUiEvent(() => image.click())
+    expect(handle.editor.state.selection).toBeInstanceOf(NodeSelection)
+    expect(document.querySelector('dialog')).toBeNull()
+    afterUiEvent(() => expand.click())
+    const preview = document.querySelector('dialog')!
+    expect(preview.querySelector('img')?.alt).toBe('山雾')
+    expect(preview.open).toBe(true)
+    preview.querySelector('button')!.click()
+
+    expect(document.querySelector('dialog')).toBeNull()
+    expect(wrapper.style.getPropertyValue('--editor-image-width')).toBe('90%')
+    expect(handle.toMarkdown()).toBe(markdown)
+    expect(onUpdate).not.toHaveBeenCalled()
   })
 
   it('resizes a standalone image from its edges and stores one undoable width change', () => {
@@ -628,25 +689,25 @@ describe('createEditor', () => {
     const drag = (type: string, x: number) => afterUiEvent(() => grip.dispatchEvent(new PointerEvent(type, {
       pointerId: 1, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, cancelable: true, bubbles: true,
     })))
-    expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
-    drag('pointerdown', 450)
-    drag('pointermove', 400)
-    expect(image.style.getPropertyValue('--editor-image-width')).toBe('60%')
-    expect(image.querySelector('.editor-image-ratio')?.textContent).toBe('60%')
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('90%')
+    drag('pointerdown', 475)
+    drag('pointermove', 425)
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('70%')
+    expect(image.querySelector('.editor-image-ratio')?.textContent).toBe('70%')
     expect(onUpdate).not.toHaveBeenCalled()
-    drag('pointerup', 400)
-    expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)<!--onebox-image-width:60-->')
+    drag('pointerup', 425)
+    expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)<!--onebox-image-width:70-->')
     expect(onUpdate).toHaveBeenCalledOnce()
     expect(handle.editor.commands.undo()).toBe(true)
-    expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('90%')
     expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)')
     expect(handle.editor.commands.redo()).toBe(true)
     const leftGrip = image.querySelector<HTMLButtonElement>('[data-side="left"]')!
     afterUiEvent(() => leftGrip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })))
     expect(handle.toMarkdown()).toBe('![山雾](assets/mountain.jpg)')
-    expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('90%')
     expect(handle.editor.commands.undo()).toBe(true)
-    expect(image.style.getPropertyValue('--editor-image-width')).toBe('60%')
+    expect(image.style.getPropertyValue('--editor-image-width')).toBe('70%')
   })
 
   it.each([false, true])('resets a resized image from two trackpad taps without a dblclick (release first=%s)', (releaseFirst) => {
@@ -675,7 +736,7 @@ describe('createEditor', () => {
       expect(onUpdate).not.toHaveBeenCalled()
       tap(388, 260)
       expect(handle.toMarkdown()).toBe(markdown)
-      expect(image.style.getPropertyValue('--editor-image-width')).toBe('80%')
+      expect(image.style.getPropertyValue('--editor-image-width')).toBe('90%')
       expect(image.hasAttribute('data-resizing')).toBe(false)
       expect(capture).toHaveBeenCalledTimes(releaseFirst ? 0 : 2)
       expect(onUpdate).toHaveBeenCalledOnce()
@@ -1238,19 +1299,28 @@ describe('createEditor', () => {
   })
 
   it('keeps the inline formula preview mounted while editing its LaTeX and committing a change', () => {
+    const disableClickTolerance = enableButtonClickTolerance(document)
     const { handle, element } = mount()
-    handle.loadMarkdown('before $r^2$ after')
-    const formula = element.querySelector<HTMLElement>('.markdown-math')!
-    const preview = formula.querySelector('button')!
-    afterUiEvent(() => preview.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true })))
-    const source = formula.querySelector('textarea')!
-    expect(formula.dataset.mathEdit).toBe('source')
-    expect(preview.hidden).toBe(false)
-    source.value = 'r^3'
-    afterUiEvent(() => source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-    expect(element.querySelector('.markdown-math > button')).toBe(preview)
-    expect(formula.dataset.mathEdit).toBeUndefined()
-    expect(handle.toMarkdown()).toBe('before $r^3$ after')
+    try {
+      handle.loadMarkdown('before $r^2$ after')
+      const formula = element.querySelector<HTMLElement>('.markdown-math')!
+      const preview = formula.querySelector('button')!
+      Object.defineProperty(preview, 'setPointerCapture', { value: vi.fn() })
+      for (const type of ['pointerdown', 'pointerup']) {
+        preview.dispatchEvent(new PointerEvent(type, { altKey: true, bubbles: true, cancelable: true,
+          pointerType: 'mouse', isPrimary: true, pointerId: 1, buttons: type === 'pointerdown' ? 1 : 0 }))
+      }
+      const source = formula.querySelector('textarea')!
+      expect(formula.dataset.mathEdit).toBe('source')
+      expect(preview.hidden).toBe(false)
+      source.value = 'r^3'
+      afterUiEvent(() => source.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+      expect(element.querySelector('.markdown-math > button')).toBe(preview)
+      expect(formula.dataset.mathEdit).toBeUndefined()
+      expect(handle.toMarkdown()).toBe('before $r^3$ after')
+    } finally {
+      disableClickTolerance()
+    }
   })
 
   it('opens the line below a code block and reuses a following paragraph across viewport groups', () => {
@@ -1407,6 +1477,64 @@ describe('createEditor', () => {
     expect(source.hidden).toBe(true)
     expect(handle.toMarkdown()).toBe('# Other\n\n```mermaid\nflowchart LR\nA --> B[Ready]\n```')
     expect(onUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('pastes a fenced Mermaid snippet as source inside the existing code block', () => {
+    const { handle, element, onUpdate } = mount()
+    const body = 'flowchart LR\n  A --> B'
+    handle.loadMarkdown('```mermaid\n' + body + '\n```')
+    const { editor } = handle
+    const frame = element.querySelector<HTMLElement>('[data-rich="mermaid"]')!
+    afterUiEvent(() => frame.querySelector<HTMLButtonElement>('.code-actions button[aria-expanded]')!.click())
+    editor.commands.setTextSelection({ from: 1, to: body.length + 1 })
+    const updated = 'flowchart TD\n  B --> C'
+    const paste = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(paste, 'clipboardData', { value: { getData: () => '```mermaid\n' + updated + '\n```', files: [] } })
+    expect(afterUiEvent(() => frame.querySelector('pre code')!.dispatchEvent(paste))).toBe(false)
+    expect(handle.toMarkdown()).toBe('```mermaid\n' + updated + '\n```')
+    expect(onUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('closes an edited Mermaid block on trackpad release without toggling it twice', () => {
+    const disableClickTolerance = enableButtonClickTolerance(document)
+    const { handle, element, onUpdate } = mount()
+    const source = 'flowchart LR\nA --> B'
+    handle.loadMarkdown('```mermaid\n' + source + '\n```')
+    const { editor } = handle
+    const button = element.querySelector<HTMLButtonElement>('[data-rich="mermaid"] .code-actions button[aria-expanded]')!
+    const pre = element.querySelector('pre')!
+    Object.defineProperty(button, 'setPointerCapture', { value: vi.fn() })
+    const tap = (time: number, releaseFirst: boolean) => {
+      for (const type of releaseFirst ? ['pointerup', 'pointerdown'] : ['pointerdown', 'pointerup']) {
+        const release = type === 'pointerup'
+        const event = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'mouse',
+          isPrimary: true, pointerId: 1, button: 0, buttons: release ? 0 : 1, clientX: release ? 43 : 40 })
+        Object.defineProperty(event, 'timeStamp', { value: time + Number(release) })
+        afterUiEvent(() => button.dispatchEvent(event))
+      }
+    }
+    const time = performance.now() - 1_000
+    try {
+      for (const [index, reversed] of [false, true, false, true].entries()) {
+        const started = time + index * 200
+        afterUiEvent(() => button.click())
+        expect(button.textContent).toBe('完成')
+        editor.commands.setTextSelection(source.length + index + 1)
+        editor.view.dispatch(editor.state.tr.insertText(' '))
+        expect(editor.view.hasFocus()).toBe(true)
+        tap(started, reversed)
+        expect(pre.hidden).toBe(true)
+        expect(button.textContent).toBe('编辑')
+        const lateClick = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1, clientX: 43 })
+        Object.defineProperty(lateClick, 'timeStamp', { value: started + 1 })
+        expect(afterUiEvent(() => button.dispatchEvent(lateClick))).toBe(false)
+        expect(pre.hidden).toBe(true)
+      }
+      expect(onUpdate).toHaveBeenCalledTimes(4)
+      expect(handle.toMarkdown()).toBe('```mermaid\n' + source + '    \n```')
+    } finally {
+      disableClickTolerance()
+    }
   })
 
   it('changes the fence language through the dropdown and preserves its contents and metadata', () => {

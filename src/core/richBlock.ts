@@ -1,5 +1,7 @@
 import type { EChartsCoreOption } from 'echarts/core'
+import { unwrapMermaidFence } from './mermaidFence'
 import { paintPreview } from './previewPaint'
+import { showExpandedPreview } from './expandedPreview'
 
 type RichLanguage = 'echarts' | 'mermaid'
 
@@ -58,7 +60,7 @@ async function loadMermaid() {
   return { mermaid, DOMPurify }
 }
 
-async function diagram(source: string, isCurrent: () => boolean) {
+async function diagram(source: string, isCurrent: () => boolean, target: HTMLElement) {
   if (source.length > 32_000) throw new Error('Mermaid 源码超过 32 KB')
   if (/%%\s*\{/u.test(source)) throw new Error('请用代码块开头的 YAML 指定 Mermaid 标题或布局')
   if (/@import|url\s*\(/iu.test(source)) throw new Error('Mermaid 预览只支持本地绘制')
@@ -93,7 +95,7 @@ async function diagram(source: string, isCurrent: () => boolean) {
         })
         mermaidDark = dark
       }
-      return paintPreview(() => isCurrent() ? mermaid.render(id, prepared, scratch) : undefined)
+      return paintPreview(() => isCurrent() ? mermaid.render(id, prepared, scratch) : undefined, target)
     })
     mermaidQueue = task.then(() => {}, () => {})
     const result = await task
@@ -114,7 +116,7 @@ async function diagram(source: string, isCurrent: () => boolean) {
   }
 }
 
-export function watchRichBlock(target: HTMLElement, language: RichLanguage, initial: string, mermaid?: {
+export function watchRichBlock(target: HTMLElement, language: RichLanguage, initial: string, expand: HTMLButtonElement, mermaid?: {
   visibilityTarget: HTMLElement
   report: (message: string) => void
 }) {
@@ -125,6 +127,21 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
   let disposeChart: (() => void) | undefined
   let lastDiagram: string | undefined
   let renderedSource: string | undefined
+  let drawExpanded: Parameters<typeof showExpandedPreview>[2] | undefined
+  let closeExpanded: (() => void) | undefined
+  const setExpandedDrawing = (draw?: typeof drawExpanded) => {
+    drawExpanded = draw
+    expand.disabled = !draw
+    if (target instanceof HTMLButtonElement) target.disabled = !draw
+    target.toggleAttribute('data-expandable', !!draw)
+  }
+  const openExpanded = (trigger: HTMLButtonElement) => {
+    if (!drawExpanded || closeExpanded) return
+    closeExpanded = showExpandedPreview(trigger, language, drawExpanded, () => { closeExpanded = undefined })
+  }
+  setExpandedDrawing()
+  expand.onclick = () => openExpanded(expand)
+  if (target instanceof HTMLButtonElement) target.onclick = () => openExpanded(target)
   const stop = () => {
     revision++
     clearTimeout(timer)
@@ -132,6 +149,7 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
   const clear = () => {
     disposeChart?.()
     disposeChart = undefined
+    setExpandedDrawing()
     target.replaceChildren()
   }
   const showDiagram = (svg?: string) => {
@@ -144,6 +162,8 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
       target.scrollLeft = scrollLeft
     }
     lastDiagram = svg
+    const id = target.firstElementChild?.id
+    setExpandedDrawing(svg && id ? (content) => { content.innerHTML = svg.replaceAll(id, `${id}-expanded`) } : undefined)
   }
   const render = async (expected: number) => {
     const input = source
@@ -162,7 +182,7 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
     }
     try {
       if (language === 'mermaid') {
-        const svg = await diagram(value, isCurrent)
+        const svg = await diagram(unwrapMermaidFence(input) ?? value, isCurrent, target)
         if (svg && isCurrent()) {
           showDiagram(svg)
           mermaid?.report('')
@@ -174,8 +194,9 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
           if (!isCurrent()) return
           clear()
           // Reuse the name for this chart's inline GeoJSON between edits.
-          disposeChart = drawChart(target, option, target.id)
-        })
+          disposeChart = drawChart(target, option, target.id, () => openExpanded(expand))
+          setExpandedDrawing((content) => drawChart(content, option, `${target.id}-expanded`))
+        }, target)
       }
     } catch (error) {
       if (!isCurrent()) return
@@ -220,6 +241,7 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
     destroy() {
       observer.disconnect()
       stop()
+      closeExpanded?.()
       clear()
     },
   }

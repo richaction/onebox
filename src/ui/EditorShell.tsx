@@ -32,11 +32,11 @@ interface Popup {
 type Action = CommandItem | (MenuItem & { attachment: AttachmentKind }) | (MenuItem & { ai: 'quote' | 'edit' }) |
   (MenuItem & { mark: string }) | (MenuItem & { children: true })
 
-const quoteAction: Action = { label: '引用到侧栏', search: 'AI 引用 侧栏', icon: '✦', ai: 'quote' }
-const editAction: Action = { label: '正文编辑', search: 'AI 编辑 正文', icon: '✎', ai: 'edit' }
+const quoteAction: Action = { label: '引用到侧栏', search: 'AI 引用 侧栏', icon: 'ai-quote', ai: 'quote' }
+const editAction: Action = { label: '正文编辑', search: 'AI 编辑 正文', icon: 'ai-edit', ai: 'edit' }
 const formatActions: readonly Action[] = inlineFormatMarks.map(({ name, symbol, mark }) =>
   ({ label: name, search: name, icon: symbol, mark }))
-const chartsAction: Action = { label: '图表与流程图', search: '图表 chart', icon: '▥', children: true }
+const chartsAction: Action = { label: '图表与流程图', search: '图表 chart', icon: 'charts', children: true }
 const matchesQuery = (item: MenuItem, query: string) =>
   `${item.label} ${item.search} ${item.shortcut ?? ''}`.toLowerCase().includes(query)
 const typedSlash = 'onebox-typed-slash'

@@ -13,9 +13,9 @@ export function estimateHeight(block: Node, viewportHeight = 760): number {
   }
   if (block.type.name === 'codeBlock') {
     const language = String(block.attrs.language ?? '').trim().split(/\s/u, 1)[0].toLowerCase()
-    // Match the chart preview's CSS height, plus the frame and its margins.
-    if (language === 'echarts') return Math.min(400, Math.max(220, viewportHeight * 0.45)) + 30
-    if (language === 'mermaid') return 210
+    // Match the chart preview's CSS height, plus its toolbar, frame and margins.
+    if (language === 'echarts') return Math.min(400, Math.max(220, viewportHeight * 0.45)) + 58
+    if (language === 'mermaid') return 238
   }
   const formula = block.firstChild
   if (block.type.name === 'paragraph' && block.childCount === 1 && formula?.type.name === 'math' && formula.attrs.display) {

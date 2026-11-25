@@ -23,6 +23,7 @@ export function customizeArchivePreview(shell: HTMLElement) {
   const toolbar = shell.querySelector('.archive-preview-toolbar')
   const preview = shell.querySelector('.archive-preview')
   if (!sidebar || !source || !search || !toolbar || !preview) return
+  toolbar.setAttribute('data-activate-on-release', '')
 
   const heading = document.createElement('h2')
   heading.textContent = '压缩包内容'

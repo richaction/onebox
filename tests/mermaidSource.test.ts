@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mermaidErrorMessage, prepareMermaidSource } from '../src/core/mermaidSource'
+import { unwrapMermaidFence } from '../src/core/mermaidFence'
 
 describe('Mermaid in Markdown', () => {
   it('keeps the title, layout and diagram when a document specifies its own appearance', () => {
@@ -22,5 +23,19 @@ describe('Mermaid in Markdown', () => {
     const source = '\n---\ntitle: Test\n---\nflowchart LR\n\n%% comment\nA --> B['
     expect(mermaidErrorMessage(new Error('Parse error on line 2:\n... A --> B['), source))
       .toBe('第 8 行 · Mermaid 语法错误')
+  })
+
+  it('unwraps only a complete fenced Mermaid snippet', () => {
+    expect(unwrapMermaidFence('\r\n~~~mermaid\r\nflowchart LR\r\n  A --> B\r\n~~~~\r\n')).toBe('flowchart LR\n  A --> B')
+    expect(unwrapMermaidFence('```mermaid\nflowchart LR\n```\n```mermaid\nflowchart TD\n```')).toBeUndefined()
+    expect(unwrapMermaidFence('```mermaid\nflowchart LR\n~~~')).toBeUndefined()
+    expect(unwrapMermaidFence('flowchart LR')).toBeUndefined()
+  })
+
+  it('reports a pasted fence inside invalid source and maps errors within a complete legacy wrapper', () => {
+    const error = new Error('Parse error on line 2:\n... A --> B[')
+    expect(mermaidErrorMessage(error, 'flowchart LR\n  A --> B\n  B --> C-```mermaid\n--> C-\n```'))
+      .toBe('第 3 行 · 源码中混入了 Markdown 围栏，请检查这段代码')
+    expect(mermaidErrorMessage(error, '```mermaid\nflowchart LR\nA --> B[\n```')).toBe('第 3 行 · Mermaid 语法错误')
   })
 })

@@ -1,4 +1,5 @@
 import { parseDocument, stringify } from 'yaml'
+import { mermaidOpeningFence, unwrapMermaidFence } from './mermaidFence'
 
 const layouts = new Set(['dagre', 'elk'])
 const separator = /^---[ \t]*$/u
@@ -28,6 +29,10 @@ export function prepareMermaidSource(source: string) {
 }
 
 export function mermaidErrorMessage(error: unknown, source: string) {
+  const unwrapped = unwrapMermaidFence(source)
+  const fence = source.split(/\r\n?|\n/u).findIndex((line) => unwrapped === undefined
+    ? /(?:`{3,}|~{3,})[ \t]*mermaid[ \t]*$/iu.test(line) : mermaidOpeningFence.test(line))
+  if (unwrapped === undefined && fence >= 0) return `第 ${fence + 1} 行 · 源码中混入了 Markdown 围栏，请检查这段代码`
   const message = error instanceof Error ? error.message : String(error)
   const match = /\berror on line (\d+)/i.exec(message)
   if (!match) {
@@ -36,7 +41,8 @@ export function mermaidErrorMessage(error: unknown, source: string) {
     return message.split('\n', 1)[0].slice(0, 160) || 'Mermaid 预览失败'
   }
 
-  const lines = source.replace(/\r\n?/gu, '\n').trimEnd().split('\n')
+  const lines = (unwrapped ?? source).replace(/\r\n?/gu, '\n').trimEnd().split('\n')
+  const fenceOffset = unwrapped === undefined ? 0 : fence + 1
   const start = lines.findIndex((line) => line.trim())
   const end = separator.test(lines[start]?.trimStart() ?? '')
     ? lines.findIndex((line, index) => index > start && separator.test(line)) : -1
@@ -54,5 +60,5 @@ export function mermaidErrorMessage(error: unknown, source: string) {
     }
   }
   const reported = lineMap[Math.min(Number(match[1]), lineMap.length) - 1]
-  return reported ? `第 ${reported} 行 · Mermaid 语法错误` : 'Mermaid 语法错误，请检查源码'
+  return reported ? `第 ${reported + fenceOffset} 行 · Mermaid 语法错误` : 'Mermaid 语法错误，请检查源码'
 }
