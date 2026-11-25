@@ -35,6 +35,8 @@ it('ends a sidebar resize when the release misses the handle and lets the other 
       pointerType: 'mouse', clientX: x, button: 0, buttons }))
   try {
     pointer(left, 'pointerdown', 258)
+    pointer(left, 'pointermove', 263)
+    expect(workspaceWidth()).toBe(258)
     pointer(left, 'pointermove', 278)
     expect(workspaceWidth()).toBe(278)
 

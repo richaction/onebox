@@ -1,7 +1,6 @@
 import { closeHistory } from '@tiptap/pm/history'
-import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state'
+import { Selection, TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
-import { selectedBlock } from './blockCommands'
 
 export function isDisplayMath(node: import('@tiptap/pm/model').Node) {
   return node.type.name === 'paragraph' && node.childCount === 1
@@ -33,7 +32,7 @@ export function continueAfterBlock(view: EditorView, pos: number) {
   return true
 }
 
-function isGutterPress(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
+export function isGutterPress(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
   if (!view.editable || view.composing || event.defaultPrevented || event.button !== 0 ||
     event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return false
   const target = event.target
@@ -43,7 +42,7 @@ function isGutterPress(view: EditorView, event: MouseEvent, scrollRoot: HTMLElem
 }
 
 export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
-  if (!isGutterPress(view, event, scrollRoot)) return
+  if (!isGutterPress(view, event, scrollRoot)) return false
   const bounds = view.dom.getBoundingClientRect()
   const { doc } = view.state
   if (event.clientY >= bounds.bottom) {
@@ -53,66 +52,78 @@ export function placeCaretInGutter(view: EditorView, event: MouseEvent, scrollRo
     if (!continued) {
       view.dispatch(view.state.tr.setSelection(Selection.atEnd(doc)))
     }
-  } else if (event.clientY < bounds.top) {
-    view.dispatch(view.state.tr.setSelection(Selection.atStart(doc)))
   } else {
-    const onLeft = event.clientX < bounds.left
-    const point = view.posAtCoords({
-      // Sample inside the block instead of in the list's indentation.
-      left: onLeft ? bounds.left + bounds.width / 2
-        : Math.max(bounds.left + 1, Math.min(event.clientX, bounds.right - 1)),
-      top: event.clientY,
-    })
-    if (!point) return
-    view.dispatch(view.state.tr.setSelection(nearestCaret(view, point.pos, event.clientY)))
+    const caret = caretAtEditorPoint(view, event.clientX, event.clientY)
+    if (!caret) return false
+    view.dispatch(view.state.tr.setSelection(caret))
   }
   event.preventDefault()
-  event.stopPropagation()
   view.focus()
+  return true
 }
 
-export function gutterDragAnchor(view: EditorView, event: PointerEvent, scrollRoot: HTMLElement) {
-  if (event.pointerType !== 'mouse' || !isGutterPress(view, event, scrollRoot)) return
+export function caretAtEditorPoint(view: EditorView, x: number, y: number) {
   const bounds = view.dom.getBoundingClientRect()
-  if (event.clientX < bounds.left || event.clientX >= bounds.right) return blockAtGutterPoint(view, event.clientY)
-}
-
-export function selectBlockInGutter(view: EditorView, event: MouseEvent, scrollRoot: HTMLElement) {
-  if (!isGutterPress(view, event, scrollRoot) || event.clientX >= view.dom.getBoundingClientRect().left) return
-  const block = blockAtGutterPoint(view, event.clientY)
-  if (!block) return
-  event.preventDefault()
-  event.stopPropagation()
-  view.dispatch(view.state.tr.setSelection(block))
-  view.focus()
-}
-
-export function blockAtGutterPoint(view: EditorView, y: number, point?: { pos: number; inside: number }) {
-  if (!point) {
-    const bounds = view.dom.getBoundingClientRect()
-    if (y < bounds.top || y >= bounds.bottom) return
-    point = view.posAtCoords({ left: bounds.left + bounds.width / 2, top: y }) ?? undefined
+  if (bounds.height > 0) {
+    if (y < bounds.top) return Selection.atStart(view.state.doc)
+    if (y >= bounds.bottom) return Selection.atEnd(view.state.doc)
   }
-  if (!point) return
-  const direct = point.inside >= 0 ? directBlockHit(view, point.inside) : undefined
-  if (direct) return direct
-  const block = selectedBlock(nearestCaret(view, point.pos, y))
-  if (block && NodeSelection.isSelectable(block.node)) return NodeSelection.create(view.state.doc, block.from)
+  // Sample inside the block when the tap lands in the page padding.
+  const left = bounds.width <= 2 ? x : x < bounds.left ? bounds.left + bounds.width / 2
+    : Math.max(bounds.left + 1, Math.min(x, bounds.right - 1))
+  const taskCaret = taskCaretAtPoint(view, left, y)
+  if (taskCaret) return taskCaret
+  const point = view.posAtCoords({ left, top: y })
+  return point ? nearestCaret(view, point.pos, y) : undefined
 }
 
-function directBlockHit(view: EditorView, inside: number) {
-  const { doc } = view.state
-  const $inside = doc.resolve(inside)
-  const node = $inside.nodeAfter
-  if (node?.isBlock && NodeSelection.isSelectable(node) &&
-    (node.isAtom || node.type.name === 'codeBlock' || node.type.name === 'listItem' || isDisplayMath(node))) {
-    return NodeSelection.create(doc, inside)
+export function taskCaretAtPoint(view: EditorView, x: number, y: number, whitespaceOnly = false) {
+  const document = view.dom.ownerDocument
+  const hit = document.elementFromPoint(x, y)
+  const task = hit?.closest('li[data-checked]')
+  if (!task || !view.dom.contains(task)) return
+  const paragraph = task.querySelector(':scope > div > p')
+  if (!paragraph) return
+  const end = view.posAtDOM(paragraph, paragraph.childNodes.length)
+  const edge = view.coordsAtPos(end, -1)
+  const rtl = getComputedStyle(paragraph).direction === 'rtl'
+  if (y >= edge.top - 3 && y <= edge.bottom + 3 && (rtl ? x <= edge.right : x >= edge.left)) {
+    return TextSelection.create(view.state.doc, end)
   }
-  // A displayed formula is rendered as an inline atom inside its own paragraph.
-  if ($inside.depth && isDisplayMath($inside.parent)) return NodeSelection.create(doc, $inside.before())
+
+  // WebKit can resolve a point in a list item's padding to a block boundary.
+  // Hit-test on the nearest painted text fragment while keeping the click's x.
+  const range = document.createRange()
+  range.selectNodeContents(paragraph)
+  let closest: DOMRect | undefined
+  let verticalDistance = Infinity
+  let horizontalDistance = Infinity
+  for (const rect of range.getClientRects()) {
+    if (!rect.width || !rect.height) continue
+    const dy = Math.max(rect.top - y, y - rect.bottom, 0)
+    const dx = Math.max(rect.left - x, x - rect.right, 0)
+    if (whitespaceOnly && dx === 0 && dy === 0) return
+    if (dy < verticalDistance || (dy === verticalDistance && dx < horizontalDistance)) {
+      closest = rect
+      verticalDistance = dy
+      horizontalDistance = dx
+    }
+  }
+  if (!closest) return
+  const left = Math.max(closest.left + 0.1, Math.min(x, closest.right - 0.1))
+  const top = (closest.top + closest.bottom) / 2
+  const caret = document.caretPositionFromPoint?.(left, top)
+  const legacy = caret ? undefined : document.caretRangeFromPoint?.(left, top)
+  const node = caret?.offsetNode ?? legacy?.startContainer
+  const offset = caret?.offset ?? legacy?.startOffset
+  if (node && offset !== undefined && paragraph.contains(node)) {
+    const position = view.posAtDOM(node, offset)
+    const resolved = view.state.doc.resolve(position)
+    if (resolved.parent.inlineContent) return TextSelection.create(view.state.doc, position)
+  }
 }
 
-function nearestCaret(view: EditorView, position: number, y: number) {
+export function nearestCaret(view: EditorView, position: number, y: number) {
   const pos = view.state.doc.resolve(position)
   if (!pos.parent.inlineContent) {
     const before = Selection.findFrom(pos, -1, true)

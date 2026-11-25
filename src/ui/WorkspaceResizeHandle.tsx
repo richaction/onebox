@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, onMount } from 'solid-js'
+import { reachesDragThreshold } from '../core/buttonClickTolerance'
 
 const minimum = 180
 const maximum = 460
@@ -29,7 +30,7 @@ export default function WorkspaceResizeHandle(props: {
   const [available, setAvailable] = createSignal(limit())
   const current = () => Math.min(props.width, available())
   let handle!: HTMLDivElement
-  let drag: { id: number; x: number; width: number } | undefined
+  let drag: { id: number; x: number; width: number; moved: boolean } | undefined
 
   const remember = (width: number) => {
     try { localStorage.setItem(settings.key, String(width)) } catch { /* Keep the session width. */ }
@@ -49,7 +50,11 @@ export default function WorkspaceResizeHandle(props: {
   }
   const finish = (event: PointerEvent) => { if (drag?.id === event.pointerId) stopDragging() }
   const resizeFromPointer = (event: PointerEvent) => {
-    if (drag?.id === event.pointerId) change(drag.width + (event.clientX - drag.x) * direction)
+    if (drag?.id !== event.pointerId) return
+    const delta = event.clientX - drag.x
+    if (!drag.moved && !reachesDragThreshold(delta, 0, event.pointerType)) return
+    drag.moved = true
+    change(drag.width + delta * direction)
   }
   const release = (event: PointerEvent) => {
     resizeFromPointer(event)
@@ -76,16 +81,16 @@ export default function WorkspaceResizeHandle(props: {
 
   return (
     <div ref={handle} class={`sidebar-resize-handle ${props.sidebar}-resize-handle`} role="separator" aria-label={settings.label}
-      aria-orientation="vertical" aria-controls={settings.controls} tabIndex={0}
+      aria-orientation="vertical" aria-controls={settings.controls} tabIndex={0} data-pointer-drag-handle
       aria-valuemin={minimum} aria-valuemax={available()} aria-valuenow={current()}
       onPointerDown={(event) => {
-        if (event.button !== 0 || drag) return
+        if (event.defaultPrevented || event.button !== 0 || drag) return
         event.preventDefault()
-        drag = { id: event.pointerId, x: event.clientX, width: current() }
+        drag = { id: event.pointerId, x: event.clientX, width: current(), moved: false }
         event.currentTarget.setPointerCapture(event.pointerId)
         props.onResize(true)
       }}
-      onPointerMove={resizeFromPointer}
+      onPointerMove={(event) => { if (event.buttons & 1) resizeFromPointer(event); else finish(event) }}
       onLostPointerCapture={finish}
       onKeyDown={(event) => {
         const width = event.key === 'ArrowLeft' ? current() - 16 * direction

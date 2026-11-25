@@ -2,6 +2,7 @@ import { closeHistory } from '@tiptap/pm/history'
 import type { Node } from '@tiptap/pm/model'
 import type { EditorView, NodeView } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
+import { reachesDragThreshold } from './buttonClickTolerance'
 import { defaultImageWidth, imageWidthPercent, maxImageWidth, minImageWidth } from './markdownNodes'
 
 export function editorImage(node: Node, view: EditorView, getPos: () => number | undefined, assets: {
@@ -53,6 +54,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     grip.type = 'button'
     grip.className = 'editor-image-resize'
     grip.dataset.side = side < 0 ? 'left' : 'right'
+    grip.dataset.pointerDragHandle = ''
     grip.title = '拖动调整宽度，双击恢复 80%'
     grip.setAttribute('role', 'slider')
     grip.setAttribute('aria-label', side < 0 ? '从左侧调整图片宽度' : '从右侧调整图片宽度')
@@ -78,21 +80,25 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
   }
   for (const [index, grip] of handles.entries()) {
     const direction = index === 0 ? -1 : 1
-    let drag: { id: number; x: number; available: number; initial: number; width: number } | undefined
+    let drag: { id: number; x: number; available: number; initial: number; width: number; moved: boolean } | undefined
     grip.onpointerdown = (event) => {
-      if (!view.editable || drag || event.button !== 0) return
+      if (event.defaultPrevented || !view.editable || drag || event.button !== 0) return
       const paragraph = dom.closest('p[data-standalone-image]')
       const available = paragraph?.getBoundingClientRect().width ?? 0
       if (!available) return
       event.preventDefault()
       const width = savedWidth()
       grip.setPointerCapture(event.pointerId)
-      drag = { id: event.pointerId, x: event.clientX, available, initial: width, width }
+      drag = { id: event.pointerId, x: event.clientX, available, initial: width, width, moved: false }
       dom.setAttribute('data-resizing', '')
     }
     grip.onpointermove = (event) => {
       if (!drag || event.pointerId !== drag.id) return
-      const delta = (event.clientX - drag.x) / drag.available * 100
+      if (!(event.buttons & 1)) { cancel(event); return }
+      const dx = event.clientX - drag.x
+      if (!drag.moved && !reachesDragThreshold(dx, 0, event.pointerType)) return
+      drag.moved = true
+      const delta = dx / drag.available * 100
       drag.width = clamp(drag.initial + 2 * direction * delta)
       paint(drag.width)
     }

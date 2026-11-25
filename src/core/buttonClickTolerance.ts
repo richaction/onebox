@@ -7,6 +7,12 @@ export function isClickFromRelease(click: MouseEvent, release: PointerEvent) {
     (!('pointerId' in click) || click.pointerId === release.pointerId)
 }
 
+export function isReorderedPointerRelease(down: PointerEvent, up: PointerEvent, elapsed: number) {
+  return down.pointerType === 'mouse' && down.pointerId === up.pointerId &&
+    down.timeStamp <= up.timeStamp && up.timeStamp - down.timeStamp <= 150 && elapsed <= 150 &&
+    !reachesDragThreshold(up.clientX - down.clientX, up.clientY - down.clientY)
+}
+
 export function enableButtonClickTolerance(document: Document) {
   const window = document.defaultView!
   type Press = { button: HTMLButtonElement; pointer: number; x: number; y: number; activateOnRelease: boolean }
@@ -15,8 +21,10 @@ export function enableButtonClickTolerance(document: Document) {
   let handled: Release[] = []
   let primaryDown: number | undefined
   let earlyRelease: (Release & { nativeClicked?: boolean }) | undefined
+  let earlyDragRelease: { handle: Element; event: PointerEvent; received: number } | undefined
   let reorderedDown: { event: PointerEvent; release: NonNullable<typeof earlyRelease> } | undefined
   const generatedClicks = new WeakSet<MouseEvent>()
+  const pending = new Map<Release, number>()
 
   const recent = (release: Release) => window.performance.now() - release.received <= 500
   const outsideTolerance = (event: PointerEvent, x: number, y: number) =>
@@ -28,6 +36,10 @@ export function enableButtonClickTolerance(document: Document) {
     return button?.isConnected && !button.matches(':disabled, [aria-disabled="true"]') ? button : null
   }
 
+  function dragHandleAt(event: Event) {
+    return event.target instanceof Element ? event.target.closest('[data-pointer-drag-handle]') : null
+  }
+
   function rememberRelease(button: HTMLButtonElement, event: PointerEvent) {
     handled = handled.filter(recent)
     handled.push({ button, event, received: window.performance.now() })
@@ -36,15 +48,20 @@ export function enableButtonClickTolerance(document: Document) {
   function matchDown(event: PointerEvent) {
     if (!event.isPrimary || event.button !== 0) return
     const earlier = earlyRelease
+    const dragRelease = earlyDragRelease
     earlyRelease = undefined
+    earlyDragRelease = undefined
     reorderedDown = undefined
     primaryDown = event.pointerId
     // The native event timestamps retain their original order even when WebKit
     // delivers the mouse release first.
-    if (!earlier || event.pointerType !== 'mouse' || earlier.event.pointerId !== event.pointerId ||
-      earlier.event.timeStamp < event.timeStamp || earlier.event.timeStamp - event.timeStamp > 150 ||
-      window.performance.now() - earlier.received > 150 ||
-      outsideTolerance(earlier.event, event.clientX, event.clientY)) return
+    if (dragRelease && dragHandleAt(event) === dragRelease.handle &&
+      isReorderedPointerRelease(event, dragRelease.event, window.performance.now() - dragRelease.received)) {
+      primaryDown = undefined
+      event.preventDefault()
+      return
+    }
+    if (event.ctrlKey || !earlier || !isReorderedPointerRelease(event, earlier.event, window.performance.now() - earlier.received)) return
     if (buttonAt(event) !== earlier.button && !(earlier.nativeClicked && !earlier.button.isConnected)) return
     primaryDown = undefined
     reorderedDown = { event, release: earlier }
@@ -67,13 +84,14 @@ export function enableButtonClickTolerance(document: Document) {
       if (!nativeClicked && buttonAt(event) === button) activate(button, release)
       return
     }
-    if (event.defaultPrevented || !(event.target instanceof Element)) return
+    if (event.defaultPrevented || event.ctrlKey || !(event.target instanceof Element)) return
     const button = buttonAt(event)
     if (!button || button.hasPointerCapture(event.pointerId) || event.target.hasPointerCapture(event.pointerId)) return
+    const activateOnRelease = event.pointerType === 'mouse' && !!button.closest('[data-activate-on-release]')
     // Capture keeps the native click on the pressed button through small edge crossings.
     button.setPointerCapture(event.pointerId)
     press = { button, pointer: event.pointerId, x: event.clientX, y: event.clientY,
-      activateOnRelease: event.pointerType === 'mouse' && !!button.closest('[data-activate-on-release]') }
+      activateOnRelease }
   }
 
   function move(event: PointerEvent) {
@@ -93,12 +111,21 @@ export function enableButtonClickTolerance(document: Document) {
       rememberRelease(current.button, event)
       return
     }
-    if (current.activateOnRelease && current.button.isConnected && !current.button.matches(':disabled, [aria-disabled="true"]')) {
-      activate(current.button, event)
+    if (event.pointerType !== 'mouse' || outsideTolerance(event, current.x, current.y)) return
+    if (current.activateOnRelease) activate(current.button, event)
+    else {
+      // Keep the normal native click (including its click count and default action).
+      // Only recover ordered releases for which WKWebView does not deliver click.
+      const release = { button: current.button, event, received: window.performance.now() }
+      pending.set(release, window.setTimeout(() => {
+        pending.delete(release)
+        activate(release.button, event)
+      }, 40))
     }
   }
 
   function activate(button: HTMLButtonElement, event: PointerEvent) {
+    if (!button.isConnected || button.matches(':disabled, [aria-disabled="true"]') || button.closest('[inert]')) return
     if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId)
     rememberRelease(button, event)
     const click = new MouseEvent('click', {
@@ -113,8 +140,11 @@ export function enableButtonClickTolerance(document: Document) {
   function finishNativeButton(event: PointerEvent) {
     if (event.isPrimary && event.button === 0) {
       const button = buttonAt(event)
+      const dragHandle = dragHandleAt(event)
       earlyRelease = primaryDown !== event.pointerId && event.pointerType === 'mouse' && button
         ? { button, event, received: window.performance.now() } : undefined
+      earlyDragRelease = primaryDown !== event.pointerId && event.pointerType === 'mouse' && dragHandle
+        ? { handle: dragHandle, event, received: window.performance.now() } : undefined
       primaryDown = undefined
     }
     if (!press?.activateOnRelease) finish(event)
@@ -123,11 +153,18 @@ export function enableButtonClickTolerance(document: Document) {
   function cancel(event: PointerEvent) {
     if (primaryDown === event.pointerId) primaryDown = undefined
     if (earlyRelease?.event.pointerId === event.pointerId) earlyRelease = undefined
+    if (earlyDragRelease?.event.pointerId === event.pointerId) earlyDragRelease = undefined
     finish(event)
   }
 
   function click(event: MouseEvent) {
     if (event.detail === 0 || generatedClicks.has(event)) return
+    for (const [release, timer] of pending) {
+      if (event.composedPath().includes(release.button) && isClickFromRelease(event, release.event)) {
+        window.clearTimeout(timer)
+        pending.delete(release)
+      }
+    }
     // A released command may remove itself before WKWebView delivers the click.
     // In that case WebKit can retarget the same release to the underlying UI.
     if (handled.some((release) => recent(release) && isClickFromRelease(event, release.event) &&
@@ -153,8 +190,11 @@ export function enableButtonClickTolerance(document: Document) {
     releaseCapture()
     handled = []
     earlyRelease = undefined
+    earlyDragRelease = undefined
     reorderedDown = undefined
     primaryDown = undefined
+    for (const timer of pending.values()) window.clearTimeout(timer)
+    pending.clear()
   }
 
   // Existing button controls can claim the pointer or cancel the press first.

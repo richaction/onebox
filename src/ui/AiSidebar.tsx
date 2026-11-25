@@ -2,6 +2,7 @@ import type { Editor } from '@tiptap/core'
 import { batch, createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { aiAnswerHtml, aiChangeText, decodeAiAnswer, partialAiAnswer } from '../core/aiAnswer'
+import { resolveSavedReasoningEffort } from '../core/aiReasoning'
 import {
   applyAiRevision, captureAiInsertion, captureAiReference, clearAiAnchors, clearAiRevisionPreview,
   hasAiRevisionPreview, jumpToAiReference, showAiRevisionPreview, undoAiRevision,
@@ -73,7 +74,7 @@ export default function AiSidebar(props: {
   const [efforts, setEfforts] = createStore<Record<string, string | undefined>>({})
   const selectedEffort = createMemo(() => {
     const model = selectedModel()
-    return model?.supportedReasoningEfforts?.find((option) => option.reasoningEffort === efforts[model.model])?.reasoningEffort
+    return model && resolveSavedReasoningEffort(model, efforts[model.model])
   })
   const [menu, setMenu] = createSignal<ComposerMenu | 'conversations'>()
   const [accountError, setAccountError] = createSignal('')
@@ -151,18 +152,24 @@ export default function AiSidebar(props: {
     }
   }
 
+  function finishModelChoice() {
+    setMenu(undefined)
+    composer?.focus({ preventScroll: true })
+  }
+
   function chooseModel(model: AiModel) {
     localStorage.setItem('onebox.ai.model', model.model)
     setPreferredModel(model.model)
+    finishModelChoice()
   }
 
-  function chooseEffort(effort?: string) {
+  function chooseEffort(effort: string) {
     const model = selectedModel()
     if (!model) return
     const key = `onebox.ai.effort.${model.model}`
-    if (effort) localStorage.setItem(key, effort)
-    else localStorage.removeItem(key)
+    localStorage.setItem(key, effort)
     setEfforts(model.model, effort)
+    finishModelChoice()
   }
 
   function clearAccountData() {
@@ -588,6 +595,8 @@ export default function AiSidebar(props: {
   }))
   onMount(() => {
     const closeOutside = (event: PointerEvent) => {
+      if (event.defaultPrevented) return
+      if (event.target instanceof Element && event.target.closest('[data-ai-composer-menu] > button')) return
       const open = menu()
       if (open && !event.composedPath().some((node) => node instanceof HTMLElement && node.dataset.aiComposerMenu === open)) {
         setMenu(undefined)

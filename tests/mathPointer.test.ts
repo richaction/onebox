@@ -20,12 +20,12 @@ it('keeps a held click collapsed and starts selection after deliberate movement'
   try {
     expect(pointer('pointerdown', 10)).toBe(false)
     expect(field.position).toBe(10)
-    pointer('pointermove', 13)
+    pointer('pointermove', 13, { buttons: 1 })
     expect(field.selection.ranges).toEqual([[0, 0]])
 
-    pointer('pointermove', 20)
+    pointer('pointermove', 20, { buttons: 1 })
     expect(field.selection).toEqual({ ranges: [[10, 20]], direction: 'forward' })
-    pointer('pointermove', 1)
+    pointer('pointermove', 1, { buttons: 1 })
     expect(field.selection).toEqual({ ranges: [[1, 10]], direction: 'backward' })
     pointer('pointerup', 1)
     pointer('pointermove', 25)
@@ -33,6 +33,8 @@ it('keeps a held click collapsed and starts selection after deliberate movement'
 
     pointer('pointerdown', 5, { altKey: true })
     expect(activate).toHaveBeenLastCalledWith(true)
+    pointer('pointermove', 25, { buttons: 0 })
+    expect(field.selection.ranges).toEqual([[1, 10]])
   } finally {
     field.remove()
   }

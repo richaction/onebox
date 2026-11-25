@@ -1,6 +1,9 @@
 import { mergeAttributes, Node } from '@tiptap/core'
 import { ListItem } from '@tiptap/extension-list'
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
+import { Plugin } from '@tiptap/pm/state'
+import { tableEditingKey } from '@tiptap/pm/tables'
+import { trackTablePointerSelection } from './tablePointerSelection'
 
 export const MarkdownDocument = Node.create({
   name: 'doc',
@@ -130,6 +133,14 @@ export const markdownTableExtensions = [
   Table.extend({
     // The viewport plugin owns the top-level wrapper and its observer.
     addNodeView() { return null },
+    addProseMirrorPlugins() {
+      return (this.parent?.() ?? []).map((plugin) => plugin.spec.key !== tableEditingKey ? plugin : new Plugin({
+        ...plugin.spec,
+        // Keep paste, keyboard selection, and normalization. Track drags on the pointer event stream.
+        props: { ...plugin.spec.props, handleDOMEvents: undefined },
+        view: (view) => ({ destroy: trackTablePointerSelection(view) }),
+      }))
+    },
   }),
   TableRow,
   TableCell.extend({ content: 'paragraph' }),

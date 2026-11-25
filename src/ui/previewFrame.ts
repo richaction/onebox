@@ -1,5 +1,5 @@
 import type { ViewerController, ViewerOptions, mountViewer } from '@file-viewer/web-full'
-import { enableButtonClickTolerance } from '../core/buttonClickTolerance'
+import { enableButtonClickTolerance, reachesDragThreshold } from '../core/buttonClickTolerance'
 import { customizeArchivePreview } from './archivePreview'
 import { createImageZoom, imageFit, isImagePreview, type ImagePreviewState } from './previewImage'
 import './previewFrame.css'
@@ -183,6 +183,7 @@ const enablePdfOutlineResize = (pdf: HTMLElement) => {
   if (!content || !pane) return
   const handle = document.createElement('div')
   handle.className = 'pdf-outline-resize'
+  handle.dataset.pointerDragHandle = ''
   handle.tabIndex = 0
   handle.setAttribute('role', 'separator')
   handle.setAttribute('aria-label', '调整目录宽度')
@@ -200,21 +201,30 @@ const enablePdfOutlineResize = (pdf: HTMLElement) => {
     handle.setAttribute('aria-valuemax', String(max))
     handle.setAttribute('aria-valuenow', String(next))
   }
-  let drag: { pointer: number; x: number; width: number; limits: ReturnType<typeof bounds> } | undefined
+  let drag: { pointer: number; x: number; width: number; limits: ReturnType<typeof bounds>; moved: boolean } | undefined
   handle.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || drag) return
-    drag = { pointer: event.pointerId, x: event.clientX, width: pane.offsetWidth, limits: bounds() }
+    if (event.defaultPrevented || event.button !== 0 || drag) return
+    drag = { pointer: event.pointerId, x: event.clientX, width: pane.offsetWidth, limits: bounds(), moved: false }
     handle.setPointerCapture(event.pointerId)
     handle.classList.add('is-resizing')
     event.preventDefault()
   })
-  handle.addEventListener('pointermove', (event) => {
-    if (event.pointerId === drag?.pointer) setWidth(drag.width + drag.x - event.clientX, drag.limits)
-  })
-  handle.addEventListener('lostpointercapture', () => {
+  const finish = (event: PointerEvent) => {
+    if (event.pointerId !== drag?.pointer) return
     drag = undefined
     handle.classList.remove('is-resizing')
+  }
+  handle.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== drag?.pointer) return
+    if (!(event.buttons & 1)) { finish(event); return }
+    const delta = drag.x - event.clientX
+    if (!drag.moved && !reachesDragThreshold(delta, 0, event.pointerType)) return
+    drag.moved = true
+    setWidth(drag.width + delta, drag.limits)
   })
+  handle.addEventListener('pointerup', finish)
+  handle.addEventListener('pointercancel', finish)
+  handle.addEventListener('lostpointercapture', finish)
   handle.addEventListener('keydown', (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()

@@ -1,6 +1,7 @@
 import type { Editor } from '@tiptap/core'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { aiRevisionDiff, decodeAiAnswer } from '../core/aiAnswer'
+import { resolveSavedReasoningEffort } from '../core/aiReasoning'
 import { aiReferenceRange, applyAiRevision, clearAiSource, previewAiChanges, type AiReference, type AiRevision } from '../core/aiDocument'
 import { ai, type AiEvent } from '../io/ai'
 import { isClickFromRelease } from '../core/buttonClickTolerance'
@@ -160,8 +161,7 @@ export default function InlineAiEditor(props: {
       const model = models.find((option) => option.model === preferred) ?? models.find((option) => option.isDefault) ?? models[0]
       if (!model) throw new Error('此账号暂无可用模型。')
       const savedEffort = localStorage.getItem(`onebox.ai.effort.${model.model}`)
-      const effort = model.supportedReasoningEfforts?.find((option) => option.reasoningEffort === savedEffort)?.reasoningEffort
-        ?? model.defaultReasoningEffort
+      const effort = resolveSavedReasoningEffort(model, savedEffort) ?? model.defaultReasoningEffort
       current.thread = await ai.newThread()
       if (job !== current) { stopJob(current); return }
       const inputText = JSON.stringify({

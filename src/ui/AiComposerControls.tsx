@@ -2,15 +2,11 @@ import { createMemo, For, Show } from 'solid-js'
 import type { AiAccount, AiModel, AiUsage } from '../io/ai'
 import AiComposerMenu, { type ComposerMenu } from './AiComposerMenu'
 import { quotaWindows } from '../core/aiQuota'
+import { reasoningLabel, reasoningTiers, supportedReasoningEffort } from '../core/aiReasoning'
 
 function planName(plan: string) {
   return plan.replace(/(^|_)([a-z])/gu, (_match, prefix: string, letter: string) => (prefix ? ' ' : '') + letter.toUpperCase())
 }
-
-const effortLabels: Record<string, string> = {
-  none: '关闭', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高', ultra: '超高',
-}
-const effortLabel = (effort: string) => effortLabels[effort] ?? effort
 
 function Battery(props: { level?: number }) {
   return <span class="ai-battery" classList={{ 'ai-battery-low': (props.level ?? 100) <= 15 }} aria-hidden="true">
@@ -55,7 +51,7 @@ export default function AiComposerControls(props: {
   modelError: string
   usageError: string
   onChooseModel: (model: AiModel) => void
-  onChooseEffort: (effort?: string) => void
+  onChooseEffort: (effort: string) => void
   onMenu: (menu: ComposerMenu | undefined) => void
   onSignIn: () => void
   onCancelSignIn: () => void
@@ -69,7 +65,7 @@ export default function AiComposerControls(props: {
     const limiting = quota().limiting
     return limiting ? `Codex 用量，${limiting.label}剩余 ${limiting.remaining}%` : 'Codex 用量'
   }
-  const supportedEfforts = () => props.model?.supportedReasoningEfforts ?? []
+  const effort = () => reasoningLabel(props.effort ?? props.model?.defaultReasoningEffort)
   const toggle = (menu: ComposerMenu) => {
     if (props.menu === menu) props.onMenu(undefined)
     else open(menu)
@@ -118,7 +114,7 @@ export default function AiComposerControls(props: {
         </section>
       </AiComposerMenu>
       <AiComposerMenu kind="model" open={props.menu === 'model'}
-        label={`AI 模型，${modelLabel()}${props.effort ? `，思考强度 ${effortLabel(props.effort)}` : ''}`}
+        label={`AI 模型，${modelLabel()}${effort() ? `，思考强度 ${effort()}` : ''}`}
         onToggle={() => toggle('model')} onDismiss={() => dismiss('model')}
         trigger={<><ModelLabel text={modelLabel()} model={props.model} /><i aria-hidden="true" /></>}>
         <section aria-label="模型与登录">
@@ -138,19 +134,18 @@ export default function AiComposerControls(props: {
                   </button>
                 }</For>
               </div>
-              <Show when={supportedEfforts().length}>
+              <Show when={props.model && reasoningTiers.some((tier) => supportedReasoningEffort(props.model, tier))}>
                 <div class="ai-reasoning">
                   <div class="ai-reasoning-label">思考强度</div>
                   <div class="ai-effort-options" role="group" aria-label="思考强度">
-                    <button class="ai-composer-trigger" type="button" aria-pressed={!props.effort} disabled={props.working}
-                      title={props.model?.defaultReasoningEffort ? `模型默认 ${effortLabel(props.model.defaultReasoningEffort)}` : '模型默认'}
-                      onClick={() => props.onChooseEffort()}>默认</button>
-                    <For each={supportedEfforts()}>{(option) =>
-                      <button class="ai-composer-trigger" type="button" aria-pressed={props.effort === option.reasoningEffort}
-                        disabled={props.working} title={option.description} onClick={() => props.onChooseEffort(option.reasoningEffort)}>
-                        {effortLabel(option.reasoningEffort)}
-                      </button>
-                    }</For>
+                    <For each={reasoningTiers}>{(tier) => {
+                      const option = () => supportedReasoningEffort(props.model, tier)
+                      return <button class="ai-composer-trigger" type="button" aria-pressed={!!option() && effort() === tier.label}
+                        disabled={props.working || !option()} title={option()?.description} onClick={() => {
+                          const next = option()
+                          if (next) props.onChooseEffort(next.reasoningEffort)
+                        }}>{tier.label}</button>
+                    }}</For>
                   </div>
                 </div>
               </Show>

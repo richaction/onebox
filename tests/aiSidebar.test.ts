@@ -3,8 +3,10 @@ import { render } from 'solid-js/web'
 import { expect, it, vi } from 'vitest'
 import { captureAiReference } from '../src/core/aiDocument'
 import { createEditor } from '../src/core/editor'
+import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
 import { ai, type AiEvent } from '../src/io/ai'
 import AiSidebar, { type AiConversationHistory } from '../src/ui/AiSidebar'
+import AiSidebarToggle from '../src/ui/AiSidebarToggle'
 import AiComposerMenu from '../src/ui/AiComposerMenu'
 import WorkspaceResizeHandle, { initialSidebarWidth } from '../src/ui/WorkspaceResizeHandle'
 
@@ -170,6 +172,12 @@ it('opens composer menus while a document loads', () => {
     usage.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
     const popup = host.querySelector('.ai-usage-popup')!
     expect(usage.getAttribute('aria-expanded')).toBe('true')
+    const canceledPress = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse' })
+    canceledPress.preventDefault()
+    document.body.dispatchEvent(canceledPress)
+    expect(popup.isConnected).toBe(true)
+    host.querySelector('.ai-model-trigger')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+    expect(popup.isConnected).toBe(true)
     popup.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
     usageMenu.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))
     expect(popup.isConnected).toBe(true)
@@ -187,13 +195,70 @@ it('opens composer menus while a document loads', () => {
     expect(host.querySelector('.ai-usage-popup')).toBeNull()
     sidebar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(onClose).toHaveBeenCalledTimes(1)
-    sidebar.querySelector<HTMLButtonElement>('header [aria-label="收起 AI 侧栏"]')!.click()
+    sidebar.querySelector<HTMLButtonElement>('.ai-sidebar-collapse')!.click()
     expect(onClose).toHaveBeenCalledTimes(2)
   } finally {
     dispose()
     host.remove()
     stopListening.mockRestore()
     account.mockRestore()
+  }
+})
+
+it('uses the same AI toggle on initial open, close, and rapid reopen', () => {
+  const [open, setOpen] = createSignal(false)
+  const host = document.createElement('div')
+  document.body.append(host)
+  const dispose = render(() => createComponent(AiSidebarToggle, {
+    get open() { return open() }, onOpen: () => setOpen(true), onClose: () => setOpen(false),
+  }), host)
+  const stop = enableButtonClickTolerance(document)
+  const button = host.querySelector('button')!
+  let hasCapture = false
+  Object.assign(button, {
+    hasPointerCapture: () => hasCapture,
+    setPointerCapture: () => { hasCapture = true },
+    releasePointerCapture: () => { hasCapture = false },
+  })
+  const pointer = (type: string, timeStamp: number, clientX: number) => {
+    const event = new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 1, button: 0, isPrimary: true, pointerType: 'mouse', clientX,
+    })
+    Object.defineProperty(event, 'timeStamp', { value: timeStamp })
+    button.dispatchEvent(event)
+  }
+  const lateClick = (timeStamp: number, clientX: number) => {
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1, clientX })
+    Object.defineProperty(event, 'timeStamp', { value: timeStamp })
+    button.dispatchEvent(event)
+  }
+  try {
+    pointer('pointerup', 101, 22)
+    pointer('pointerdown', 100, 19)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(host.querySelector('button')).toBe(button)
+    expect(button.textContent).toContain('AI')
+    lateClick(101, 24)
+    expect(open()).toBe(true)
+
+    pointer('pointerdown', 125, 22)
+    pointer('pointerup', 126, 26)
+    expect(open()).toBe(false)
+    expect(host.querySelector('button')).toBe(button)
+    lateClick(126, 27)
+    expect(open()).toBe(false)
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(button.textContent).toContain('AI')
+
+    pointer('pointerdown', 150, 23)
+    pointer('pointerup', 151, 24)
+    expect(open()).toBe(true)
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(open()).toBe(false)
+  } finally {
+    stop()
+    dispose()
+    host.remove()
   }
 })
 
@@ -255,5 +320,59 @@ it('resizes the right sidebar in the opposite direction and keeps its own width 
     else localStorage.setItem(aiKey, originalAi)
     if (originalWorkspace === null) localStorage.removeItem(workspaceKey)
     else localStorage.setItem(workspaceKey, originalWorkspace)
+  }
+})
+
+it('saves and closes the menu immediately on a reasoning or model choice', async () => {
+  const model = {
+    model: 'test-three-tiers', defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((reasoningEffort) => ({ reasoningEffort })),
+  }
+  const alternative = { ...model, model: 'test-alternative' }
+  const modelKey = 'onebox.ai.model'
+  const previousModel = localStorage.getItem(modelKey)
+  const key = `onebox.ai.effort.${model.model}`
+  const previous = localStorage.getItem(key)
+  localStorage.setItem(key, 'xhigh')
+  localStorage.setItem(modelKey, model.model)
+  const mocks = [
+    vi.spyOn(ai, 'events').mockResolvedValue(() => {}),
+    vi.spyOn(ai, 'account').mockResolvedValue({ email: '', plan: 'pro' }),
+    vi.spyOn(ai, 'models').mockResolvedValue([model, alternative]),
+    vi.spyOn(ai, 'usage').mockResolvedValue({}),
+  ]
+  const host = document.createElement('div')
+  document.body.append(host)
+  const dispose = render(() => createComponent(AiSidebar, {
+    open: true, loading: false, title: '样例.md', history: { active: 0, next: 0, conversations: [] },
+    editor: () => undefined, quote: undefined, pickReference: async () => undefined, onClose: () => {}, onQuoteConsumed: () => {},
+  }), host)
+  try {
+    const trigger = host.querySelector<HTMLButtonElement>('.ai-model-trigger')!
+    await vi.waitFor(() => expect(trigger.getAttribute('aria-label')).toContain('思考强度 高'))
+    trigger.click()
+    const tiers = [...host.querySelectorAll<HTMLButtonElement>('.ai-effort-options button')]
+    expect(tiers.map((button) => button.textContent)).toEqual(['低', '中', '高'])
+    expect(tiers[2].getAttribute('aria-pressed')).toBe('true')
+    tiers[0].click()
+    expect(host.querySelector('.ai-model-popup')).toBeNull()
+    expect(document.activeElement).toBe(host.querySelector('textarea'))
+    expect(localStorage.getItem(key)).toBe('low')
+    expect(trigger.getAttribute('aria-label')).toContain('思考强度 低')
+
+    trigger.click()
+    host.querySelectorAll<HTMLButtonElement>('.ai-model-option')[1].click()
+    expect(host.querySelector('.ai-model-popup')).toBeNull()
+    expect(document.activeElement).toBe(host.querySelector('textarea'))
+    expect(localStorage.getItem(modelKey)).toBe(alternative.model)
+    expect(trigger.textContent).toContain(alternative.model)
+  } finally {
+    dispose()
+    host.remove()
+    if (previous === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, previous)
+    if (previousModel === null) localStorage.removeItem(modelKey)
+    else localStorage.setItem(modelKey, previousModel)
+    mocks.forEach((mock) => mock.mockRestore())
   }
 })

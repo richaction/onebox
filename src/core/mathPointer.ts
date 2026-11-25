@@ -32,6 +32,7 @@ export function bindMathPointer(
 
   field.addEventListener('pointermove', (event) => {
     if (!press || press.id !== event.pointerId) return
+    if (!(event.buttons & 1)) { press = undefined; return }
     if (!press.dragging && !reachesDragThreshold(event.clientX - press.x, event.clientY - press.y, event.pointerType)) return
     press.dragging = true
     const head = field.getOffsetFromPoint(event.clientX, event.clientY)

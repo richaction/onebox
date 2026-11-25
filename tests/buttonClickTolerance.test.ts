@@ -228,3 +228,42 @@ it('activates a selection command on mouse release and consumes its later native
     expect(activate).toHaveBeenCalledTimes(2)
   })
 })
+
+it('recovers a missing ordered click and cancels the fallback when native click arrives', () => {
+  vi.useFakeTimers()
+  try {
+    withButton(({ button, pointer }) => {
+      const run = vi.fn()
+      button.addEventListener('click', run)
+      pointer('pointerdown', 20, 100)
+      pointer('pointerup', 24, 101)
+      vi.runOnlyPendingTimers()
+      expect(run).toHaveBeenCalledOnce()
+      expect(nativeClick(button, 101, 24)).toBe(false)
+
+      pointer('pointerdown', 20, 200)
+      pointer('pointerup', 24, 201)
+      nativeClick(button, 201, 24, 2)
+      vi.runOnlyPendingTimers()
+      expect(run).toHaveBeenCalledTimes(2)
+      expect(run.mock.calls[1][0].detail).toBe(2)
+    })
+  } finally { vi.useRealTimers() }
+})
+
+it('prevents a late drag handle press from starting a resize', () => {
+  withButton(({ pointer }) => {
+    const handle = document.createElement('div')
+    handle.dataset.pointerDragHandle = ''
+    document.body.append(handle)
+    const start = vi.fn()
+    handle.addEventListener('pointerdown', (event) => { if (!event.defaultPrevented) start() })
+    try {
+      pointer('pointerup', 24, 101, handle)
+      pointer('pointerdown', 20, 100, handle)
+      expect(start).not.toHaveBeenCalled()
+      pointer('pointerdown', 20, 200, handle)
+      expect(start).toHaveBeenCalledOnce()
+    } finally { handle.remove() }
+  })
+})

@@ -15,6 +15,7 @@ import { serializeDocument } from './core/serializeDocument'
 import { desktopAttachments, desktopDocuments, desktopWorkspace, tauriFileSystem, type Attachment, type PreviewEntry, type WorkspaceEntry, type WorkspaceRoot } from './io/tauri'
 import { captureAiReference, type AiReference } from './core/aiDocument'
 import AiSidebar, { type AiConversationHistory } from './ui/AiSidebar'
+import AiSidebarToggle from './ui/AiSidebarToggle'
 import EditorShell, { type AttachmentKind } from './ui/EditorShell'
 import FilePreview from './ui/FilePreview'
 import PreviewLoading, { createLoadingHint } from './ui/PreviewLoading'
@@ -134,6 +135,7 @@ export default function App() {
     if (reference) setAiQuote({ path: document, reference })
   }
   const closeAi = () => {
+    if (!aiOpen()) return
     setAiOpen(false)
     queueMicrotask(() => {
       if (!aiOpen() && aiToggle?.isConnected) aiToggle.focus({ preventScroll: true })
@@ -1163,15 +1165,9 @@ export default function App() {
                   <header class="file-preview-toolbar">
                     <FileName name={nameOf(path() ?? '')} edit={desktop && path() ? titleEdit(fileEntry(path()!)) : undefined} />
                     <div class="file-save-hint" role="status">{autoSaveMessage()}</div>
-                    <Show when={desktop && !aiOpen()}>
-                      <div class="file-preview-actions ai-toggle-slot">
-                        <button type="button" class="ai-toggle" ref={aiToggle} data-activate-on-release aria-expanded="false"
-                          aria-label="AI 侧栏"
-                          aria-controls="onebox-ai-sidebar"
-                          onClick={() => openAi()}>
-                          <span class="ai-toggle-spark" aria-hidden="true">✨</span>AI
-                        </button>
-                      </div>
+                    <Show when={desktop}>
+                      <AiSidebarToggle open={aiOpen()} onOpen={() => openAi()} onClose={closeAi}
+                        ref={(button) => { aiToggle = button }} />
                     </Show>
                   </header>
                 </Show>

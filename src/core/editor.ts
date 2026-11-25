@@ -1,18 +1,19 @@
 import { Editor, Extension, type JSONContent } from '@tiptap/core'
 import { Fragment, Mark } from '@tiptap/pm/model'
 import type { Node } from '@tiptap/pm/model'
-import { EditorState, NodeSelection, Plugin, Selection, TextSelection } from '@tiptap/pm/state'
+import { EditorState, Plugin, Selection, TextSelection } from '@tiptap/pm/state'
+import { CellSelection } from '@tiptap/pm/tables'
 import type { EditorProps, EditorView } from '@tiptap/pm/view'
 import { isRelativeResource } from './attachmentLinks'
-import { reachesDragThreshold } from './buttonClickTolerance'
+import { isReorderedPointerRelease, reachesDragThreshold } from './buttonClickTolerance'
 import { aiDocumentPlugin, aiInlineSourcePlugin } from './aiDocument'
-import { blockRangeSelectionPlugin, extendBlockSelection, isBlockSelection } from './blockSelection'
+import { isBlockSelection } from './blockSelection'
 import { MarkdownTaskInput, ViewportGroupEditing } from './blockCommands'
 import { createBlockPresentation, keepTableCaretVisible } from './blockPresentation'
 import { editorImage } from './editorImage'
 import { createCodeHighlight } from './codeHighlight'
 import { developmentSession } from './developmentSession'
-import { blockAtGutterPoint, gutterDragAnchor, placeCaretInGutter, selectBlockInGutter } from './editorCaret'
+import { caretAtEditorPoint, isGutterPress, nearestCaret, placeCaretInGutter, taskCaretAtPoint } from './editorCaret'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import type { ViewportMetrics } from './metrics'
 import { MarkdownImage } from './markdownNodes'
@@ -37,18 +38,36 @@ export interface EditorHandle {
 
 const BLOCKS_PER_GROUP = 64
 
-function collapseClickedSelection(view: EditorView, pos: number, event: MouseEvent) {
-  const { doc, selection } = view.state
-  const isTextOrBlock = selection instanceof TextSelection || isBlockSelection(selection)
-  if (!view.editable || view.composing || event.button !== 0 ||
-    event.shiftKey || event.altKey || event.metaKey || event.ctrlKey ||
-    !isTextOrBlock || selection.empty || pos < selection.from || pos > selection.to) return false
-  if ((event.target as Element | null)?.closest?.('button, input, [contenteditable="false"]')) return false
-  const caret = doc.resolve(pos)
-  if (!caret.parent.inlineContent) return false
-  view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, pos)))
+function isCaretClick(view: EditorView, event: MouseEvent) {
+  return view.editable && !view.composing && event.button === 0 &&
+    !event.defaultPrevented && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey &&
+    !(event.target as Element | null)?.closest?.('button, input, [contenteditable="false"]')
+}
+
+function canCollapseSelection(view: EditorView, event: MouseEvent) {
+  const { selection } = view.state
+  return isCaretClick(view, event) && !selection.empty &&
+    (selection instanceof TextSelection || selection instanceof CellSelection || isBlockSelection(selection))
+}
+
+function collapseClickedSelection(view: EditorView, caret: Selection | undefined) {
+  if (!(caret instanceof TextSelection) || !caret.empty) return false
+  if (!caret.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(caret))
   view.focus()
   return true
+}
+
+function nativeTextRange(view: EditorView) {
+  const selection = view.dom.ownerDocument.getSelection()
+  if (!selection?.rangeCount || selection.isCollapsed || !view.dom.contains(selection.anchorNode) ||
+    !view.dom.contains(selection.focusNode)) return
+  return selection.getRangeAt(0)
+}
+
+function nativeRangeChanged(view: EditorView, before: Range | undefined) {
+  const range = nativeTextRange(view)
+  return !!range && (!before || range.startContainer !== before.startContainer || range.startOffset !== before.startOffset ||
+    range.endContainer !== before.endContainer || range.endOffset !== before.endOffset)
 }
 
 export function createEditor(opts: {
@@ -73,9 +92,10 @@ export function createEditor(opts: {
     ? { created: 0, destroyed: 0, transactions: 0, lastTransactionMs: 0, maxTransactionMs: 0 }
     : undefined
   let observer: ViewportObserver | null = null
-  let mousePress: { x: number; y: number; selection: Selection; dragged: boolean } | undefined
+  let mousePress: { x: number; y: number; selection: Selection; nativeRange?: Range; dragged: boolean } | undefined
   const finishesDrag = (view: EditorView) => !!mousePress &&
-    (mousePress.dragged || (!view.state.selection.empty && !view.state.selection.eq(mousePress.selection)))
+    (mousePress.dragged || nativeRangeChanged(view, mousePress.nativeRange) ||
+      (!view.state.selection.empty && !view.state.selection.eq(mousePress.selection)))
   const localImages = new Set<() => void>()
   const viewport = Extension.create({
     name: 'oneboxViewport',
@@ -85,7 +105,6 @@ export function createEditor(opts: {
         createVisibilityPlugin(),
         aiDocumentPlugin(),
         aiInlineSourcePlugin(),
-        blockRangeSelectionPlugin(),
         listSelectionPlugin(opts.scrollRoot),
         new Plugin({
           props: { nodeViews: blockNodeViews(heights, () => observer, presentation.present) },
@@ -153,7 +172,10 @@ export function createEditor(opts: {
         return true
       },
       handleClick(view, pos, event) {
-        return !finishesDrag(view) && collapseClickedSelection(view, pos, event)
+        if (finishesDrag(view) || !isCaretClick(view, event)) return false
+        const taskCaret = taskCaretAtPoint(view, event.clientX, event.clientY)
+        return collapseClickedSelection(view, taskCaret ??
+          (canCollapseSelection(view, event) ? nearestCaret(view, pos, event.clientY) : undefined))
       },
       handleDrop: opts.handleDrop,
       handlePaste: opts.handlePaste,
@@ -179,9 +201,10 @@ export function createEditor(opts: {
           const button = target?.closest?.('[data-task-toggle]')
           const item = button?.closest('li')
           if (!item || !view.editable) {
-            if (dragged || event.detail !== 1 || view.state.selection.empty || event.defaultPrevented) return false
-            const point = view.posAtCoords({ left: event.clientX, top: event.clientY })
-            return !!point && collapseClickedSelection(view, point.pos, event)
+            if (dragged || event.detail !== 1 || !isCaretClick(view, event)) return false
+            const caret = canCollapseSelection(view, event) ? caretAtEditorPoint(view, event.clientX, event.clientY)
+              : taskCaretAtPoint(view, event.clientX, event.clientY)
+            return collapseClickedSelection(view, caret)
           }
           if (event.detail > 0 && moved) return true
           const $pos = view.state.doc.resolve(view.posAtDOM(item, 0))
@@ -201,97 +224,152 @@ export function createEditor(opts: {
   observer = createViewportObserver(editor.view, opts.scrollRoot, 200, viewportMetrics)
   for (const child of editor.view.dom.children) observer.observe(child)
   const scrollRoot = opts.scrollRoot
-  let gutterDrag: { anchor: NodeSelection; pointer: number; x: number; y: number; started: boolean } | undefined
-  let dragFrame = 0
+  type SelectionPointer = { event: PointerEvent; selection: Selection; nativeRange?: Range; received: number }
+  let pointerDown: { event: PointerEvent; press?: SelectionPointer; taskAnchor?: TextSelection; mouseHeld?: boolean } | undefined
+  let earlyRelease: SelectionPointer | undefined
+  let latestEditorPress = -Infinity
+  const insideEditor = (event: Event) => event.target instanceof globalThis.Node && scrollRoot.contains(event.target)
+  const discardStaleMouseEvent = (event: MouseEvent) => {
+    if (event.button !== 0 || event.timeStamp >= latestEditorPress || !insideEditor(event)) return false
+    // A late release/click from the previous tap must not finish the next drag.
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    return true
+  }
+  const selectionPointer = (event: PointerEvent): SelectionPointer | undefined => {
+    const view = editor.view
+    const target = event.target
+    if (!(target instanceof Element) || !scrollRoot.contains(target) || !isCaretClick(view, event) ||
+      (!canCollapseSelection(view, event) && !isGutterPress(view, event, scrollRoot) && !target.closest('li[data-checked]'))) return
+    return { event, selection: view.state.selection, nativeRange: nativeTextRange(view)?.cloneRange(), received: performance.now() }
+  }
+  const collapseTap = (press: SelectionPointer, release: PointerEvent) => {
+    const view = editor.view
+    const { event, selection } = press
+    const current = view.state.selection
+    if (selection.$from.doc !== view.state.doc || (!current.empty && !selection.eq(current)) || nativeRangeChanged(view, press.nativeRange) ||
+      reachesDragThreshold(release.clientX - event.clientX, release.clientY - event.clientY)) return false
+    if (selection.empty) {
+      return placeCaretInGutter(view, release, scrollRoot) ||
+        collapseClickedSelection(view, taskCaretAtPoint(view, release.clientX, release.clientY))
+    }
+    return collapseClickedSelection(view, caretAtEditorPoint(view, release.clientX, release.clientY))
+  }
+  const startSelectionTap = (event: PointerEvent) => {
+    if (!event.isPrimary || event.pointerType !== 'mouse' || event.button !== 0) return
+    if (discardStaleMouseEvent(event)) return
+    if (insideEditor(event)) latestEditorPress = event.timeStamp
+    const release = earlyRelease
+    earlyRelease = undefined
+    const press = selectionPointer(event)
+    if (press && release && isReorderedPointerRelease(event, release.event, press.received - release.received) &&
+      press.selection.eq(release.selection) && collapseTap(press, release.event)) {
+      // WKWebView can deliver pointerup before pointerdown. The gesture has already ended.
+      event.preventDefault()
+      return
+    }
+    pointerDown = { event, press }
+  }
+  const extendTaskDrag = (anchor: TextSelection, event: PointerEvent) => {
+    const view = editor.view
+    if (!view.editable || view.composing || anchor.$anchor.doc !== view.state.doc) return
+    const head = caretAtEditorPoint(view, event.clientX, event.clientY)
+    if (!(head instanceof TextSelection)) return
+    const range = TextSelection.create(view.state.doc, anchor.anchor, head.head)
+    if (!range.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(range).setMeta('pointer', true))
+  }
+  const finishSelectionTap = (event: PointerEvent) => {
+    if (!event.isPrimary || event.pointerType !== 'mouse' || event.button !== 0) return
+    if (discardStaleMouseEvent(event)) return
+    const down = pointerDown
+    if (down && (down.event.pointerId !== event.pointerId || event.timeStamp < down.event.timeStamp)) return
+    pointerDown = undefined
+    if (down?.taskAnchor) {
+      extendTaskDrag(down.taskAnchor, event)
+      return
+    }
+    const release = selectionPointer(event)
+    earlyRelease = down ? undefined : release
+    if (release && down?.press) collapseTap(down.press, event)
+  }
+  const cancelSelectionTap = () => {
+    pointerDown = undefined
+    earlyRelease = undefined
+  }
   const updateMousePress = (event: MouseEvent) => {
-    if (mousePress && reachesDragThreshold(event.clientX - mousePress.x, event.clientY - mousePress.y)) {
+    if (mousePress && event.timeStamp >= latestEditorPress &&
+      reachesDragThreshold(event.clientX - mousePress.x, event.clientY - mousePress.y)) {
       mousePress.dragged = true
     }
   }
-  const stopGutterDrag = () => {
-    cancelAnimationFrame(dragFrame)
-    const pointer = gutterDrag?.pointer
-    gutterDrag = undefined
-    if (pointer !== undefined && scrollRoot.hasPointerCapture(pointer)) scrollRoot.releasePointerCapture(pointer)
+  const moveMousePress = (event: MouseEvent) => {
+    updateMousePress(event)
+    if (pointerDown?.taskAnchor && event.timeStamp >= pointerDown.event.timeStamp) event.preventDefault()
   }
-  const selectDragRange = (y: number) => {
-    const drag = gutterDrag
+  const moveSelectionTap = (event: PointerEvent) => {
+    const down = pointerDown
+    if (!down || event.pointerId !== down.event.pointerId || event.timeStamp < down.event.timeStamp) return
+    // Some WebKit drag streams report zero buttons between the mouse press and release.
+    const held = (event.buttons & 1) !== 0 || down.mouseHeld
+    if (down.taskAnchor) {
+      if (held) extendTaskDrag(down.taskAnchor, event)
+      return
+    }
+    const { press } = down
+    if (!press || !reachesDragThreshold(event.clientX - press.event.clientX, event.clientY - press.event.clientY)) return
+    down.press = undefined
     const view = editor.view
-    if (!drag || view.state.doc !== drag.anchor.$from.doc || !view.editable) return
-    const page = view.dom.getBoundingClientRect()
-    const viewport = scrollRoot.getBoundingClientRect()
-    const top = viewport.height > 0 ? Math.max(page.top, viewport.top) : page.top
-    const bottom = viewport.height > 0 ? Math.min(page.bottom, viewport.bottom) : page.bottom
-    if (bottom <= top) return
-    const target = blockAtGutterPoint(view, Math.min(bottom - 1, Math.max(top, y)))
-    const selection = target && extendBlockSelection(drag.anchor, target)
-    if (selection && !selection.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(selection))
+    // A task's whitespace can place a caret without starting native text selection.
+    if (!held || !view.editable || view.composing || press.selection.$from.doc !== view.state.doc ||
+      nativeRangeChanged(view, press.nativeRange) || (!view.state.selection.empty && !view.state.selection.eq(press.selection))) return
+    const anchor = taskCaretAtPoint(view, press.event.clientX, press.event.clientY, true)
+    if (!anchor) return
+    down.taskAnchor = anchor
+    mousePress ??= { x: press.event.clientX, y: press.event.clientY, selection: press.selection,
+      nativeRange: press.nativeRange, dragged: true }
+    mousePress.dragged = true
+    if (!view.hasFocus()) view.focus()
+    extendTaskDrag(anchor, event)
   }
   const endMousePress = (event: MouseEvent) => {
-    if (event.button === 0) updateMousePress(event)
+    if (event.button !== 0 || discardStaleMouseEvent(event)) return
+    if (pointerDown && event.timeStamp >= pointerDown.event.timeStamp) pointerDown.mouseHeld = false
+    updateMousePress(event)
+    const view = editor.view
+    if (mousePress && !finishesDrag(view) && event.target instanceof globalThis.Node && scrollRoot.contains(event.target)) {
+      placeCaretInGutter(view, event, scrollRoot)
+    }
   }
   const resetMousePress = () => {
     mousePress = undefined
-    stopGutterDrag()
+    latestEditorPress = -Infinity
+    cancelSelectionTap()
   }
-  const focusGutter = (event: MouseEvent) => {
+  const recordMousePress = (event: MouseEvent) => {
+    if (discardStaleMouseEvent(event)) return
     mousePress = undefined
     const target = event.target as Element | null
     // Task toggles use the native button click. Text and gutter presses still track drag selection.
     if (event.button === 0 && !target?.closest?.('[data-task-toggle]')) {
-      mousePress = { x: event.clientX, y: event.clientY, selection: editor.state.selection, dragged: false }
+      latestEditorPress = event.timeStamp
+      if (pointerDown && event.timeStamp >= pointerDown.event.timeStamp) pointerDown.mouseHeld = true
+      mousePress = { x: event.clientX, y: event.clientY, selection: editor.state.selection,
+        nativeRange: nativeTextRange(editor.view)?.cloneRange(), dragged: false }
     }
-    placeCaretInGutter(editor.view, event, scrollRoot)
   }
-  const doubleClickGutter = (event: MouseEvent) => {
-    if (!mousePress?.dragged) selectBlockInGutter(editor.view, event, scrollRoot)
-  }
-  const startGutterDrag = (event: PointerEvent) => {
-    if (!event.isPrimary || event.button !== 0) return
-    stopGutterDrag()
-    const anchor = gutterDragAnchor(editor.view, event, scrollRoot)
-    if (!anchor) return
-    gutterDrag = { anchor, pointer: event.pointerId, x: event.clientX, y: event.clientY, started: false }
-    scrollRoot.setPointerCapture(event.pointerId)
-  }
-  const movedFromGutter = (event: PointerEvent) =>
-    gutterDrag?.pointer === event.pointerId &&
-    reachesDragThreshold(event.clientX - gutterDrag.x, event.clientY - gutterDrag.y, event.pointerType)
-  const dragFromGutter = (event: PointerEvent) => {
-    const drag = gutterDrag
-    if (!drag || drag.pointer !== event.pointerId || (!drag.started && !movedFromGutter(event))) return
-    drag.started = true
-    if (mousePress) mousePress.dragged = true
-    const y = event.clientY
-    selectDragRange(y)
-    cancelAnimationFrame(dragFrame)
-    const { top, bottom, height } = scrollRoot.getBoundingClientRect()
-    if (!height) return
-    const step = y < top + 24 ? -16 : y > bottom - 24 ? 16 : 0
-    if (!step) return
-    const scroll = () => {
-      if (gutterDrag !== drag) return
-      const before = scrollRoot.scrollTop
-      scrollRoot.scrollTop += step
-      if (scrollRoot.scrollTop === before) return
-      selectDragRange(y)
-      dragFrame = requestAnimationFrame(scroll)
+  const discardStaleClick = (event: MouseEvent) => { if (event.detail > 0) discardStaleMouseEvent(event) }
+  const cancelPointerTap = (event: PointerEvent) => {
+    if (!pointerDown || (event.pointerId === pointerDown.event.pointerId && event.timeStamp >= pointerDown.event.timeStamp)) {
+      cancelSelectionTap()
     }
-    dragFrame = requestAnimationFrame(scroll)
   }
-  const finishGutterDrag = (event: PointerEvent) => {
-    if (gutterDrag?.pointer !== event.pointerId) return
-    if (event.type === 'pointerup' && (gutterDrag.started || movedFromGutter(event))) selectDragRange(event.clientY)
-    stopGutterDrag()
-  }
-  scrollRoot.addEventListener('mousedown', focusGutter, true)
-  scrollRoot.addEventListener('dblclick', doubleClickGutter, true)
-  scrollRoot.addEventListener('pointerdown', startGutterDrag, true)
-  scrollRoot.addEventListener('lostpointercapture', finishGutterDrag)
-  window.addEventListener('pointermove', dragFromGutter, true)
-  window.addEventListener('pointerup', finishGutterDrag, true)
-  window.addEventListener('pointercancel', finishGutterDrag, true)
-  document.addEventListener('mousemove', updateMousePress, true)
+  scrollRoot.addEventListener('mousedown', recordMousePress, true)
+  scrollRoot.addEventListener('click', discardStaleClick, true)
+  window.addEventListener('pointerdown', startSelectionTap, true)
+  window.addEventListener('pointerup', finishSelectionTap, true)
+  window.addEventListener('pointermove', moveSelectionTap, true)
+  window.addEventListener('pointercancel', cancelPointerTap, true)
+  document.addEventListener('mousemove', moveMousePress, true)
   document.addEventListener('mouseup', endMousePress, true)
   window.addEventListener('blur', resetMousePress)
 
@@ -341,15 +419,13 @@ export function createEditor(opts: {
     },
     toMarkdown: () => serializeMarkdown(editor.state.doc),
     destroy() {
-      stopGutterDrag()
-      scrollRoot.removeEventListener('mousedown', focusGutter, true)
-      scrollRoot.removeEventListener('dblclick', doubleClickGutter, true)
-      scrollRoot.removeEventListener('pointerdown', startGutterDrag, true)
-      scrollRoot.removeEventListener('lostpointercapture', finishGutterDrag)
-      window.removeEventListener('pointermove', dragFromGutter, true)
-      window.removeEventListener('pointerup', finishGutterDrag, true)
-      window.removeEventListener('pointercancel', finishGutterDrag, true)
-      document.removeEventListener('mousemove', updateMousePress, true)
+      scrollRoot.removeEventListener('mousedown', recordMousePress, true)
+      scrollRoot.removeEventListener('click', discardStaleClick, true)
+      window.removeEventListener('pointerdown', startSelectionTap, true)
+      window.removeEventListener('pointerup', finishSelectionTap, true)
+      window.removeEventListener('pointermove', moveSelectionTap, true)
+      window.removeEventListener('pointercancel', cancelPointerTap, true)
+      document.removeEventListener('mousemove', moveMousePress, true)
       document.removeEventListener('mouseup', endMousePress, true)
       window.removeEventListener('blur', resetMousePress)
       observer?.disconnect()
