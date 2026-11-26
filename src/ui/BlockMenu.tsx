@@ -98,6 +98,7 @@ export default function BlockMenu(props: {
         '--block-menu-max-height': `${layout().heightLimit}px`,
       }}
       onMouseDown={(event) => { if (event.button === 0) event.preventDefault() }}
+      onContextMenu={(event) => event.preventDefault()}
     >
       <div class={['block-menu', { 'block-menu-searchable': props.query !== undefined }]}>
         <Show when={props.query !== undefined}>

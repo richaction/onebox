@@ -12,9 +12,12 @@ import AiComposerMenu from '../src/ui/AiComposerMenu'
 import WorkspaceResizeHandle, { initialSidebarWidth } from '../src/ui/WorkspaceResizeHandle'
 
 it.each([
-  { reference: 1, marker: '.editor-ai-added', reopen: '预览替换', result: 'Onebox 文档' },
-  { reference: null, marker: '.editor-ai-draft', reopen: '预览插入', result: 'onebox 文档\n\nOnebox' },
-])('previews a sidebar revision before saving (reference $reference)', async ({ reference, marker, reopen, result }) => {
+  { reference: 1, kind: 'selection', marker: '.editor-ai-added', markdown: 'onebox 文档', proposal: 'Onebox', result: 'Onebox 文档' },
+  { reference: null, kind: 'selection', marker: '.editor-ai-block-change', markdown: 'onebox 文档', proposal: 'Onebox', result: 'onebox 文档\n\nOnebox' },
+  { reference: 1, kind: 'page', marker: 'p .editor-ai-added', markdown: '# 标题\n\n第一段旧内容。\n\n第二段旧内容。',
+    proposal: '# 标题\n\n第一段**新**内容。\n\n第二段新内容。\n\n补充段落。',
+    result: '# 标题\n\n第一段**新**内容。\n\n第二段新内容。\n\n补充段落。' },
+] as const)('previews a sidebar revision before saving ($kind $reference)', async ({ reference, kind, marker, markdown, proposal, result }) => {
   let receive!: (event: AiEvent) => void
   const mocks = [
     vi.spyOn(ai, 'events').mockImplementation(async (callback) => { receive = callback; return () => {} }),
@@ -29,10 +32,9 @@ it.each([
   const page = document.createElement('div')
   document.body.append(host, page)
   const onUpdate = vi.fn()
-  const markdown = 'onebox 文档'
   const handle = createEditor({ element: page, scrollRoot: page, markdown, onUpdate })
-  handle.editor.commands.setTextSelection({ from: 1, to: 7 })
-  const quote = reference ? captureAiReference(handle.editor, 'selection', '样例.md') : undefined
+  if (kind === 'selection') handle.editor.commands.setTextSelection({ from: 1, to: 7 })
+  const quote = reference ? captureAiReference(handle.editor, kind, '样例.md') : undefined
   const dispose = render(() => createComponent(AiSidebar, {
     open: true, loading: false, title: '样例.md',
     history: { active: 0, next: 0, conversations: [] },
@@ -51,27 +53,34 @@ it.each([
     receive({ method: 'item/completed', params: {
       threadId: 'thread', turnId: 'turn',
       item: { id: 'revision', type: 'agentMessage', text: JSON.stringify({
-        answer: '已生成建议', revision: { reference, markdown: 'Onebox' },
+        answer: '已生成建议', revision: { reference, markdown: proposal },
       }) },
     } })
     afterUiEvent(() => receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } }))
     expect(page.querySelector(marker)).not.toBeNull()
+    expect(host.querySelector('.ai-change')?.textContent).toContain('已生成建议')
+    expect(host.querySelector('.ai-change pre')).toBeNull()
+    if (kind === 'page') {
+      expect(page.querySelectorAll('p .editor-ai-removed')).toHaveLength(2)
+      expect(page.querySelector('.editor-ai-added strong')?.textContent).toBe('新')
+      expect(page.querySelector('.editor-ai-block-change')?.textContent).toBe('补充段落。')
+      expect(page.querySelector('h1 .editor-ai-removed')).toBeNull()
+    }
     expect(handle.toMarkdown()).toBe(markdown)
     expect(onUpdate).not.toHaveBeenCalled()
 
-    afterUiEvent(() => action('撤销预览')!.click())
+    afterUiEvent(() => action('隐藏差异')!.click())
     expect(page.querySelector(marker)).toBeNull()
     expect(onUpdate).not.toHaveBeenCalled()
-    afterUiEvent(() => action(reopen)!.click())
+    afterUiEvent(() => action('显示差异')!.click())
     afterUiEvent(() => action('✓ 确认')!.click())
     expect(page.querySelector(marker)).toBeNull()
     expect(handle.toMarkdown()).toBe(result)
     expect(onUpdate).toHaveBeenCalledOnce()
-    afterUiEvent(() => action('撤销')!.click())
+    afterUiEvent(() => action('恢复原文')!.click())
     expect(handle.toMarkdown()).toBe(markdown)
-    if (reference) {
+    if (reference && kind === 'selection') {
       afterUiEvent(() => action('查看建议')!.click())
-      afterUiEvent(() => action(reopen)!.click())
       afterUiEvent(() => handle.editor.view.dispatch(handle.editor.state.tr.insertText('x', 2)))
       expect(page.querySelector(marker)).toBeNull()
       expect(action('✓ 确认')).toBeUndefined()

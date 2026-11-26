@@ -29,7 +29,7 @@ const SAVE_DEBOUNCE_MS = 800
 const TITLE_SAVE_DELAY_MS = 700
 const AUTO_SAVE_HINT_MS = 2200
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
-const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
+const IMAGE_FILTERS = [{ name: '图片', extensions: ['png', 'apng', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg', 'ico'] }]
 
 type Failure = '打开失败' | '保存失败' | '附件操作失败' | '读取工作区失败' | '复制失败' | '移动失败' | '移动已完成，请重新打开文档' | '导入失败' | '删除失败' | '重命名失败' | '重命名已完成，请重新打开文档'
 

@@ -100,7 +100,7 @@ fn extension(path: &Path) -> String {
 fn image_extension(ext: &str) -> bool {
     matches!(
         ext,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "svg" | "ico"
+        "png" | "apng" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "svg" | "ico"
     )
 }
 
@@ -614,6 +614,18 @@ mod tests {
         assert_eq!(first.href, same.href);
         assert_ne!(first.href, second.href);
         assert!(first.image);
+    }
+
+    #[test]
+    fn keeps_animated_images_as_inline_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = b"original image bytes";
+        for ext in ["GIF", "WebP", "APNG"] {
+            let asset = import(dir.path(), bytes.as_slice(), &format!("animation.{ext}")).unwrap();
+            assert!(asset.image);
+            assert!(asset.href.ends_with(&format!(".{}", ext.to_ascii_lowercase())));
+            assert_eq!(fs::read(dir.path().join(&asset.href)).unwrap(), bytes);
+        }
     }
 
     #[test]

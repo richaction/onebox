@@ -78,7 +78,6 @@ export function createEditor(opts: {
   onUpdate: (doc: Node) => void
   handleKeyDown?: NonNullable<EditorProps['handleKeyDown']>
   handleTextInput?: EditorProps['handleTextInput']
-  handleContextMenu?: NonNullable<EditorProps['handleDOMEvents']>['contextmenu']
   handleDrop?: EditorProps['handleDrop']
   handlePaste?: EditorProps['handlePaste']
   readImage?: (href: string) => Promise<Blob | undefined>
@@ -187,7 +186,6 @@ export function createEditor(opts: {
         return false
       },
       handleDOMEvents: {
-        contextmenu: opts.handleContextMenu,
         click(view, event) {
           const moved = !!mousePress?.dragged
           const dragged = event.detail > 0 && finishesDrag(view)

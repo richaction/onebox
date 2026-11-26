@@ -2323,9 +2323,8 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 }
 
 .block-menu-icon > svg {
-  width: 18px;
-  height: 18px;
-  color: var(--ob-text);
+  inline-size: 13px;
+  block-size: 13px;
 }
 
 .block-menu-arrow,
@@ -2705,6 +2704,8 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 }
 
 .markdown-math {
+  --ob-math-font-scale: 1.21;
+  --ob-math-ink-inset: 0.2em;
   position: relative;
   display: inline-block;
   max-width: 100%;
@@ -2726,7 +2727,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 .ProseMirror p[data-display-math] {
   position: relative;
   margin-block: 0;
-  padding-block: 0;
+  padding-block: 0.5em;
   text-align: center;
 }
 
@@ -2745,6 +2746,11 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   margin-block: 0;
 }
 
+.markdown-math > button > .ML__latex {
+  font-size: calc(1em * var(--ob-math-font-scale));
+  vertical-align: middle;
+}
+
 .markdown-math > button {
   appearance: none;
   border: 0;
@@ -2753,7 +2759,8 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   font: inherit;
   max-width: 100%;
   overflow-x: auto;
-  padding: 0 2px;
+  /* The ink can extend past the line box at the top and bottom. */
+  padding: var(--ob-math-ink-inset) 2px;
   cursor: text;
 }
 
@@ -2763,7 +2770,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   user-select: none;
 }
 
-/* Keep KaTeX's box in the line so swapping renderers cannot change the baseline. */
+/* Keep the preview's box in the line while the editor is active. */
 .markdown-math[data-math-edit='visual'] > button {
   visibility: hidden;
 }
@@ -2797,7 +2804,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   padding: 0;
   color: inherit;
   background: transparent;
-  font-size: 1.21em;
+  font-size: calc(1em * var(--ob-math-font-scale));
   cursor: text;
   --caret-color: var(--ob-text);
   --selection-color: var(--ob-text);
@@ -2829,7 +2836,7 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 .markdown-math > math-field::part(content) {
   box-sizing: border-box;
   min-inline-size: 0;
-  padding: 0;
+  padding: calc(var(--ob-math-ink-inset) / var(--ob-math-font-scale)) 0;
 }
 
 .markdown-math > math-field::part(menu-toggle),
@@ -2838,8 +2845,27 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
 }
 
 .editor-ai-source { background: var(--ob-bg-active); }
-.editor-ai-removed { color: var(--ob-text-secondary); text-decoration: line-through; }
-.editor-ai-added { color: var(--ob-accent); background: var(--ob-selection); text-decoration: none; }
+.editor-ai-removed { color: var(--ob-text-faint); text-decoration: line-through; }
+.editor-ai-added {
+  color: var(--ob-accent);
+  background: color-mix(in srgb, var(--ob-accent) 11%, transparent);
+  text-decoration: none;
+}
+.ProseMirror :is(.editor-ai-added, .editor-ai-removed) code {
+  color: inherit;
+}
+.editor-ai-block-change {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+.editor-ai-block-change.editor-ai-added {
+  padding: 4px 10px;
+  border-inline-start: 2px solid currentColor;
+  border-radius: 4px;
+}
+:is(.editor-ai-block-change, .editor-ai-block-change > div) > :first-child { margin-top: 0; }
+:is(.editor-ai-block-change, .editor-ai-block-change > div) > :last-child { margin-bottom: 0; }
+.editor-ai-review-anchor { block-size: 44px; margin-block: 6px; }
 
 .editor-inline-ai {
   position: fixed;
@@ -2887,6 +2913,18 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   .editor-inline-ai-loading { animation: none; }
 }
 .editor-inline-ai-status { flex: 1; min-inline-size: 0; color: var(--ob-text-secondary); }
+.editor-inline-ai-bar.editor-inline-ai-review {
+  gap: 8px;
+  min-height: 42px;
+  padding: 4px 10px;
+}
+.editor-inline-ai-summary {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .editor-inline-ai-bar textarea {
   flex: 1;
   min-width: 0;
@@ -2922,7 +2960,25 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   background: transparent;
 }
 .editor-inline-ai-action svg { inline-size: 15px; block-size: 15px; }
-.editor-inline-ai .editor-inline-ai-apply { color: var(--ob-accent); }
+.editor-inline-ai .editor-inline-ai-dismiss {
+  color: var(--ob-text-secondary);
+  background: var(--ob-bg-hover);
+  border-radius: 50%;
+}
+.editor-inline-ai .editor-inline-ai-stop {
+  flex-basis: 32px;
+  inline-size: 32px;
+  block-size: 32px;
+  color: var(--ob-text);
+}
+.editor-inline-ai .editor-inline-ai-apply {
+  border-radius: 50%;
+  color: var(--ob-accent);
+  background: color-mix(in srgb, var(--ob-accent) 11%, transparent);
+}
+.editor-inline-ai .editor-inline-ai-apply:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ob-accent) 18%, transparent);
+}
 .editor-inline-ai .editor-inline-ai-send:disabled { opacity: 1; pointer-events: none; }
 .editor-inline-ai-send svg {
   box-sizing: border-box;
@@ -2938,28 +2994,4 @@ code::highlight(onebox-code-deletion) { color: var(--ob-code-deletion); }
   background: var(--ob-bg-hover);
 }
 
-.editor-inline-ai-message,
-.editor-inline-ai-diff { padding: 8px 12px 11px; }
-.editor-inline-ai-diff {
-  border-top: 1px solid var(--ob-border);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.editor-inline-ai-diff del { color: var(--ob-text-secondary); }
-.editor-inline-ai-diff ins { color: var(--ob-accent); background: var(--ob-selection); text-decoration: none; }
-
-.editor-ai-draft {
-  box-sizing: border-box;
-  max-width: 100%;
-  padding: 8px 12px;
-  margin: 6px 0;
-  border-inline-start: 2px solid var(--ob-accent);
-  border-radius: 5px;
-  background: var(--ob-bg-sidebar);
-  color: var(--ob-text);
-  overflow-wrap: anywhere;
-}
-.editor-ai-draft > strong { font-size: .85em; color: var(--ob-text-secondary); }
-.editor-ai-draft > div { max-height: 18em; overflow: auto; }
-.editor-ai-draft > div > :last-child { margin-bottom: 0; }
+.editor-inline-ai-message { padding: 8px 12px 11px; }

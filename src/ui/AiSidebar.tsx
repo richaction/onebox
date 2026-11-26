@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core'
 import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show, createStore, markRaw, untrack } from 'solid-js'
-import { aiAnswerHtml, aiChangeText, decodeAiAnswer, partialAiAnswer } from '../core/aiAnswer'
+import { aiAnswerHtml, decodeAiAnswer, partialAiAnswer } from '../core/aiAnswer'
 import { resolveSavedReasoningEffort } from '../core/aiReasoning'
 import {
   applyAiRevision, captureAiInsertion, captureAiReference, clearAiAnchors, clearAiRevisionPreview,
@@ -25,6 +25,7 @@ type Message = {
   change?: 'applied' | 'dismissed' | 'undone'
   error?: string
   reviewing?: boolean
+  previewHidden?: boolean
 }
 type Conversation = { id: number; messages: Message[]; draft: string; references: AiReference[]; updatedAt?: number }
 export type AiConversationHistory = { active: number; next: number; conversations: Conversation[] }
@@ -41,11 +42,6 @@ type Job = {
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 const excerpt = (text: string) => text.replace(/\s+/gu, ' ').slice(0, 70)
 const NEW_CONVERSATION_READY = '可以开始新会话。'
-
-function ChangeExcerpt(props: { before: string; after: string; side: 'before' | 'after' }) {
-  const diff = createMemo(() => aiChangeText(props.before, props.after))
-  return <pre>{diff().prefix}<mark>{props.side === 'before' ? diff().removed : diff().added}</mark>{diff().suffix}</pre>
-}
 
 export default function AiSidebar(props: {
   open: boolean
@@ -426,7 +422,7 @@ export default function AiSidebar(props: {
     const message = messages[index]
     if (!message || job || working() || !account() || !selectedModel()) return
     clearRevisionPreview()
-    updateMessage(index, { text: '', status: 'working', revision: undefined, error: undefined })
+    updateMessage(index, { text: '', status: 'working', revision: undefined, error: undefined, previewHidden: undefined })
     void generate(message.request, index)
   }
 
@@ -518,7 +514,8 @@ export default function AiSidebar(props: {
       if (showAiRevisionPreview(editor, previewOwner, message.revision, method, reference, message.request.insertion)) {
         setActivePreview({ index, method, editor })
         setNotice('')
-        const marker = editor.view.dom.querySelector('.editor-ai-draft, .editor-ai-removed, .editor-ai-added')
+        updateMessage(index, { previewHidden: false })
+        const marker = editor.view.dom.querySelector('.editor-ai-removed, .editor-ai-added')
         marker?.scrollIntoView?.({ block: 'nearest' })
         return
       }
@@ -526,9 +523,21 @@ export default function AiSidebar(props: {
     } catch { setNotice('无法预览这条 Markdown 建议。') }
   }
 
-  function cancelRevisionPreview() {
+  function hideRevisionPreview(index: number) {
+    if (activePreview()?.index !== index) return
     clearRevisionPreview()
-    setNotice('已撤销预览。')
+    updateMessage(index, { previewHidden: true })
+  }
+
+  function showLatestRevision() {
+    const index = messages.findLastIndex((message) => message.revision && !message.change)
+    if (index >= 0 && !messages[index]?.previewHidden && !activePreview()) previewRevision(index)
+  }
+
+  function reopenRevision(index: number) {
+    const message = { ...messages[index], change: undefined, previewHidden: false }
+    updateMessage(index, { change: undefined, previewHidden: false })
+    previewRevision(index, undefined, message)
   }
 
   function confirmRevision(index: number) {
@@ -572,6 +581,7 @@ export default function AiSidebar(props: {
   createEffect(() => props.open, (open) => {
     if (!open) { setMenu(undefined); untrack(clearRevisionPreview); return }
     if (!initialized) void untrack(refreshAccount)
+    untrack(showLatestRevision)
     queueMicrotask(scrollLatest)
   })
   createEffect(() => [props.editor(), activePreview()] as const, ([editor, preview]) => {
@@ -635,7 +645,7 @@ export default function AiSidebar(props: {
           event.currentTarget.querySelector<HTMLButtonElement>(`[data-ai-composer-menu="${menu()}"] > button`)?.focus({ preventScroll: true })
           setMenu(undefined)
         } else if (sourcePreview()) setSourcePreview(undefined)
-        else if (activePreview()) cancelRevisionPreview()
+        else if (activePreview()) hideRevisionPreview(activePreview()!.index)
         else props.onClose()
       }}>
       <Show when={props.open}>
@@ -674,68 +684,65 @@ export default function AiSidebar(props: {
           <article class={['ai-message', { 'ai-message-user': message().role === 'user' }]}>
             <Show when={message().role === 'user'} fallback={
               <>
-                <Show when={message().status === 'working'} fallback={
-                  <Show when={message().text}>
-                    <div class="ai-answer" innerHTML={aiAnswerHtml(message().text, message().request.references.length)}
-                      onClick={(event) => {
-                        const citation = (event.target as Element).closest<HTMLElement>('[data-reference]')
-                        const value = citation && message().request.references[Number(citation.dataset.reference)]
-                        if (value) jump(value)
-                      }} />
+                <div class={message().revision ? 'ai-change' : undefined}>
+                  <Show when={message().status === 'working'} fallback={
+                    <Show when={message().text}>
+                      <div class="ai-answer" innerHTML={aiAnswerHtml(message().text, message().request.references.length)}
+                        onClick={(event) => {
+                          const citation = (event.target as Element).closest<HTMLElement>('[data-reference]')
+                          const value = citation && message().request.references[Number(citation.dataset.reference)]
+                          if (value) jump(value)
+                        }} />
+                    </Show>
+                  }>
+                    <div class="ai-stream" aria-live="off">{message().text || '正在生成…'}</div>
                   </Show>
-                }>
-                  <div class="ai-stream" aria-live="off">{message().text || '正在生成…'}</div>
-                </Show>
-                <Show when={message().status === 'stopped'}><div class="ai-message-status">已停止</div></Show>
-                <Show when={message().error}><div class="ai-message-status ai-error" role="status">{message().error}</div></Show>
-                <Show when={message().revision}>
-                  {(patch) => <div class="ai-change">
-                    <div class="ai-change-title">
-                      <strong>{message().change === 'applied' ? '已应用到文档' : message().change === 'undone' ? '已撤销' : message().change === 'dismissed' ? '已放弃建议'
-                        : activePreview()?.index === index ? (activePreview()?.method === 'replace' ? '替换预览' : '插入预览') : '建议变更'}</strong>
-                      <Show when={message().undo}><button type="button" class="ai-subtle" onClick={() => undo(index)}>撤销</button></Show>
-                    </div>
-                    <Show when={!message().change}>
-                      <Show when={changeReference(message())?.anchor}>
-                        <div class="ai-change-before"><span>原文</span>
-                          <ChangeExcerpt before={changeReference(message())?.text ?? ''} after={patch().markdown} side="before" />
+                  <Show when={message().status === 'stopped'}><div class="ai-message-status">已停止</div></Show>
+                  <Show when={message().error}><div class="ai-message-status ai-error" role="status">{message().error}</div></Show>
+                  <Show when={message().revision}>
+                    {(patch) => <div class="ai-change-review">
+                      <Show when={message().change}>
+                        <div class="ai-change-title">
+                          <span>{message().change === 'applied' ? '已应用到文档' : message().change === 'undone' ? '已恢复原文' : '已放弃建议'}</span>
+                          <Show when={message().undo}><button type="button" class="ai-subtle" onClick={() => undo(index)}>恢复原文</button></Show>
                         </div>
                       </Show>
-                      <div class="ai-change-after"><span>建议</span>
-                        <Show when={message().reviewing} fallback={
-                          <ChangeExcerpt before={changeReference(message())?.anchor ? changeReference(message())!.text : ''} after={patch().markdown} side="after" />
-                        }>
+                      <Show when={!message().change}>
+                        <Show when={message().reviewing}>
                           <textarea aria-label="编辑建议的 Markdown" rows={4} value={patch().markdown} maxlength={120_000}
                             onInput={(event) => {
                               if (activePreview()?.index === index) clearRevisionPreview()
                               updateMessage(index, { revision: { ...patch(), markdown: event.currentTarget.value } })
                             }} />
                         </Show>
-                      </div>
-                      <div class="ai-row ai-change-actions">
-                        <Show when={activePreview()?.index === index}>
-                          <button type="button" class="ai-primary" onClick={() => confirmRevision(index)}>✓ 确认</button>
-                          <button type="button" class="ai-subtle" aria-label="撤销预览" onClick={cancelRevisionPreview}>↶ 撤销</button>
-                        </Show>
-                        <Show when={changeReference(message())?.anchor && !changeReference(message())?.shortened &&
-                          !(activePreview()?.index === index && activePreview()?.method === 'replace')}>
-                          <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'replace')}>预览替换</button>
-                        </Show>
-                        <Show when={!(activePreview()?.index === index && activePreview()?.method === 'below')}>
-                          <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'below')}>预览插入</button>
-                        </Show>
-                        <button type="button" class="ai-subtle" aria-expanded={!!message().reviewing ? 'true' : 'false'}
-                          onClick={() => updateMessage(index, { reviewing: !message().reviewing })}>{message().reviewing ? '查看对照' : '编辑建议'}</button>
-                        <Show when={activePreview()?.index !== index}>
-                          <button type="button" class="ai-subtle" onClick={() => updateMessage(index, { change: 'dismissed', reviewing: false })}>放弃</button>
-                        </Show>
-                      </div>
-                    </Show>
-                    <Show when={message().change === 'dismissed' || message().change === 'undone'}>
-                      <button type="button" class="ai-subtle" onClick={() => updateMessage(index, { change: undefined })}>查看建议</button>
-                    </Show>
-                  </div>}
-                </Show>
+                        <div class="ai-row ai-change-actions">
+                          <Show when={activePreview()?.index === index}>
+                            <button type="button" class="ai-change-confirm" onClick={() => confirmRevision(index)}>✓ 确认</button>
+                            <button type="button" class="ai-subtle" onClick={() => hideRevisionPreview(index)}>隐藏差异</button>
+                          </Show>
+                          <Show when={activePreview()?.index !== index}>
+                            <button type="button" class="ai-subtle" onClick={() => previewRevision(index)}>显示差异</button>
+                          </Show>
+                          <Show when={changeReference(message())?.anchor &&
+                            !(activePreview()?.index === index && activePreview()?.method === 'below')}>
+                            <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'below')}>预览插入</button>
+                          </Show>
+                          <Show when={changeReference(message())?.anchor && activePreview()?.index === index && activePreview()?.method === 'below'}>
+                            <button type="button" class="ai-subtle" onClick={() => previewRevision(index, 'replace')}>预览替换</button>
+                          </Show>
+                          <button type="button" class="ai-subtle" aria-expanded={!!message().reviewing ? 'true' : 'false'}
+                            onClick={() => updateMessage(index, { reviewing: !message().reviewing })}>{message().reviewing ? '收起编辑' : '编辑建议'}</button>
+                          <Show when={activePreview()?.index !== index}>
+                            <button type="button" class="ai-subtle" onClick={() => updateMessage(index, { change: 'dismissed', reviewing: false })}>放弃</button>
+                          </Show>
+                        </div>
+                      </Show>
+                      <Show when={message().change === 'dismissed' || message().change === 'undone'}>
+                        <button type="button" class="ai-subtle" onClick={() => reopenRevision(index)}>查看建议</button>
+                      </Show>
+                    </div>}
+                  </Show>
+                </div>
                 <Show when={message().status !== 'working'}>
                   <div class="ai-row ai-reply-actions">
                     <Show when={message().text}><button type="button" class="ai-subtle" onClick={() => void copy(message().text)}>复制回复</button></Show>

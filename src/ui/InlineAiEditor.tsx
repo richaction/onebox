@@ -1,23 +1,25 @@
 import type { Editor } from '@tiptap/core'
-import { createMemo, createSignal, For, onCleanup, onSettled, Show } from 'solid-js'
-import { aiRevisionDiff, decodeAiAnswer } from '../core/aiAnswer'
+import { createSignal, onCleanup, onSettled, Show } from 'solid-js'
+import { decodeAiAnswer } from '../core/aiAnswer'
 import { resolveSavedReasoningEffort } from '../core/aiReasoning'
-import { aiReferenceRange, applyAiRevision, clearAiSource, previewAiChanges, type AiReference, type AiRevision } from '../core/aiDocument'
+import { aiReferenceRange, applyAiRevision, clearAiSource, previewInlineAiRevision, type AiReference, type AiRevision } from '../core/aiDocument'
+import { closeEmptyContinuation } from '../core/editorCaret'
 import { ai, type AiEvent } from '../io/ai'
 import { isClickFromRelease } from '../core/buttonClickTolerance'
-type EditJob = { thread?: string; turn?: string; chunks: Map<string, string>; final?: string }
+type EditJob = { thread?: string; turn?: string; chunks: Map<string, string>; final?: string; released?: true }
 
 const actionPaths = {
   send: 'M8 13V3 M4 7l4-4 4 4',
   confirm: 'M3.5 8.5 6.5 11.5 12.5 5',
   undo: 'M6 4 3 7l3 3 M3 7h6.5a3 3 0 0 1 0 6H8',
-  stop: 'M5 5h6v6H5z',
+  stop: 'M4.5 3.5h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z',
 }
 
 function ActionIcon(props: { name: keyof typeof actionPaths }) {
   return <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
     stroke-linecap="round" stroke-linejoin="round">
-    <path d={actionPaths[props.name]} />
+    <path d={actionPaths[props.name]} fill={props.name === 'stop' ? 'currentColor' : undefined}
+      stroke={props.name === 'stop' ? 'none' : undefined} />
   </svg>
 }
 
@@ -31,14 +33,10 @@ export default function InlineAiEditor(props: {
   const [working, setWorking] = createSignal(false)
   const [message, setMessage] = createSignal('')
   const [suggestion, setSuggestion] = createSignal<AiRevision>()
-  const [inPlace, setInPlace] = createSignal(false)
+  const [summary, setSummary] = createSignal('')
   const [signedOut, setSignedOut] = createSignal(false)
   const [signingIn, setSigningIn] = createSignal(false)
   const [layout, setLayout] = createSignal<{ left: number; top: number; width: number }>()
-  const diff = createMemo(() => {
-    const revision = suggestion()
-    if (revision) return aiRevisionDiff(props.reference.text, revision.markdown)
-  })
   let panel!: HTMLElement
   let input!: HTMLTextAreaElement
   let dismiss: HTMLButtonElement | undefined
@@ -50,12 +48,24 @@ export default function InlineAiEditor(props: {
   let focusFrame = 0
   let outsideClose: ReturnType<typeof setTimeout> | undefined
 
-  const stopJob = (current: EditJob | undefined) => {
-    if (current?.thread) {
-      const { thread, turn } = current
-      const stop = turn ? ai.stop(thread, turn).catch(() => {}) : Promise.resolve()
-      void stop.then(() => ai.closeThread(thread)).catch(() => {})
-    }
+  const releaseJob = (current: EditJob, interrupt = false) => {
+    if (!current.thread || current.released) return
+    const { thread, turn } = current
+    current.released = true
+    const stop = interrupt && turn ? ai.stop(thread, turn).catch(() => {
+      if (!disposed && !job && !suggestion()) setMessage('停止请求未获确认。')
+    }) : Promise.resolve()
+    void stop.then(() => ai.closeThread(thread)).catch(() => {})
+  }
+
+  function stop() {
+    const current = job
+    if (!current) return
+    job = undefined
+    if (current.turn) releaseJob(current, true)
+    setWorking(false)
+    setMessage('已停止生成。')
+    queueMicrotask(() => { if (!disposed && !job) input.focus({ preventScroll: true }) })
   }
 
   const fail = (error: unknown) => setMessage(error instanceof Error ? error.message : String(error))
@@ -96,21 +106,26 @@ export default function InlineAiEditor(props: {
 
     job = undefined
     setWorking(false)
-    void ai.closeThread(current.thread!).catch(() => {})
+    releaseJob(current)
     if (event.params.turn.status !== 'completed') {
       setMessage(event.params.turn.error?.message || '生成未完成，可以重试。')
       return
     }
     const raw = current.final ?? Array.from(current.chunks.values()).at(-1) ?? ''
-    const { revision } = decodeAiAnswer(raw)
+    const { revision, answer } = decodeAiAnswer(raw)
     if (!revision || revision.reference !== 1 || revision.markdown.trim() === props.reference.text.trim()) {
       setMessage(revision?.reference === 1 ? '建议与原文相同。' : '没有收到针对选区的修改建议，可以调整要求后重试。')
       return
     }
-    setSuggestion(revision)
-    try { setInPlace(previewAiChanges(props.editor, props.reference, revision, aiRevisionDiff(props.reference.text, revision.markdown))) }
-    catch { setInPlace(false) }
-    schedule()
+    try {
+      if (previewInlineAiRevision(props.editor, props.reference, revision)) {
+        setSummary(answer.replace(/\s+/gu, ' ').trim().slice(0, 160) || '修改建议已就绪')
+        setSuggestion(revision)
+        schedule()
+        return
+      }
+    } catch { /* Keep the original when the replacement cannot be previewed. */ }
+    setMessage('原文已变化或建议的结构不适合该选区，可以调整要求后重试。')
   }
 
   const listen = () => listener ??= ai.events(receive).catch((error: unknown) => {
@@ -163,18 +178,20 @@ export default function InlineAiEditor(props: {
       const savedEffort = localStorage.getItem(`onebox.ai.effort.${model.model}`)
       const effort = resolveSavedReasoningEffort(model, savedEffort) ?? model.defaultReasoningEffort
       current.thread = await ai.newThread()
-      if (job !== current) { stopJob(current); return }
+      if (job !== current) { releaseJob(current); return }
       const inputText = JSON.stringify({
-        request: `根据以下要求只修改引用 [1]。在 revision.markdown 中返回该选区的完整替换文本，保留未要求更改的 Markdown 格式和列表结构，将 revision.reference 设为 1。要求：${request}`,
+        request: `${props.reference.emptyLine
+          ? '引用 [1] 是空白行。根据要求为该行生成内容，在 revision.markdown 中返回要填入的 Markdown。'
+          : '根据以下要求只修改引用 [1]。在 revision.markdown 中返回该选区的完整替换文本，保留未要求更改的 Markdown 格式和列表结构。'}将 revision.reference 设为 1。请在 answer 中用一句纯文本简述改动。要求：${request}`,
         references: [{ number: 1, markdown: props.reference.text }],
       })
       const turn = await ai.start(current.thread, inputText, model.model, effort)
-      if (job === current) current.turn = turn
-      else if (disposed) { current.turn = turn; stopJob(current) }
+      current.turn = turn
+      if (job !== current) releaseJob(current, true)
     } catch (error) {
+      releaseJob(current, true)
       if (job !== current) return
       job = undefined
-      stopJob(current)
       setWorking(false)
       fail(error)
     }
@@ -196,15 +213,19 @@ export default function InlineAiEditor(props: {
     const root = props.scrollRoot
     const viewport = root.getBoundingClientRect()
     const content = props.editor.view.dom.getBoundingClientRect()
-    const start = props.editor.view.coordsAtPos(range.from, 1)
-    const end = props.editor.view.coordsAtPos(range.to, -1)
+    const start = props.editor.view.coordsAtPos(props.reference.emptyLine ? range.from + 1 : range.from, 1)
+    const end = props.reference.emptyLine ? start : props.editor.view.coordsAtPos(range.to, -1)
     const left = Math.max(viewport.left, content.left)
     const width = Math.max(0, Math.min(viewport.right, content.right) - left)
     const height = panel.offsetHeight || 31
     const below = end.bottom + 6
     const above = start.top - height - 6
-    const preferAbove = above >= viewport.top + 6 && (suggestion() || below + height > viewport.bottom)
-    const top = Math.max(viewport.top + 6, Math.min(preferAbove ? above : below, viewport.bottom - height - 6))
+    const review = suggestion() && props.editor.view.dom.querySelector('.editor-ai-review-anchor')
+    const preferAbove = above >= viewport.top + 6 && below + height > viewport.bottom
+    const targetTop = review ? review.getBoundingClientRect().top
+      : props.reference.emptyLine ? (start.top + start.bottom - height) / 2
+      : preferAbove ? above : below
+    const top = Math.max(viewport.top + 6, Math.min(targetTop, viewport.bottom - height - 6))
     setLayout({ left, top, width })
   }
   const schedule = () => {
@@ -227,7 +248,7 @@ export default function InlineAiEditor(props: {
       const inside = event.composedPath().includes(panel)
       insidePointer = inside ? event.pointerId : undefined
       insideRelease = undefined
-      if (!inside && !inPlace()) props.close(false)
+      if (!inside && !suggestion()) props.close(false)
     }
     const release = (event: PointerEvent) => {
       if (event.pointerId !== insidePointer) return
@@ -279,8 +300,12 @@ export default function InlineAiEditor(props: {
     clearTimeout(outsideClose)
     if (listener) void listener.then((close) => close()).catch(() => {})
     if (login) void ai.cancelLogin(login).catch(() => {})
-    stopJob(job)
+    if (job?.turn) releaseJob(job, true)
     job = undefined
+    if (props.reference.emptyLine && !props.editor.isDestroyed && !props.editor.view.hasFocus()) {
+      const range = aiReferenceRange(props.editor, props.reference)
+      if (range) closeEmptyContinuation(props.editor.view, range.from)
+    }
     clearAiSource(props.editor, props.reference.anchor)
   })
 
@@ -299,7 +324,8 @@ export default function InlineAiEditor(props: {
     onKeyDown={(event) => {
       if (event.key === 'Escape' && !event.isComposing) { event.stopPropagation(); props.close(true) }
     }}>
-    <form class="editor-inline-ai-bar" onSubmit={(event) => { event.preventDefault(); void send() }}>
+    <form class={['editor-inline-ai-bar', { 'editor-inline-ai-review': !!suggestion() }]}
+      onSubmit={(event) => { event.preventDefault(); void send() }}>
       <Show when={working()} fallback={<span class="editor-inline-ai-spark" aria-hidden="true">✨</span>}>
         <svg class="editor-inline-ai-loading" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor"
           stroke-width="1.5" stroke-linecap="round">
@@ -316,16 +342,17 @@ export default function InlineAiEditor(props: {
         }} />
       <Show when={working()}><span class="editor-inline-ai-status" role="status">正在工作…</span></Show>
       <Show when={suggestion()}>
-        <span class="editor-inline-ai-status">修改建议已就绪</span>
+        <span class="editor-inline-ai-summary" title={summary()}>{summary()}</span>
       </Show>
       <Show when={!working() && !suggestion() && !signedOut()}>
         <button type="submit" class="editor-inline-ai-action editor-inline-ai-send" aria-label="发送修改要求"
           title="发送修改要求" disabled={!prompt().trim()}><ActionIcon name="send" /></button>
       </Show>
       <Show when={working() || suggestion()}>
-        <button type="button" ref={(button) => { dismiss = button }} class="editor-inline-ai-action editor-inline-ai-dismiss"
+        <button type="button" ref={(button) => { dismiss = button }}
+          class={['editor-inline-ai-action editor-inline-ai-dismiss', { 'editor-inline-ai-stop': working() }]}
           aria-label={working() ? '停止生成' : '撤销预览'} title={working() ? '停止生成' : '撤销预览'}
-          onClick={() => props.close(true)}>
+          onClick={() => working() ? stop() : props.close(true)}>
           <ActionIcon name={working() ? 'stop' : 'undo'} />
         </button>
       </Show>
@@ -340,9 +367,5 @@ export default function InlineAiEditor(props: {
         {signingIn() ? '请在浏览器完成登录…' : '使用 ChatGPT 登录'}
       </button>
     </div></Show>
-    <Show when={!inPlace() && diff()}>{(change) => <div class="editor-inline-ai-diff" aria-label="修改差异">
-      <For each={change()}>{(part) => 'removed' in part && part.removed
-        ? <del>{part.value}</del> : 'added' in part && part.added ? <ins>{part.value}</ins> : part.value}</For>
-    </div>}</Show>
   </section>
 }

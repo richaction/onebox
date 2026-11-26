@@ -58,8 +58,6 @@
 
 .ai-sidebar {
   --ai-accent: light-dark(#315588, #acc7f5);
-  --ai-button: light-dark(#304f80, #b5cefa);
-  --ai-button-text: light-dark(#fff, #162539);
   --ai-width: clamp(var(--sidebar-min-width, 180px), var(--ai-preferred-width, 306px), var(--sidebar-width-limit, 460px));
 
   position: relative;
@@ -268,7 +266,7 @@
   margin-inline-end: calc((var(--ai-toolbar-glyph-width) - var(--ai-toolbar-icon-width)) / 2);
 }
 
-.ai-subtle, .ai-primary, .ai-source {
+.ai-subtle, .ai-change-confirm, .ai-source {
   padding: 5px 8px;
   border: 0;
   border-radius: 5px;
@@ -276,8 +274,12 @@
   background: transparent;
 }
 .ai-subtle:enabled:hover, .ai-source:hover:hover { background: var(--ob-bg-hover); }
-.ai-sidebar .ai-primary { background: var(--ai-button); color: var(--ai-button-text); font-weight: 550; }
-.ai-primary:enabled:hover { filter: brightness(0.92); }
+.ai-sidebar .ai-change-confirm {
+  background: color-mix(in srgb, var(--ob-accent) 11%, transparent);
+  color: var(--ob-accent);
+  font-weight: 600;
+}
+.ai-sidebar .ai-change-confirm:enabled:hover { background: color-mix(in srgb, var(--ob-accent) 18%, transparent); }
 
 .ai-message-status, .ai-notice {
   color: var(--ob-text-secondary);
@@ -336,30 +338,17 @@
   overflow: hidden;
   margin-block: 8px 4px;
   border: 1px solid var(--ob-border);
-  border-radius: 7px;
+  border-radius: 10px;
+  padding: 8px 10px;
 }
+.ai-change > .ai-answer { margin-block-end: 5px; }
 .ai-change-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: 31px;
-  padding-inline: 8px;
+  color: var(--ob-text-secondary);
 }
-.ai-change :is(.ai-change-before, .ai-change-after) { padding: 5px 8px; }
-.ai-change-before { background: light-dark(#fbf0ee, #382b2b); }
-.ai-change-after { background: light-dark(#edf5ee, #23352e); }
-.ai-change :is(.ai-change-before, .ai-change-after) > span { font-size: 11px; color: var(--ob-text-secondary); }
-.ai-change pre {
-  margin: 2px 0;
-  max-height: 11rem;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: 12px/1.55 var(--ob-font-mono);
-}
-.ai-change mark { border-radius: 2px; color: inherit; }
-.ai-change-before mark { background: light-dark(#f0d1cb, #5e3937); }
-.ai-change-after mark { background: light-dark(#c7e3cc, #365641); }
 .ai-change textarea {
   display: block;
   box-sizing: border-box;
@@ -372,7 +361,7 @@
   color: inherit;
   font: 12px/1.55 var(--ob-font-mono);
 }
-.ai-change-actions { padding: 5px 7px; }
+.ai-change-actions { margin-block-start: 5px; }
 
 .ai-compose {
   margin: 0 12px 12px;

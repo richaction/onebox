@@ -1,19 +1,8 @@
-import createDOMPurify from 'dompurify'
 import { MathfieldElement } from 'mathlive'
 import 'mathlive/fonts.css'
+import { safeMathMarkup } from './mathMarkup'
 
-const sanitizer = createDOMPurify(window)
-sanitizer.addHook('uponSanitizeAttribute', (node, attribute) => {
-  if (attribute.attrName === 'contenteditable' && !node.classList?.contains('ML__keyboard-sink')) {
-    attribute.keepAttr = false
-  }
-  if (attribute.attrName === 'style' && /url\s*\(|@import|\\/iu.test(attribute.attrValue)) attribute.keepAttr = false
-})
-MathfieldElement.createHTML = (html) => sanitizer.sanitize(html, {
-  ADD_ATTR: ['contenteditable'],
-  FORBID_TAGS: ['a', 'img', 'iframe', 'audio', 'video'],
-  FORBID_ATTR: ['href', 'xlink:href', 'src', 'srcset'],
-})
+MathfieldElement.createHTML = safeMathMarkup
 MathfieldElement.fontsDirectory = null
 MathfieldElement.soundsDirectory = null
 MathfieldElement.computeEngine = null

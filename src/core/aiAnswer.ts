@@ -1,5 +1,4 @@
 import MarkdownIt from 'markdown-it'
-import { diffChars } from 'diff'
 import type { AiRevision } from './aiDocument'
 
 const markdown = MarkdownIt({ html: false, linkify: false }).disable(['image', 'link', 'autolink'])
@@ -15,7 +14,6 @@ markdown.renderer.rules.text = (tokens, index, _options, env: { references: numb
 export function aiAnswerHtml(answer: string, references: number) {
   return markdown.render(answer, { references })
 }
-
 export function decodeAiAnswer(raw: string): { answer: string; revision?: AiRevision } {
   try {
     const data = JSON.parse(raw)
@@ -35,25 +33,4 @@ export function partialAiAnswer(raw: string) {
   if (!match) return ''
   try { return JSON.parse(match[1] + '"') as string }
   catch { return '' }
-}
-
-export function aiChangeText(before: string, after: string) {
-  const limit = Math.min(before.length, after.length)
-  let start = 0
-  while (start < limit && before[start] === after[start]) start++
-  if (start && (/[\uDC00-\uDFFF]/u.test(before[start] ?? '') || /[\uDC00-\uDFFF]/u.test(after[start] ?? ''))) start--
-  let tail = 0
-  while (tail < limit - start && before.at(-tail - 1) === after.at(-tail - 1)) tail++
-  if (tail && /[\uDC00-\uDFFF]/u.test(before[before.length - tail])) tail--
-  return {
-    prefix: before.slice(0, start), suffix: tail ? before.slice(-tail) : '',
-    removed: before.slice(start, before.length - tail), added: after.slice(start, after.length - tail),
-  }
-}
-
-export function aiRevisionDiff(before: string, after: string) {
-  const parts = diffChars(before, after, { timeout: 18, maxEditLength: 2048 })
-  if (parts) return parts
-  const { prefix, removed, added, suffix } = aiChangeText(before, after)
-  return [{ value: prefix }, { value: removed, removed: true }, { value: added, added: true }, { value: suffix }]
 }

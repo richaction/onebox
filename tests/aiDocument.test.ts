@@ -1,8 +1,8 @@
 import type { Editor } from '@tiptap/core'
 import { afterEach, describe, expect, it } from 'vitest'
-import { aiAnswerHtml, aiChangeText, decodeAiAnswer, partialAiAnswer } from '../src/core/aiAnswer'
+import { aiAnswerHtml, decodeAiAnswer, partialAiAnswer } from '../src/core/aiAnswer'
 import {
-  applyAiRevision, captureAiInsertion, captureAiReference, jumpToAiReference, undoAiRevision,
+  applyAiRevision, captureAiInsertion, captureAiReference, clearAiSource, jumpToAiReference, previewInlineAiRevision, undoAiRevision,
 } from '../src/core/aiDocument'
 import { createEditor, type EditorHandle } from '../src/core/editor'
 import { ListRowsSelection } from '../src/core/listSelection'
@@ -82,6 +82,30 @@ describe('AI changes in Markdown', () => {
     expect(markdown).toMatch(/^[*-] \[ \] third$/m)
   })
 
+  it('previews formatting and paragraph breaks in the selected passage before saving', () => {
+    const original = '**中文**和 `code`，原文。\n\n下段。'
+    const editor = mount(original)
+    editor.commands.setTextSelection({ from: 1, to: editor.state.doc.firstChild!.nodeSize - 1 })
+    const captured = captureAiReference(editor, 'selection', 'Draft.md')!
+    const reference = { ...captured, anchor: captured.anchor! }
+    const revision = { markdown: '**中文**和 `code`，新内容。\n\n**补充说明**。', reference: 1 }
+
+    expect(previewInlineAiRevision(editor, reference, revision)).toBe(true)
+    expect(editor.view.dom.querySelector('strong')?.textContent).toBe('中文')
+    expect(editor.view.dom.querySelector('.editor-ai-removed')?.textContent).toBe('原文')
+    expect(editor.view.dom.querySelector('.editor-ai-added strong')?.textContent).toBe('补充说明')
+    expect(editor.view.dom.querySelectorAll('.editor-ai-added br')).toHaveLength(2)
+    expect(handle!.toMarkdown()).toBe(original)
+    clearAiSource(editor, reference.anchor)
+    expect(editor.view.dom.querySelector('.editor-ai-added, .editor-ai-removed')).toBeNull()
+
+    const nextReference = captureAiReference(editor, 'selection', 'Draft.md')!
+    expect(applyAiRevision(editor, revision, 'replace', nextReference, 0)).toBeDefined()
+    expect(handle!.toMarkdown()).toBe(revision.markdown + '\n\n下段。')
+    expect(editor.commands.undo()).toBe(true)
+    expect(handle!.toMarkdown()).toBe(original)
+  })
+
   it('preserves a manually edited passage and does not undo a proposal after another edit inside it', () => {
     const editor = mount('Keep the target sentence.')
     const position = select(editor, 'target')
@@ -115,9 +139,13 @@ describe('AI changes in Markdown', () => {
 
 describe('AI reply rendering', () => {
   it('keeps complete characters on each side of the change highlight', () => {
-    expect(aiChangeText('状态 🟢 完成', '状态 🔵 完成')).toEqual({
-      prefix: '状态 ', removed: '🟢', added: '🔵', suffix: ' 完成',
-    })
+    const editor = mount('状态 🟢 完成')
+    select(editor, '状态 🟢 完成')
+    const captured = captureAiReference(editor, 'selection', 'Draft.md')!
+    expect(previewInlineAiRevision(editor, { ...captured, anchor: captured.anchor! },
+      { markdown: '状态 🔵 完成', reference: 1 })).toBe(true)
+    expect(editor.view.dom.querySelector('.editor-ai-removed')?.textContent).toBe('🟢')
+    expect(editor.view.dom.querySelector('.editor-ai-added')?.textContent).toBe('🔵')
   })
 
   it('streams a structured answer and exposes only valid citations as controls', () => {

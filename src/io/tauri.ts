@@ -101,6 +101,7 @@ export const desktopWorkspace = {
 
 const imageMimes: Readonly<Record<string, string>> = {
   png: 'image/png',
+  apng: 'image/apng',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   webp: 'image/webp',

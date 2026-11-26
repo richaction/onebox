@@ -15,7 +15,6 @@ function prepareVisualMath() {
 }
 
 const formulaCache = new Map<string, string>()
-let typesetter: typeof import('./katexEngine').default | undefined
 
 const richCommands = /\\(?:href|url|includegraphics|html\w*|class|cssId|style)\b/u
 
@@ -70,29 +69,41 @@ export const MarkdownMath = Node.create({
       const canRenderVisually = () => node.attrs.latex.length < 4_000 && !richCommands.test(node.attrs.latex)
 
       const keyOf = () => JSON.stringify([node.attrs.display, node.attrs.latex])
-      function paint(key: string) {
-        if (!typesetter || disposed || keyOf() !== key) return
-        let html = formulaCache.get(key)
-        if (html === undefined) {
-          html = typesetter.renderToString(node.attrs.latex, {
-            displayMode: node.attrs.display, throwOnError: false, trust: false, maxExpand: 100, maxSize: 25,
-          })
+      function paint(key: string, typeset: () => string | undefined) {
+        if (disposed || keyOf() !== key) return false
+        const cached = formulaCache.get(key)
+        const html = cached ?? typeset()
+        if (!html) return false
+        if (cached === undefined) {
           if (html.length < 32_768) {
             if (formulaCache.size >= 128) formulaCache.delete(formulaCache.keys().next().value!)
             formulaCache.set(key, html)
           }
         }
         preview.innerHTML = html
+        return true
       }
 
       async function render() {
         if (rendering || disposed || node.attrs.latex.length > 20_000) return
         rendering = true
         const key = keyOf()
+        const { latex, display } = node.attrs
         try {
-          typesetter ??= (await import('./katexEngine')).default
-          if (formulaCache.has(key)) paint(key)
-          else await paintPreview(() => paint(key))
+          const cached = formulaCache.get(key)
+          if (cached !== undefined) {
+            preview.innerHTML = cached
+            return
+          }
+          if (canRenderVisually()) {
+            const painted = await import('./mathPreview').then(({ previewMath }) =>
+              paintPreview(() => paint(key, () => previewMath(latex, display)))).catch(() => false)
+            if (painted || disposed || keyOf() !== key) return
+          }
+          const { default: katex } = await import('./katexEngine')
+          await paintPreview(() => paint(key, () => katex.renderToString(latex, {
+            displayMode: display, throwOnError: false, trust: false, maxExpand: 100, maxSize: 25,
+          })))
         } finally {
           rendering = false
           if (!disposed && key !== keyOf()) void render().catch(() => {})
@@ -110,6 +121,8 @@ export const MarkdownMath = Node.create({
 
       function stopEditing() {
         const input = active
+        const content = field?.shadowRoot?.querySelector('[part="content"]')
+        if (content) preview.scrollLeft = content.scrollLeft
         active = undefined
         input?.remove()
         field = undefined
@@ -217,8 +230,16 @@ export const MarkdownMath = Node.create({
           finish(true, currentLatex(), direction)
         })
 
-        input.setValue(node.attrs.latex)
+        const latex: string = node.attrs.latex
+        input.setValue(latex)
         dom.append(input)
+        // MathLive draws synthetic placeholders in the omitted cells of short aligned rows.
+        // Reparse them as explicit empty cells so editing uses the same layout as the preview.
+        if (!input.errors.length && /\\begin\s*\{aligned\}/u.test(latex) &&
+          !/\\placeholder\b|#[?@\d]/u.test(latex) && input.getValue('latex-expanded').includes('\\placeholder{}')) {
+          input.setValue(input.getValue('latex-without-placeholders'))
+          input.resetUndo()
+        }
         if (input.errors.length) {
           input.remove()
           return undefined
@@ -236,13 +257,20 @@ export const MarkdownMath = Node.create({
         if (active || !pinFormula()) return
         if (event.altKey || !canRenderVisually()) { editSource(); return }
         const pos = getPos()
+        const scrollLeft = preview.scrollLeft
         try {
           const engine = visual ?? await prepareVisualMath()
           if (disposed || active || !editor.isEditable || editor.state.selection.head !== pos) return
           const input = installField(engine)
           if (input) {
-            const at = event.detail ? input.getOffsetFromPoint(event.clientX, event.clientY) : -1
-            input.position = at < 0 ? input.lastOffset : at
+            // The field can re-render its atoms on the first frame after opening.
+            requestAnimationFrame(() => {
+              if (disposed || active !== input) return
+              const content = input.shadowRoot?.querySelector('[part="content"]')
+              if (content) content.scrollLeft = scrollLeft
+              const at = event.detail ? input.getOffsetFromPoint(event.clientX, event.clientY) : -1
+              input.position = at < 0 ? input.lastOffset : at
+            })
             return
           }
         } catch { /* Fall back to the source editor if visual editing is unavailable. */ }

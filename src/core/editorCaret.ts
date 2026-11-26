@@ -17,7 +17,8 @@ function removeEmptyContinuation(state: EditorState) {
     .setMeta(emptyContinuation, null).setMeta('addToHistory', false).setMeta('preventUpdate', true)
 }
 
-export function closeEmptyContinuation(view: EditorView) {
+export function closeEmptyContinuation(view: EditorView, at?: number) {
+  if (at !== undefined && emptyContinuation.getState(view.state) !== at) return
   const cleanup = removeEmptyContinuation(view.state)
   if (cleanup) view.dispatch(cleanup)
 }
@@ -51,7 +52,10 @@ export function emptyContinuationPlugin() {
         blur(view) {
           // Let the click reach its target before closing the line changes the layout.
           if (emptyContinuation.getState(view.state) != null) queueMicrotask(() => {
-            if (!view.isDestroyed && !view.hasFocus() && !view.composing) closeEmptyContinuation(view)
+            const focus = view.dom.ownerDocument.activeElement
+            if (!view.isDestroyed && !view.hasFocus() && !view.composing && !focus?.closest('.editor-inline-ai')) {
+              closeEmptyContinuation(view)
+            }
           })
           return false
         },

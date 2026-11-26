@@ -5,11 +5,13 @@ import { Selection, TextSelection } from '@tiptap/pm/state'
 import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onSettled, Show } from 'solid-js'
 import { Portal } from '@solidjs/web'
 import { captureAiReference, highlightAiSource, type AiReference } from '../core/aiDocument'
+import { isBlockSelection } from '../core/blockSelection'
 import {
   blockCommands, chartCommands, insertCommands, mermaidCommand, slashTrigger, tableCommands,
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
 import { createEditor, type EditorHandle } from '../core/editor'
+import { caretAtEditorPoint, nearestCaret } from '../core/editorCaret'
 import { listTextSelectionRects } from '../core/listSelection'
 import { trackMenuPress } from '../core/menuPress'
 import BlockMenu from './BlockMenu'
@@ -24,7 +26,7 @@ interface Popup {
   above: number
   trigger?: NonNullable<ReturnType<typeof slashTrigger>>
   inTable: boolean
-  quoteRange?: Range
+  aiRange?: Range
   selection: Selection
 }
 
@@ -100,17 +102,18 @@ export default function EditorShell(props: {
     const sections: [string, readonly Action[], 'inline'?][] = current.inTable
       ? [['表格操作', tableCommands]]
       : [
-        [current.trigger ? '基本区块' : '转换区块', blockCommands],
+        ['转换区块', blockCommands],
         ['插入内容', [mermaidCommand, chartsAction, ...insertCommands]],
         ['媒体与附件', props.onInsertAttachment ? attachmentItems : []],
       ]
-    if (current.quoteRange) {
+    if (current.aiRange) {
       const { selection } = current
+      const hasSelection = current.aiRange.from !== current.aiRange.to
       if (selection instanceof TextSelection && !selection.empty && !selection.$from.parent.type.spec.code) {
         sections.unshift(['行内格式', formatActions, 'inline'])
       }
       const actions = []
-      if (props.onQuoteSelection) actions.push(quoteAction)
+      if (hasSelection && props.onQuoteSelection) actions.push(quoteAction)
       if (props.inlineAi && !inlineEdit()) actions.push(editAction)
       if (actions.length) sections.unshift(['AI', actions])
     }
@@ -150,17 +153,17 @@ export default function EditorShell(props: {
   }
 
   const closeInlineEdit = (restoreFocus: boolean) => {
-    setInlineEdit(undefined)
     if (restoreFocus) handle?.editor.view.focus()
+    setInlineEdit(undefined)
   }
 
   const startInlineEdit = (range: Range) => {
     const editor = handle?.editor
     if (!props.inlineAi || !editor?.isEditable || inlineEdit()) return false
-    const reference = captureAiReference(editor, 'selection', '', range)
+    const reference = captureAiReference(editor, range.from === range.to ? 'empty-line' : 'selection', '', range)
     if (!reference || reference.anchor === undefined) return false
     closeSelectionMenu()
-    highlightAiSource(editor, reference.anchor)
+    if (!reference.emptyLine) highlightAiSource(editor, reference.anchor)
     setInlineEdit({ ...reference, anchor: reference.anchor })
     return true
   }
@@ -224,7 +227,7 @@ export default function EditorShell(props: {
     })
   }
 
-  const showMenu = (next: Omit<Popup, 'selection'>) => {
+  const showMenu = (next: Omit<Popup, 'selection' | 'aiRange'>) => {
     const editor = handle?.editor
     if (!editor) return
     closeSelectionMenu()
@@ -233,7 +236,14 @@ export default function EditorShell(props: {
       setKeyboardHighlight(true)
       setHighlighted(0)
     }
-    const current = { ...next, selection: editor.state.selection }
+    const { selection, schema } = editor.state
+    const { $from } = selection
+    const trigger = next.trigger
+    const emptyLine = selection.empty && $from.parent.type === schema.nodes.paragraph &&
+      (trigger ? trigger.from === $from.start() && trigger.to === $from.end() : !$from.parent.content.size)
+    const aiRange = emptyLine || (!selection.empty && !isBlockSelection(selection))
+      ? { from: trigger?.from ?? selection.from, to: trigger?.from ?? selection.to } : undefined
+    const current = { ...next, selection, aiRange }
     updatePopup(current)
     if (!next.trigger) {
       const heading = getGroups(current).flatMap((group) => group.items).find((option) => option.current)
@@ -262,8 +272,11 @@ export default function EditorShell(props: {
     }
     closeMenu()
     if ('ai' in item) {
-      if (item.ai === 'quote') props.onQuoteSelection?.(current.quoteRange)
-      else if (current.quoteRange) startInlineEdit(current.quoteRange)
+      if (item.ai === 'quote') props.onQuoteSelection?.(current.aiRange)
+      else if (current.aiRange) {
+        if (current.trigger) editor.commands.deleteRange(current.trigger)
+        startInlineEdit(current.aiRange)
+      }
       return
     }
     if ('attachment' in item) {
@@ -390,26 +403,36 @@ export default function EditorShell(props: {
             return false
         }
       },
-      handleContextMenu(view, event) {
-        if (!view.editable || view.composing || !handle) return false
-        const point = view.posAtCoords({ left: event.clientX, top: event.clientY })
-        if (!point) return false
-        const { selection, doc } = view.state
-        if (selection.empty || point.pos < selection.from || point.pos > selection.to) {
-          view.dispatch(view.state.tr.setSelection(Selection.near(doc.resolve(point.pos))))
-        }
-        if (!view.hasFocus()) view.focus()
-        event.preventDefault()
-        const selected = view.state.selection
-        showMenu({
-          x: event.clientX, y: event.clientY, above: event.clientY, inTable: handle.editor.isActive('table'),
-          quoteRange: selected.empty ? undefined : { from: selected.from, to: selected.to },
-        })
-        return true
-      },
     })
 
     const { editor } = handle
+    const openContextMenu = (event: MouseEvent) => {
+      const { view } = editor
+      if (!view.editable || view.composing ||
+        (event.type !== 'contextmenu' && event.button !== 2 && !(event.button === 0 && event.ctrlKey)) ||
+        (event.target as Element | null)?.closest?.('input, textarea, select, math-field')) return
+      // Handle the secondary press before WebKit can select the empty line.
+      event.preventDefault()
+      event.stopPropagation()
+      const { clientX: x, clientY: y } = event
+      if (currentPopup && !currentPopup.trigger && currentPopup.x === x && currentPopup.y === y) return
+
+      const { selection, doc, schema } = view.state
+      const paragraph = (event.target as Element | null)?.closest?.('p')
+      const hit = paragraph && view.dom.contains(paragraph) ? doc.resolve(view.posAtDOM(paragraph, 0)) : undefined
+      if (hit?.parent.type === schema.nodes.paragraph && !hit.parent.content.size) {
+        const caret = new TextSelection(hit)
+        if (!caret.eq(selection)) view.dispatch(view.state.tr.setSelection(caret))
+      } else {
+        const point = view.posAtCoords({ left: x, top: y })
+        if (!point || selection.empty || isBlockSelection(selection) || point.pos < selection.from || point.pos > selection.to) {
+          const caret = point ? nearestCaret(view, point.pos, y) : caretAtEditorPoint(view, x, y)
+          if (caret instanceof TextSelection && !caret.eq(selection)) view.dispatch(view.state.tr.setSelection(caret))
+        }
+      }
+      if (!view.hasFocus()) view.focus()
+      showMenu({ x, y, above: y, inTable: editor.isActive('table') })
+    }
     editor.on('transaction', ({ transaction }) => {
       const current = currentPopup
       if (!transaction.docChanged && !transaction.selectionSet) return
@@ -478,12 +501,18 @@ export default function EditorShell(props: {
     const layout = new ResizeObserver(updateLayout)
     layout.observe(scrollRoot, { box: 'border-box' })
     document.addEventListener('pointerdown', closeOutside, true)
+    scrollRoot.addEventListener('pointerdown', openContextMenu, true)
+    scrollRoot.addEventListener('mousedown', openContextMenu, true)
+    scrollRoot.addEventListener('contextmenu', openContextMenu, true)
     scrollRoot.addEventListener('scroll', closeOnScroll, true)
     window.addEventListener('resize', closeOnScroll)
     window.addEventListener('blur', closeOnBlur)
     props.onReady(handle)
     return () => {
       document.removeEventListener('pointerdown', closeOutside, true)
+      scrollRoot.removeEventListener('pointerdown', openContextMenu, true)
+      scrollRoot.removeEventListener('mousedown', openContextMenu, true)
+      scrollRoot.removeEventListener('contextmenu', openContextMenu, true)
       menuPress.destroy()
       scrollRoot.removeEventListener('scroll', closeOnScroll, true)
       window.removeEventListener('resize', closeOnScroll)

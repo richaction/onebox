@@ -1,18 +1,26 @@
 import type { Editor } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
-import { Fragment, Slice, type Node as DocumentNode } from '@tiptap/pm/model'
+import { DOMSerializer, Fragment, Slice, type Node as DocumentNode } from '@tiptap/pm/model'
+import { diffArrays } from 'diff'
 import { Plugin, PluginKey, Selection, TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state'
 import { ReplaceStep } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
-import { aiAnswerHtml, aiRevisionDiff } from './aiAnswer'
+import { aiAnswerHtml } from './aiAnswer'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 
 type Anchor = { from: number; to: number; original: Slice }
 type AnchorEdit = { add?: [number, Anchor]; remove?: number; clear?: boolean }
-type InlineChange = { value: string; added?: boolean; removed?: boolean }
+type InlineChange = { value: DocumentNode[]; added?: boolean; removed?: boolean }
+type InlineChangeRun = { offset: number; parts: readonly InlineChange[] }
+type BlockAddition = { offset: number; blocks: DocumentNode[] }
 type PreviewOwner = number | symbol
-type DraftPreview = { id: number; html: string; method: AiRevisionMethod; reference?: AiReference; insertion: number }
-type InlineSource = { owner: PreviewOwner; anchor?: number; changes?: readonly InlineChange[]; draft?: DraftPreview }
+type DraftPreview = { id: number; html: string; method: AiRevisionMethod; reference?: AiReference; insertion: number; inDocument?: true }
+type InlineSource = {
+  owner: PreviewOwner
+  anchor?: number
+  changes?: { runs: InlineChangeRun[]; additions?: BlockAddition[] }
+  draft?: DraftPreview
+}
 const anchors = new PluginKey<ReadonlyMap<number, Anchor>>('onebox-ai-anchors')
 const inlineSource = new PluginKey<InlineSource | null>('onebox-ai-inline-source')
 let nextAnchor = 0
@@ -61,22 +69,22 @@ export function aiInlineSourcePlugin() {
         const anchor = resolveAnchor(state, source?.anchor)
         if (!anchor || anchor.from === anchor.to) return DecorationSet.empty
         if (source?.changes) {
-          const decorations: Decoration[] = []
-          let position = anchor.from
-          for (const part of source.changes) {
-            if (!part.value) continue
-            if (part.added) {
-              decorations.push(Decoration.widget(position, (view) => {
-                const inserted = view.dom.ownerDocument.createElement('ins')
-                inserted.className = 'editor-ai-added'
-                inserted.textContent = part.value
-                return inserted
-              }, { side: -1, key: `inline-ai-${position}-${part.value}` }))
-            } else {
-              const end = position + part.value.length
-              if (part.removed) decorations.push(Decoration.inline(position, end, { class: 'editor-ai-removed' }))
-              position = end
+          const decorations = typeof source.owner === 'number' ? [reviewAnchor(state, anchor.from)] : []
+          for (const { offset, parts } of source.changes.runs) {
+            let position = anchor.from + offset
+            for (const part of parts) {
+              if (!part.value.length) continue
+              if (part.added) {
+                decorations.push(addedContent(position, part.value))
+              } else {
+                const end = position + part.value.reduce((size, node) => size + node.nodeSize, 0)
+                if (part.removed) decorations.push(Decoration.inline(position, end, { class: 'editor-ai-removed' }))
+                position = end
+              }
             }
+          }
+          for (const { offset, blocks } of source.changes.additions ?? []) {
+            decorations.push(addedContent(anchor.from + offset, blocks, true))
           }
           return DecorationSet.create(state.doc, decorations)
         }
@@ -84,6 +92,28 @@ export function aiInlineSourcePlugin() {
       },
     },
   })
+}
+
+function addedContent(position: number, nodes: DocumentNode[], block = false) {
+  return Decoration.widget(position, (view) => {
+    const document = view.dom.ownerDocument
+    const inserted = document.createElement(block ? 'div' : 'ins')
+    inserted.className = block ? 'editor-ai-block-change' : 'editor-ai-added'
+    const serializer = DOMSerializer.fromSchema(view.state.schema)
+    if (block) {
+      for (const node of nodes) {
+        const paragraph = serializer.serializeNode(node, { document })
+        const highlight = document.createElement('ins')
+        highlight.className = 'editor-ai-added'
+        highlight.append(...Array.from(paragraph.childNodes))
+        paragraph.appendChild(highlight)
+        inserted.appendChild(paragraph)
+      }
+    } else {
+      inserted.append(serializer.serializeFragment(Fragment.fromArray(nodes), { document }))
+    }
+    return inserted
+  }, { side: -1, ignoreSelection: true })
 }
 
 export function highlightAiSource(editor: Editor, anchor: number) {
@@ -96,22 +126,100 @@ export function highlightAiSource(editor: Editor, anchor: number) {
   editor.view.dispatch(tr.setMeta(inlineSource, { owner: anchor, anchor } satisfies InlineSource).setMeta('addToHistory', false))
 }
 
-export function previewAiChanges(editor: Editor, reference: AiReference & { anchor: number }, revision: AiRevision,
-  changes: readonly InlineChange[], owner: PreviewOwner = reference.anchor,
-) {
-  if (revision.markdown.length > 4000 || reference.text.length > 4000) return false
-  const { doc, schema, tr } = editor.state
-  const range = resolve(editor, reference.anchor)
-  if (!range || !doc.resolve(range.from).sameParent(doc.resolve(range.to))) return false
-  const before = range.original.content.firstChild
-  if (range.original.content.childCount !== 1 || !before?.isText || before.marks.length || before.text !== reference.text) return false
-  const parsed = parseMarkdown(revision.markdown, schema)
-  const block = parsed.firstChild
-  if (parsed.childCount !== 1 || block?.type.name !== 'paragraph' || block.childCount !== 1 ||
-    !block.firstChild?.isText || block.firstChild.marks.length || block.firstChild.text !== revision.markdown) return false
-  editor.view.dispatch(tr.setMeta(inlineSource, { owner, anchor: reference.anchor, changes } satisfies InlineSource)
-    .setMeta('addToHistory', false))
-  return true
+function inlineTokens(content: Fragment) {
+  const tokens: DocumentNode[] = []
+  content.forEach((node) => {
+    if (node.isText) for (const character of node.text!) tokens.push(node.type.schema.text(character, node.marks))
+    else tokens.push(node)
+  })
+  return tokens
+}
+
+function diffInline(before: DocumentNode[], after: DocumentNode[]): readonly InlineChange[] {
+  return diffArrays(before, after, { comparator: (a, b) => a.eq(b), timeout: 10, maxEditLength: 2048 })
+    ?? [{ value: before, removed: true }, { value: after, added: true }]
+}
+
+function diffTextBlocks(original: Slice, replacement: Slice, baseOffset: number): InlineSource['changes'] {
+  if (original.openStart || original.openEnd || replacement.openStart || replacement.openEnd) return
+  const before: DocumentNode[] = []
+  const after: DocumentNode[] = []
+  original.content.forEach(node => before.push(node))
+  replacement.content.forEach(node => after.push(node))
+  const simple = (node: DocumentNode) => {
+    if (!['paragraph', 'heading'].includes(node.type.name)) return false
+    for (let index = 0; index < node.childCount; index++) {
+      const child = node.child(index)
+      if (!child.isText && child.type.name !== 'hardBreak') return false
+    }
+    return true
+  }
+  if (!before.every(simple) || !after.every(simple)) return
+  const groups = diffArrays(before, after, { comparator: (a, b) => a.eq(b), timeout: 12, maxEditLength: 256 })
+  if (!groups) return
+  const runs: InlineChangeRun[] = []
+  const additions: BlockAddition[] = []
+  let offset = baseOffset
+  let removed: DocumentNode[] = []
+  let added: DocumentNode[] = []
+  const flush = () => {
+    for (const [index, node] of removed.entries()) {
+      const next = added[index]
+      const tokens = inlineTokens(node.content)
+      if (next?.sameMarkup(node)) {
+        runs.push({ offset: offset + 1, parts: diffInline(tokens, inlineTokens(next.content)) })
+      } else {
+        runs.push({ offset: offset + 1, parts: [{ value: tokens, removed: true }] })
+        if (next) additions.push({ offset: offset + node.nodeSize, blocks: [next] })
+      }
+      offset += node.nodeSize
+    }
+    if (added.length > removed.length) additions.push({ offset, blocks: added.slice(removed.length) })
+    removed = []
+    added = []
+  }
+  for (const group of groups) {
+    if (group.removed) removed.push(...group.value)
+    else if (group.added) added.push(...group.value)
+    else {
+      flush()
+      for (const node of group.value) offset += node.nodeSize
+    }
+  }
+  flush()
+  return { runs, additions }
+}
+
+function showInlineChanges(editor: Editor, owner: PreviewOwner, anchor: number, patch: NonNullable<ReturnType<typeof prepareRevision>>) {
+  const { doc, tr, schema } = editor.state
+  const range = resolve(editor, anchor)
+  if (!range || range.original.size > 4000 || patch.slice.size > 4000) return false
+  const display = (changes: NonNullable<InlineSource['changes']>) => {
+    editor.view.dispatch(tr.setMeta(inlineSource, { owner, anchor, changes } satisfies InlineSource)
+      .setMeta('addToHistory', false))
+    return true
+  }
+  const start = doc.resolve(range.from)
+  if (!start.sameParent(doc.resolve(range.to)) || !start.parent.isTextblock) {
+    const changes = diffTextBlocks(doc.slice(patch.from, patch.to), patch.slice, patch.from - range.from)
+    return changes ? display(changes) : false
+  }
+  const before = inlineTokens(range.original.content)
+  const after: DocumentNode[] = []
+  if (patch.from === range.from && patch.to === range.to) {
+    after.push(...inlineTokens(patch.slice.content))
+  } else {
+    const paragraphs: DocumentNode[] = []
+    patch.slice.content.forEach((node) => paragraphs.push(node))
+    if (!paragraphs.every((node) => node.type === start.parent.type) || !schema.nodes.hardBreak) return false
+    paragraphs.forEach((node, index) => {
+      if (index) after.push(schema.nodes.hardBreak.create(), schema.nodes.hardBreak.create())
+      after.push(...inlineTokens(node.content))
+    })
+  }
+  const hasUnsupportedNode = (node: DocumentNode) => !node.isText && node.type !== schema.nodes.hardBreak
+  if (before.some(hasUnsupportedNode) || after.some(hasUnsupportedNode)) return false
+  return display({ runs: [{ offset: 0, parts: diffInline(before, after) }] })
 }
 
 export function clearAiSource(editor: Editor, anchor: number) {
@@ -125,6 +233,7 @@ export type AiReference = {
   label: string
   text: string
   anchor?: number
+  emptyLine?: true
   page?: true
   external?: true
   shortened?: true
@@ -176,18 +285,26 @@ function listSliceParent(doc: DocumentNode, from: number, to: number, slice: Sli
     slice.content.firstChild?.type.name === 'listItem') return parent
 }
 
-export function captureAiReference(editor: Editor, kind: 'selection' | 'block' | 'page', title: string,
+export function captureAiReference(editor: Editor, kind: 'selection' | 'empty-line' | 'block' | 'page', title: string,
   range?: { from: number; to: number },
 ): AiReference | undefined {
   const { doc, selection, tr } = editor.state
   const { $from } = selection
+  if (kind === 'empty-line') {
+    const line = range ? doc.resolve(range.from) : $from
+    if (line.parent.type !== editor.schema.nodes.paragraph || line.parent.content.size) return
+    const anchor = track(tr, line.before(), line.after())
+    editor.view.dispatch(tr.setMeta('addToHistory', false))
+    return { label: '空白行', text: '', anchor, emptyLine: true }
+  }
   let { from, to } = kind === 'selection' && range ? range : selection
   if (kind === 'page') {
     const text = referenceText(doc, 0, doc.content.size)
-    return text.trim() ? {
-      label: title, page: true, text: text.slice(0, REFERENCE_LIMIT),
-      shortened: doc.content.size > REFERENCE_LIMIT || text.length > REFERENCE_LIMIT ? true : undefined,
-    } : undefined
+    if (!text.trim()) return
+    const shortened = doc.content.size > REFERENCE_LIMIT || text.length > REFERENCE_LIMIT
+    const anchor = shortened ? undefined : track(tr, 0, doc.content.size)
+    if (anchor !== undefined) editor.view.dispatch(tr.setMeta('addToHistory', false))
+    return { label: title, page: true, text: text.slice(0, REFERENCE_LIMIT), anchor, shortened: shortened ? true : undefined }
   }
   if (kind === 'block') {
     const level = blockDepth($from)
@@ -265,6 +382,16 @@ function revisionLocation(state: EditorState, method: AiRevisionMethod, referenc
   return { from: pos, to: pos, original: null }
 }
 
+function reviewAnchor(state: EditorState, from: number) {
+  const start = state.doc.resolve(from)
+  return Decoration.widget(start.parent.isTextblock ? start.before() : from, (view) => {
+    const anchor = view.dom.ownerDocument.createElement('div')
+    anchor.className = 'editor-ai-review-anchor'
+    anchor.setAttribute('aria-hidden', 'true')
+    return anchor
+  }, { side: -1, ignoreSelection: true, key: 'ai-review-anchor' })
+}
+
 function draftDecorations(state: EditorState, draft: DraftPreview) {
   const location = revisionLocation(state, draft.method, draft.reference, draft.insertion)
   if (!location) return DecorationSet.empty
@@ -272,7 +399,8 @@ function draftDecorations(state: EditorState, draft: DraftPreview) {
   const decorations: Decoration[] = []
   let pos = location.to
   if (draft.method === 'replace') {
-    decorations.push(Decoration.inline(location.from, location.to, { class: 'editor-ai-source' }))
+    if (draft.inDocument) decorations.push(reviewAnchor(state, location.from))
+    decorations.push(Decoration.inline(location.from, location.to, { class: 'editor-ai-removed' }))
     const end = state.doc.resolve(pos)
     const depth = blockDepth(end)
     if (depth) pos = end.after(depth)
@@ -280,12 +408,10 @@ function draftDecorations(state: EditorState, draft: DraftPreview) {
   decorations.push(Decoration.widget(pos, (view) => {
     const doc = view.dom.ownerDocument
     const card = doc.createElement('div')
-    card.className = 'editor-ai-draft'
-    const title = doc.createElement('strong')
-    title.textContent = draft.method === 'replace' ? 'AI 替换预览' : 'AI 插入预览'
+    card.className = 'editor-ai-block-change editor-ai-added'
     const body = doc.createElement('div')
     body.innerHTML = draft.html
-    card.append(title, body)
+    card.append(body)
     return card
   }, { side: -1, ignoreSelection: true, key: `ai-draft-${draft.id}` }))
   return DecorationSet.create(state.doc, decorations)
@@ -305,7 +431,10 @@ function prepareRevision(editor: Editor, revision: AiRevision, method: AiRevisio
   const start = doc.resolve(from)
   const end = doc.resolve(to)
   if (start.sameParent(end) && start.parent.isTextblock) {
-    if (parsed.childCount !== 1 || !parsed.firstChild?.isTextblock) return
+    if (parsed.childCount !== 1 || !parsed.firstChild?.isTextblock) {
+      if (start.parent.type !== schema.nodes.paragraph || start.parentOffset !== 0 || end.parentOffset !== start.parent.content.size) return
+      return { from: start.before(), to: end.after(), slice: new Slice(parsed.content, 0, 0) }
+    }
     const content = start.parent.type.spec.code ? Fragment.from(schema.text(revision.markdown)) : parsed.firstChild.content
     return { from, to, slice: new Slice(content, 0, 0) }
   }
@@ -317,22 +446,28 @@ function prepareRevision(editor: Editor, revision: AiRevision, method: AiRevisio
 
 let nextDraftPreview = 0
 
-export function showAiRevisionPreview(editor: Editor, owner: symbol, revision: AiRevision, method: AiRevisionMethod,
+export function showAiRevisionPreview(editor: Editor, owner: PreviewOwner, revision: AiRevision, method: AiRevisionMethod,
   reference: AiReference | undefined, insertion: number,
 ) {
-  if (typeof inlineSource.getState(editor.state)?.owner === 'number') return false
+  if (typeof owner === 'symbol' && typeof inlineSource.getState(editor.state)?.owner === 'number') return false
   const patch = prepareRevision(editor, revision, method, reference, insertion)
   if (!patch) return false
   const tr = editor.state.tr
   if (tr.maybeStep(new ReplaceStep(patch.from, patch.to, patch.slice)).failed || tr.doc.eq(editor.state.doc)) return false
   const anchor = reference?.anchor
-  if (method === 'replace' && anchor !== undefined && reference &&
-    previewAiChanges(editor, { ...reference, anchor }, revision, aiRevisionDiff(reference.text, revision.markdown), owner)) {
+  if (method === 'replace' && anchor !== undefined && showInlineChanges(editor, owner, anchor, patch)) {
     return true
   }
-  const draft = { id: ++nextDraftPreview, html: aiAnswerHtml(revision.markdown, 0), method, reference, insertion }
+  const draft: DraftPreview = {
+    id: ++nextDraftPreview, html: aiAnswerHtml(revision.markdown, 0), method, reference, insertion,
+    inDocument: typeof owner === 'number' ? true : undefined,
+  }
   editor.view.dispatch(editor.state.tr.setMeta(inlineSource, { owner, draft } satisfies InlineSource).setMeta('addToHistory', false))
   return true
+}
+
+export function previewInlineAiRevision(editor: Editor, reference: AiReference & { anchor: number }, revision: AiRevision) {
+  return showAiRevisionPreview(editor, reference.anchor, revision, 'replace', reference, 0)
 }
 
 export function hasAiRevisionPreview(editor: Editor, owner: symbol) {

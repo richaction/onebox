@@ -5,10 +5,12 @@ import { render } from '@solidjs/web'
 import { afterUiEvent } from './uiEvents'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blockEditCommands, chartCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
+import { captureAiReference } from '../src/core/aiDocument'
 import { createEditor, type EditorHandle } from '../src/core/editor'
 import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
 import { visibilityKey } from '../src/core/viewport/visibility'
 import EditorShell from '../src/ui/EditorShell'
+import InlineAiEditor from '../src/ui/InlineAiEditor'
 import { ai, type AiEvent } from '../src/io/ai'
 
 const SAMPLE = '# 标题\n\n段落 **粗体**\n\n- 甲\n- 乙\n'
@@ -149,6 +151,7 @@ it('opens the in-document AI editor on first click and applies only after approv
       afterUiEvent(() => receive({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } }))
       expect(document.querySelector('.editor-inline-ai-loading')).toBeNull()
       expect(document.querySelector('[aria-label="确认修改"]')).not.toBeNull()
+      expect(panel.querySelector('.editor-inline-ai-summary')?.textContent).toBe('已调整大小写')
       expect(panel.style.width).toBe('276px')
       expect(view.dom.querySelector('.editor-ai-added')?.textContent).toBe('O')
       expect(view.dom.querySelector('.editor-ai-removed')?.textContent).toBe('o')
@@ -190,6 +193,56 @@ it('opens the in-document AI editor on first click and applies only after approv
     dispose()
     host.remove()
     for (const mock of [...mocks, send]) mock.mockRestore()
+  }
+})
+
+it('interrupts an inline AI turn once its ID arrives and discards late results', async () => {
+  const { handle } = mount()
+  const editor = handle.editor
+  const range = { from: 2, to: 4 }
+  const citation = captureAiReference(editor, 'selection', 'Draft.md', range)!
+  const original = handle.toMarkdown()
+  const portal = document.body.appendChild(document.createElement('div'))
+  let receive!: (event: AiEvent) => void
+  let resolveStart!: (id: string) => void
+  const mocks = [
+    vi.spyOn(ai, 'events').mockImplementation(async (callback) => { receive = callback; return () => {} }),
+    vi.spyOn(ai, 'account').mockResolvedValue({ email: '', plan: 'test' }),
+    vi.spyOn(ai, 'models').mockResolvedValue([{ model: 'test' }]),
+    vi.spyOn(ai, 'newThread').mockResolvedValue('inline-stop'),
+    vi.spyOn(ai, 'closeThread').mockResolvedValue(undefined),
+  ]
+  const start = vi.spyOn(ai, 'start').mockImplementation(() => new Promise(resolve => { resolveStart = resolve }))
+  const stop = vi.spyOn(ai, 'stop').mockResolvedValue(undefined)
+  const dispose = render(() => createComponent(InlineAiEditor, {
+    editor, reference: { ...citation, anchor: citation.anchor! }, scrollRoot: scrollRoot!, close: vi.fn(),
+  }), portal)
+  try {
+    const input = portal.querySelector('textarea')!
+    input.value = '修改选区'
+    afterUiEvent(() => input.dispatchEvent(new Event('input', { bubbles: true })))
+    afterUiEvent(() => portal.querySelector<HTMLButtonElement>('[type="submit"]')!.click())
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    const button = portal.querySelector<HTMLButtonElement>('[aria-label="停止生成"]')!
+    expect(button.disabled).toBe(false)
+    afterUiEvent(() => button.click())
+    expect(portal.textContent).toContain('已停止生成')
+    expect(input.hidden).toBe(false)
+    resolveStart('late-turn')
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledExactlyOnceWith('inline-stop', 'late-turn'))
+    receive({ method: 'item/completed', params: { threadId: 'inline-stop', turnId: 'late-turn',
+      item: { id: 'answer', type: 'agentMessage', text: JSON.stringify({
+        answer: '已修改', revision: { markdown: 'replace', reference: 1 },
+      }) } } })
+    afterUiEvent(() => receive({ method: 'turn/completed', params: {
+      threadId: 'inline-stop', turn: { id: 'late-turn', status: 'completed' },
+    } }))
+    expect(portal.querySelector('[aria-label="确认修改"]')).toBeNull()
+    expect(handle.toMarkdown()).toBe(original)
+  } finally {
+    dispose()
+    portal.remove()
+    for (const mock of [...mocks, start, stop]) mock.mockRestore()
   }
 })
 
@@ -324,6 +377,99 @@ it('applies inline formats to selected text from the context menu', () => {
   } finally {
     dispose()
     host.remove()
+  }
+})
+
+it('opens the same commands on a blank line by right-click or slash and previews AI text there', async () => {
+  const host = document.body.appendChild(document.createElement('div'))
+  let mounted!: EditorHandle
+  let receive!: (event: AiEvent) => void
+  const mocks = [
+    vi.spyOn(ai, 'events').mockImplementation(async (callback) => { receive = callback; return () => {} }),
+    vi.spyOn(ai, 'account').mockResolvedValue({ email: '', plan: 'test' }),
+    vi.spyOn(ai, 'models').mockResolvedValue([{ model: 'test' }]),
+    vi.spyOn(ai, 'newThread').mockResolvedValue('empty-line'),
+    vi.spyOn(ai, 'closeThread').mockResolvedValue(undefined),
+  ]
+  const start = vi.spyOn(ai, 'start').mockResolvedValue('turn')
+  const dispose = render(() => createComponent(EditorShell, {
+    markdown: '上一段\n\n## 下一个标题', onReady: (value) => { mounted = value },
+    onUpdate: vi.fn(), onQuoteSelection: vi.fn(), inlineAi: true,
+  }), host)
+  try {
+    mounted.loadBlocks([
+      { type: 'paragraph', content: [{ type: 'text', text: '上一段' }] },
+      { type: 'paragraph' },
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '下一个标题' }] },
+    ])
+    const { view } = mounted.editor
+    const before = view.state.doc.firstChild!.nodeSize
+    view.dispatch(view.state.tr.setMeta(visibilityKey, { visible: new Set([0, before, before + 2]) }))
+    const original = view.state.doc
+    vi.spyOn(view, 'posAtCoords').mockReturnValue({ pos: before + 2, inside: before + 2 })
+    vi.spyOn(view, 'coordsAtPos').mockImplementation((pos) => pos === before + 1
+      ? { left: 32, right: 32, top: 90, bottom: 114 }
+      : { left: 32, right: 32, top: 159, bottom: 183 })
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(new DOMRect(32, 16, 600, 200))
+    vi.spyOn(host.querySelector('.editor-scroll')!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 700, 240))
+    const menu = () => document.querySelector<HTMLElement>('.block-menu-popup')!
+    const sections = () => [...menu().querySelectorAll('[role="group"]')].map(node => node.getAttribute('aria-label'))
+    const action = () => Array.from(menu().querySelectorAll('button')).find(button => button.textContent?.includes('正文编辑'))!
+    const panel = () => document.querySelector<HTMLElement>('.editor-inline-ai')!
+    const key = (target: Element, key: string) => afterUiEvent(() => target.dispatchEvent(new KeyboardEvent('keydown', {
+      key, bubbles: true, cancelable: true,
+    })))
+
+    const blank = view.dom.querySelectorAll('p')[1]
+    const rightPress = new PointerEvent('pointerdown', {
+      clientX: 37, clientY: 99, button: 2, pointerType: 'mouse', bubbles: true, cancelable: true,
+    })
+    afterUiEvent(() => blank.dispatchEvent(rightPress))
+    expect(rightPress.defaultPrevented).toBe(true)
+    const openedMenu = menu()
+    expect(openedMenu).not.toBeNull()
+    const rightClick = new MouseEvent('contextmenu', { clientX: 37, clientY: 99, button: 2, bubbles: true, cancelable: true })
+    afterUiEvent(() => blank.dispatchEvent(rightClick))
+    expect(rightClick.defaultPrevented).toBe(true)
+    expect(menu()).toBe(openedMenu)
+    expect(menu().style.left).toBe('37px')
+    expect(view.state.selection).toBeInstanceOf(TextSelection)
+    expect(view.state.selection.from).toBe(before + 1)
+    expect(view.state.selection.empty).toBe(true)
+    expect(menu().textContent).not.toContain('引用到侧栏')
+    const groups = sections()
+    afterUiEvent(() => action().click())
+    const rightClickTop = panel().style.top
+    expect(parseFloat(rightClickTop)).toBeLessThan(106)
+    key(panel().querySelector('textarea')!, 'Escape')
+    expect(view.state.doc).toBe(original)
+
+    afterUiEvent(() => view.someProp('handleTextInput', input =>
+      input(view, before + 1, before + 1, '/', () => view.state.tr.insertText('/'))))
+    expect(sections()).toEqual(groups)
+    afterUiEvent(() => action().click())
+    expect(panel().style.top).toBe(rightClickTop)
+    expect(view.state.doc.eq(original)).toBe(true)
+    const input = panel().querySelector('textarea')!
+    input.value = '写一句过渡语'
+    afterUiEvent(() => input.dispatchEvent(new Event('input', { bubbles: true })))
+    afterUiEvent(() => panel().querySelector<HTMLButtonElement>('[type="submit"]')!.click())
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    expect(JSON.parse(start.mock.calls[0][1]).references).toEqual([{ number: 1, markdown: '' }])
+    receive({ method: 'item/completed', params: { threadId: 'empty-line', turnId: 'turn',
+      item: { id: 'answer', type: 'agentMessage', text: '{"answer":"已补充过渡语","revision":{"markdown":"先看一个分数示例。","reference":1}}' },
+    } })
+    afterUiEvent(() => receive({ method: 'turn/completed', params: {
+      threadId: 'empty-line', turn: { id: 'turn', status: 'completed' },
+    } }))
+    expect(view.state.doc.eq(original)).toBe(true)
+    expect(view.dom.querySelector('.editor-ai-added')?.textContent).toBe('先看一个分数示例。')
+    afterUiEvent(() => panel().querySelector<HTMLButtonElement>('[aria-label="确认修改"]')!.click())
+    expect(mounted.toMarkdown()).toBe('上一段\n\n先看一个分数示例。\n\n## 下一个标题')
+  } finally {
+    dispose()
+    host.remove()
+    for (const mock of [...mocks, start]) mock.mockRestore()
   }
 })
 
