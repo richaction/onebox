@@ -44,12 +44,14 @@ export function enableExpandedPreviewZoom(viewport: HTMLElement, content: HTMLEl
   viewport.dataset.pointerDragHandle = ''
   viewport.setAttribute('aria-description', '用方向键移动图面')
 
-  function useNaturalWidth() {
+  function useNaturalSize() {
     const width = media instanceof HTMLImageElement ? media.naturalWidth : media.viewBox.baseVal.width
+    const height = media instanceof HTMLImageElement ? media.naturalHeight : media.viewBox.baseVal.height
     if (width > 0) content.style.setProperty('--preview-media-base', `${width}px`)
+    if (width > 0 && height > 0) content.style.setProperty('--preview-media-ratio', String(width / height))
   }
-  useNaturalWidth()
-  if (media instanceof HTMLImageElement) media.addEventListener('load', useNaturalWidth, { once: true })
+  useNaturalSize()
+  if (media instanceof HTMLImageElement) media.addEventListener('load', useNaturalSize, { once: true })
 
   function measure() {
     const bounds = viewport.getBoundingClientRect()
@@ -73,8 +75,11 @@ export function enableExpandedPreviewZoom(viewport: HTMLElement, content: HTMLEl
 
   function paint() {
     if (offset.x === painted.x && offset.y === painted.y && scale === painted.scale) return
-    media.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})`
+    if (offset.x !== painted.x || offset.y !== painted.y) {
+      content.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0)`
+    }
     if (scale !== painted.scale) {
+      media.style.transform = `scale(${scale})`
       const percentage = `${Math.round(scale * 100)}%`
       if (reset.textContent !== percentage) reset.textContent = percentage
       zoomOut.disabled = scale === minScale
@@ -121,6 +126,38 @@ export function enableExpandedPreviewZoom(viewport: HTMLElement, content: HTMLEl
   resize.observe(media)
   resize.observe(viewport)
 
+  // Keep the inline diagram visible until WebKit can composite it as one SVG image.
+  let diagramUrl: string | undefined
+  function releaseDiagramUrl() {
+    if (diagramUrl) URL.revokeObjectURL(diagramUrl)
+    diagramUrl = undefined
+  }
+  if (media instanceof SVGSVGElement) {
+    const original = media
+    const { width, height } = original.viewBox.baseVal
+    if (width > 0 && height > 0) {
+      const svg = original.cloneNode(true) as SVGSVGElement
+      svg.setAttribute('width', String(width))
+      svg.setAttribute('height', String(height))
+      svg.style.removeProperty('max-width')
+      const image = viewport.ownerDocument.createElement('img')
+      image.alt = original.querySelector('title')?.textContent || 'Mermaid 图'
+      const description = original.querySelector('desc')?.textContent
+      if (description) image.setAttribute('aria-description', description)
+      image.draggable = false
+      diagramUrl = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }))
+      image.src = diagramUrl
+      void image.decode().then(() => {
+        if (!diagramUrl || !original.isConnected) return
+        image.style.transform = original.style.transform
+        resize.unobserve(original)
+        original.replaceWith(image)
+        media = image
+        resize.observe(image)
+      }, releaseDiagramUrl)
+    }
+  }
+
   viewport.addEventListener('wheel', (event) => {
     const { deltaMode, deltaX, deltaY } = event
     if (!geometry || (!deltaX && !deltaY) || !Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return
@@ -148,16 +185,19 @@ export function enableExpandedPreviewZoom(viewport: HTMLElement, content: HTMLEl
     event.preventDefault()
   }
 
-  let drag: { id: number; x: number; y: number } | undefined
+  let drag: { id: number; mouse: boolean; time: number; x: number; y: number } | undefined
   viewport.onpointerdown = (event) => {
     if (event.defaultPrevented || event.button !== 0 || !event.isPrimary) return
-    drag = { id: event.pointerId, x: event.clientX, y: event.clientY }
+    drag = { id: event.pointerId, mouse: event.pointerType === 'mouse', time: event.timeStamp,
+      x: event.clientX, y: event.clientY }
     viewport.setPointerCapture(event.pointerId)
     viewport.dataset.panning = ''
     event.preventDefault()
   }
-  const dragTo = (event: PointerEvent) => {
-    if (drag?.id !== event.pointerId) return
+  const dragTo = (event: MouseEvent) => {
+    if (!drag || event.timeStamp < drag.time) return
+    drag.time = event.timeStamp
+    if (drag.x === event.clientX && drag.y === event.clientY) return
     moveOffset(event.clientX - drag.x, event.clientY - drag.y)
     drag.x = event.clientX
     drag.y = event.clientY
@@ -170,8 +210,15 @@ export function enableExpandedPreviewZoom(viewport: HTMLElement, content: HTMLEl
     drag = undefined
     delete viewport.dataset.panning
   }
-  viewport.onpointermove = dragTo
+  viewport.onpointermove = (event) => {
+    if (drag?.id === event.pointerId) dragTo(event)
+  }
+  // WKWebView can deliver a mouse drag through either event stream.
+  viewport.onmousemove = (event) => {
+    if (drag?.mouse && (event.buttons & 1)) dragTo(event)
+  }
   viewport.onpointerup = (event) => {
+    if (drag?.id !== event.pointerId) return
     dragTo(event)
     endDrag(event)
   }
@@ -182,7 +229,8 @@ export function enableExpandedPreviewZoom(viewport: HTMLElement, content: HTMLEl
     destroy() {
       cancelAnimationFrame(frame)
       resize.disconnect()
-      media.removeEventListener('load', useNaturalWidth)
+      releaseDiagramUrl()
+      media.removeEventListener('load', useNaturalSize)
     },
   }
 }

@@ -4,7 +4,7 @@ import { createComponent } from 'solid-js'
 import { render } from '@solidjs/web'
 import { afterUiEvent } from './uiEvents'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { blockEditCommands, diagramCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
+import { blockEditCommands, chartCommands, insertCommands, slashTrigger } from '../src/core/blockCommands'
 import { createEditor, type EditorHandle } from '../src/core/editor'
 import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
 import { visibilityKey } from '../src/core/viewport/visibility'
@@ -377,12 +377,14 @@ it('keeps the slash menu open while browsing and selecting a chart', () => {
     afterUiEvent(() => view.someProp('handleTextInput', (input) => input(view, 1, 1, '/', () => view.state.tr.insertText('/'))))
     const parent = document.querySelector('[aria-label="区块命令"]')!
     const openGroup = () => afterUiEvent(() => parent.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!.click())
-    const menu = () => document.querySelector('[role="listbox"][aria-label="图表与流程图"]')
+    const menu = () => document.querySelector('[role="listbox"][aria-label="ECharts 图表"]')
     const press = (key: string) => afterUiEvent(() => view.dom.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
     openGroup()
     const icons = Array.from(menu()!.querySelectorAll('.block-menu-icon svg path'), (icon) => icon.getAttribute('d'))
-    expect(icons).toHaveLength(diagramCommands.length)
-    expect(new Set(icons).size).toBe(diagramCommands.length)
+    expect(icons).toHaveLength(chartCommands.length)
+    expect(new Set(icons).size).toBe(chartCommands.length)
+    expect(parent.textContent).toContain('Mermaid 图')
+    expect(menu()?.textContent).not.toMatch(/Mermaid|流程图/)
     press('Escape')
     afterUiEvent(() => view.dispatch(view.state.tr.insertText('折线图')))
     openGroup()
@@ -663,6 +665,8 @@ describe('createEditor', () => {
     Object.defineProperties(image, { naturalWidth: { value: 1200 }, naturalHeight: { value: 680 } })
     image.dispatchEvent(new Event('load'))
 
+    afterUiEvent(() => expand.click())
+    expect(document.querySelector('dialog')).toBeNull()
     afterUiEvent(() => image.click())
     expect(handle.editor.state.selection).toBeInstanceOf(NodeSelection)
     expect(document.querySelector('dialog')).toBeNull()
@@ -673,6 +677,7 @@ describe('createEditor', () => {
     preview.querySelector<HTMLButtonElement>('[aria-label="关闭放大预览"]')!.click()
 
     expect(document.querySelector('dialog')).toBeNull()
+    expect(document.activeElement).toBe(expand)
     expect(wrapper.style.getPropertyValue('--editor-image-width')).toBe('90%')
     expect(handle.toMarkdown()).toBe(markdown)
     expect(onUpdate).not.toHaveBeenCalled()
@@ -1430,7 +1435,7 @@ describe('createEditor', () => {
     expect(code.querySelector('pre > code')?.getAttribute('spellcheck')).toBe('false')
     expect(handle.editor.view.dom.getAttribute('autocorrect')).toBe('off')
     expect(code.querySelector('.code-copy')?.getAttribute('aria-label')).toBe('复制代码')
-    expect(code.querySelector('.code-next')?.getAttribute('aria-label')).toBe('在代码块后继续写正文')
+    expect(code.querySelector('.code-next')).toBeNull()
     expect(handle.editor.getHTML()).not.toMatch(/code-frame|code-toolbar/)
 
     handle.loadMarkdown('| Name | Count |\n| --- | ---: |\n| A | 42 |')
@@ -1453,6 +1458,9 @@ describe('createEditor', () => {
     const source = frame.querySelector<HTMLPreElement>('pre')!
     const preview = frame.querySelector('.rich-preview')!
     const [sourceTab, previewTab] = frame.querySelectorAll<HTMLButtonElement>('.mermaid-tabs button')
+    expect(frame.querySelector('.code-toolbar :is(.code-expand, .code-next)')).toBeNull()
+    expect(frame.querySelector('.code-language')).toBeNull()
+    expect(preview.getAttribute('aria-label')).toBe('放大Mermaid 图')
     expect(edit.textContent).toBe('编辑')
     expect(source.hidden).toBe(true)
 
@@ -1547,7 +1555,11 @@ describe('createEditor', () => {
       const search = document.querySelector<HTMLInputElement>('[aria-label="搜索语言"]')
       if (!search) return
       expect(document.activeElement).toBe(search)
-      search.value = value || '纯文本'
+      const firstOption = document.querySelector<HTMLButtonElement>('.code-language-options [role="option"]')
+      expect(firstOption?.dataset.languageId).toBe(select().dataset.languageId)
+      expect(firstOption?.getAttribute('aria-selected')).toBe('true')
+      expect(document.querySelector('.code-language-options')?.textContent).not.toMatch(/自动识别|纯文本/)
+      search.value = value || 'TXT'
       afterUiEvent(() => search.dispatchEvent(new Event('input', { bubbles: true })))
       const options = document.querySelectorAll<HTMLButtonElement>('.code-language-options [role="option"]')
       expect(options).toHaveLength(1)
@@ -1633,7 +1645,7 @@ describe('createEditor', () => {
     const { handle } = mount()
     handle.loadMarkdown('')
     const { editor } = handle
-    const line = diagramCommands.find((item) => item.label === '折线图')!
+    const line = chartCommands.find((item) => item.label === '折线图')!
     const formula = insertCommands.find((item) => item.label === '公式')!
     expect(line.run(editor.chain()).run()).toBe(true)
     editor.commands.insertContentAt(editor.state.doc.content.size, { type: 'paragraph' })

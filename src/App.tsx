@@ -1136,10 +1136,9 @@ export default function App() {
 
   return (
     <main class={['app', { 'workspace-open': desktop && sidebarVisible(), 'workspace-resizing': resizingSidebar() }]}
-      style={{ '--workspace-preferred-width': `${sidebarWidth()}px` }}>
+      style={{ '--workspace-preferred-width': `${sidebarWidth()}px`, '--traffic-light-center': titleBarButtonCenter() }}>
       <Show when={desktop}>
-        <header class={['window-bar', { 'window-bar-mac': mac }]} inert={selectionFilePreviewOpen()}
-          style={{ '--traffic-light-center': titleBarButtonCenter() }}>
+        <header class={['window-bar', { 'window-bar-mac': mac }]} inert={selectionFilePreviewOpen()}>
           <div class="window-drag-region" data-tauri-drag-region="" aria-hidden="true" />
           <button type="button" class="sidebar-toggle" ref={sidebarToggle} data-activate-on-release
             aria-label={sidebarLabel()} aria-expanded={sidebarVisible() ? 'true' : 'false'} aria-controls="workspace-sidebar"

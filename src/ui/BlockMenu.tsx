@@ -159,7 +159,7 @@ export default function BlockMenu(props: {
         {(submenu) => (
           <div class="block-menu block-menu-submenu" data-side={layout().submenuSide} data-above={layout().openUp}>
             <div class="block-menu-results" ref={(list) => { children = list }}
-              id={`${props.id}-charts`} role="listbox" aria-label="图表与流程图">
+              id={`${props.id}-charts`} role="listbox" aria-label="ECharts 图表">
               <For each={submenu().items}>{(item, index) => (
                 <button type="button" role="option" tabindex={-1} id={`${props.id}-charts-${index()}`}
                    class={['block-menu-item', { highlighted: index() === submenu().active }]}

@@ -58,7 +58,8 @@ export function showExpandedPreview(
     pressedBackdrop = false
   })
 
-  document.body.append(dialog)
+  const host = trigger.closest('.app') ?? document.body
+  host.append(dialog)
   dialog.showModal()
   try {
     dispose = draw(content)

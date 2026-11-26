@@ -1,11 +1,12 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
-import { codeLanguage, type CodeToken } from './codeLanguages'
+import { codeLanguage, type CodeHighlightResult, type CodeLanguage, type CodeToken } from './codeLanguages'
 
 interface VisibleCode {
   container: HTMLElement
   code: HTMLElement
   node: ProseMirrorNode
   visible: boolean
+  onDetection: (language?: CodeLanguage) => void
   timer?: ReturnType<typeof setTimeout>
   ranges: [Highlight, Range][]
 }
@@ -49,21 +50,25 @@ export function createCodeHighlight(root: HTMLElement) {
 
   const entries = new Map<Element, VisibleCode>()
   const queued = new Map<VisibleCode, ProseMirrorNode>()
-  const cache = new WeakMap<ProseMirrorNode, CodeToken[]>()
+  const cache = new WeakMap<ProseMirrorNode, CodeHighlightResult>()
   let active: { entry: VisibleCode; node: ProseMirrorNode } | undefined
   let worker: Worker | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
   let destroyed = false
 
-  function finish(tokens: CodeToken[]) {
+  function apply(entry: VisibleCode, result: CodeHighlightResult) {
+    entry.onDetection(result.detected)
+    if (result.tokens.length && entry.code.textContent === entry.node.textContent) paint(entry, result.tokens)
+  }
+
+  function finish(result: CodeHighlightResult) {
     clearTimeout(timeout)
     const job = active
     active = undefined
     if (job) {
-      cache.set(job.node, tokens)
-      if (job.entry.visible && job.entry.node === job.node && entries.has(job.entry.container) &&
-          job.entry.code.textContent === job.node.textContent) {
-        paint(job.entry, tokens)
+      cache.set(job.node, result)
+      if (job.entry.visible && job.entry.node === job.node && entries.has(job.entry.container)) {
+        apply(job.entry, result)
       }
     }
     run()
@@ -72,7 +77,7 @@ export function createCodeHighlight(root: HTMLElement) {
   function resetWorker() {
     worker?.terminate()
     worker = undefined
-    finish([])
+    finish({ tokens: [] })
   }
 
   function run() {
@@ -83,7 +88,7 @@ export function createCodeHighlight(root: HTMLElement) {
     try {
       if (!worker) {
         worker = new Worker(new URL('./codeHighlightWorker.ts', import.meta.url), { type: 'module' })
-        worker.onmessage = ({ data }: MessageEvent<CodeToken[]>) => finish(data)
+        worker.onmessage = ({ data }: MessageEvent<CodeHighlightResult>) => finish(data)
         worker.onerror = resetWorker
       }
       worker.postMessage({ language: codeLanguage(node.attrs.language).id, text: node.textContent })
@@ -96,13 +101,17 @@ export function createCodeHighlight(root: HTMLElement) {
   function request(entry: VisibleCode, delay: number) {
     clearTimeout(entry.timer)
     queued.delete(entry)
-    if (!entry.visible || !codeLanguage(entry.node.attrs.language).id ||
-        !entry.node.content.size || entry.node.content.size > 12_000) return
+    const language = codeLanguage(entry.node.attrs.language)
+    if (!entry.visible) return
+    if ((!language.id && !language.automatic) || !entry.node.content.size || entry.node.content.size > 12_000) {
+      entry.onDetection()
+      return
+    }
     entry.timer = setTimeout(() => {
       if (!entry.visible || !entries.has(entry.container)) return
-      const tokens = cache.get(entry.node)
-      if (tokens) {
-        if (entry.code.textContent === entry.node.textContent) paint(entry, tokens)
+      const result = cache.get(entry.node)
+      if (result) {
+        apply(entry, result)
       } else if (active?.entry !== entry || active.node !== entry.node) {
         queued.set(entry, entry.node)
         run()
@@ -121,8 +130,8 @@ export function createCodeHighlight(root: HTMLElement) {
   }, { root, rootMargin: '120px 0px' })
 
   return {
-    watch(container: HTMLElement, code: HTMLElement, node: ProseMirrorNode) {
-      const entry: VisibleCode = { container, code, node, visible: false, ranges: [] }
+    watch(container: HTMLElement, code: HTMLElement, node: ProseMirrorNode, onDetection: VisibleCode['onDetection']) {
+      const entry: VisibleCode = { container, code, node, visible: false, onDetection, ranges: [] }
       entries.set(container, entry)
       observer.observe(container)
       return {

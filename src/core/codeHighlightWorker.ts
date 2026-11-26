@@ -1,5 +1,5 @@
 import { createLowlight } from 'lowlight'
-import type { CodeLanguage, CodeToken, CodeTone } from './codeLanguages'
+import { codeLanguageIds, type CodeHighlightResult, type CodeLanguage, type CodeTone } from './codeLanguages'
 
 const grammars = {
   javascript: () => import('highlight.js/lib/languages/javascript'),
@@ -30,13 +30,52 @@ const tones = new Map<string, CodeTone>([
 const lowlight = createLowlight()
 type HighlightTree = ReturnType<typeof lowlight.highlight>
 
-self.onmessage = async ({ data }: MessageEvent<{ language: CodeLanguage; text: string }>) => {
-  const tokens: CodeToken[] = []
-  try {
-    if (!lowlight.registered(data.language)) {
-      lowlight.register(data.language, (await grammars[data.language]()).default)
+async function register(language: CodeLanguage) {
+  if (!lowlight.registered(language)) lowlight.register(language, (await grammars[language]()).default)
+}
+
+function detect(text: string) {
+  if (/^\s*[\[{]/u.test(text)) {
+    try {
+      JSON.parse(text)
+      return 'json'
+    } catch { /* Other languages also begin with brackets. */ }
+  }
+  if (/(?:^|\n)\s*(?:(?:pub|async)\s+)*fn\s+\w+\s*\(/u.test(text)) return 'rust'
+  if (/^\s*(?:SELECT\b[\s\S]+?\bFROM\b|INSERT\s+INTO\b|CREATE\s+TABLE\b|UPDATE\b[\s\S]+?\bSET\b|DELETE\s+FROM\b)/iu.test(text)) return 'sql'
+
+  let best: CodeLanguage | undefined
+  let lead = 0
+  let runnerUp = 0
+  for (const language of codeLanguageIds) {
+    const score = lowlight.highlight(language, text).data?.relevance ?? 0
+    if (score > lead) {
+      runnerUp = lead
+      lead = score
+      best = language
+    } else {
+      runnerUp = Math.max(runnerUp, score)
     }
-    const tree = lowlight.highlight(data.language, data.text)
+  }
+  return lead >= 3 && lead > runnerUp ? best : undefined
+}
+
+self.onmessage = async ({ data }: MessageEvent<{ language?: CodeLanguage; text: string }>) => {
+  const result: CodeHighlightResult = { tokens: [] }
+  const { tokens } = result
+  try {
+    let language = data.language
+    if (!language) {
+      await Promise.all(codeLanguageIds.map(register))
+      language = detect(data.text)
+      result.detected = language
+    }
+    if (!language) {
+      self.postMessage(result)
+      return
+    }
+    await register(language)
+    const tree = lowlight.highlight(language, data.text)
     let offset = 0
     function visit(children: HighlightTree['children'], inherited?: CodeTone) {
       for (const child of children) {
@@ -62,5 +101,6 @@ self.onmessage = async ({ data }: MessageEvent<{ language: CodeLanguage; text: s
     // A failed grammar leaves the original text readable and editable.
     tokens.length = 0
   }
-  self.postMessage(tokens.length <= 1_800 ? tokens : [])
+  if (tokens.length > 1_800) tokens.length = 0
+  self.postMessage(result)
 }

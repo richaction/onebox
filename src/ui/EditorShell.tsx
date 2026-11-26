@@ -6,7 +6,7 @@ import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onSe
 import { Portal } from '@solidjs/web'
 import { captureAiReference, highlightAiSource, type AiReference } from '../core/aiDocument'
 import {
-  blockCommands, diagramCommands, insertCommands, slashTrigger, tableCommands,
+  blockCommands, chartCommands, insertCommands, mermaidCommand, slashTrigger, tableCommands,
   type CommandItem, type MenuItem,
 } from '../core/blockCommands'
 import { createEditor, type EditorHandle } from '../core/editor'
@@ -36,7 +36,7 @@ const quoteAction: Action = { label: '引用到侧栏', search: 'AI 引用 侧�
 const editAction: Action = { label: '正文编辑', search: 'AI 编辑 正文', icon: 'ai-edit', ai: 'edit' }
 const formatActions: readonly Action[] = inlineFormatMarks.map(({ name, symbol, mark }) =>
   ({ label: name, search: name, icon: symbol, mark }))
-const chartsAction: Action = { label: '图表与流程图', search: '图表 chart', icon: 'charts', children: true }
+const chartsAction: Action = { label: 'ECharts 图表', search: '数据图表 chart', icon: 'charts', children: true }
 const matchesQuery = (item: MenuItem, query: string) =>
   `${item.label} ${item.search} ${item.shortcut ?? ''}`.toLowerCase().includes(query)
 const typedSlash = 'onebox-typed-slash'
@@ -93,7 +93,7 @@ export default function EditorShell(props: {
   const menuId = createUniqueId()
   const query = () => popup()?.trigger?.query.toLowerCase() ?? ''
   const getCharts = (search: string) => matchesQuery(chartsAction, search)
-    ? diagramCommands : diagramCommands.filter((item) => matchesQuery(item, search))
+    ? chartCommands : chartCommands.filter((item) => matchesQuery(item, search))
   const charts = createMemo(() => getCharts(query()))
   const getGroups = (current: Popup | undefined) => {
     if (!current) return []
@@ -101,7 +101,7 @@ export default function EditorShell(props: {
       ? [['表格操作', tableCommands]]
       : [
         [current.trigger ? '基本区块' : '转换区块', blockCommands],
-        ['插入内容', [chartsAction, ...insertCommands]],
+        ['插入内容', [mermaidCommand, chartsAction, ...insertCommands]],
         ['媒体与附件', props.onInsertAttachment ? attachmentItems : []],
       ]
     if (current.quoteRange) {

@@ -24,16 +24,20 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
   image.alt = alt
   if (title) image.title = title
   image.decoding = 'async'
+  dom.append(image)
+  const controls = document.createElement('span')
+  controls.className = 'editor-image-controls'
   const expand = document.createElement('button')
   expand.type = 'button'
   expand.className = 'editor-image-expand'
-  expand.textContent = '⤢'
   expand.title = '放大图片'
   expand.setAttribute('aria-label', expand.title)
   expand.dataset.activateOnRelease = ''
   expand.hidden = true
-  dom.append(image, expand)
+  controls.append(expand)
+  dom.append(controls)
 
+  const standaloneParagraph = () => dom.closest('p[data-standalone-image]')
   let current = node
   let objectUrl: string | undefined
   let disposed = false
@@ -89,7 +93,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
   let imagePress: PointerEvent | undefined
   let imageRelease: { event: PointerEvent; received: number } | undefined
   const now = () => document.defaultView!.performance.now()
-  const isImageTap = (event: MouseEvent) => view.editable && !view.composing && event.button === 0
+  const isImageTap = (event: MouseEvent) => !view.composing && event.button === 0
     && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
   const selectImage = () => {
     const pos = getPos()
@@ -124,9 +128,8 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     imageRelease = undefined
   }
   image.addEventListener('pointercancel', cancelImageTap)
-  const standaloneParagraph = () => dom.closest('p[data-standalone-image]')
-  const openExpanded = () => {
-    if (closeExpanded || expand.hidden || !standaloneParagraph()) return false
+  expand.onclick = () => {
+    if (closeExpanded || expand.hidden || !standaloneParagraph() || !dom.classList.contains('ProseMirror-selectednode')) return
     closeExpanded = showExpandedPreview(expand, 'image', (content) => {
       const copy = document.createElement('img')
       copy.alt = image.alt
@@ -134,11 +137,6 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
       copy.draggable = false
       content.append(copy)
     }, () => { closeExpanded = undefined })
-    return true
-  }
-  expand.onclick = openExpanded
-  image.ondblclick = (event) => {
-    if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && openExpanded()) event.preventDefault()
   }
   dom.addEventListener('dragstart', (event) => {
     cancelImageTap()
@@ -150,7 +148,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
   const ratio = document.createElement('span')
   ratio.className = 'editor-image-ratio'
   ratio.setAttribute('aria-hidden', 'true')
-  dom.append(ratio)
+  controls.prepend(ratio)
   const handles = [-1, 1].map((side) => {
     const grip = document.createElement('button')
     grip.type = 'button'
@@ -200,7 +198,7 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
     let drag: { press: PointerEvent; available: number; initial: number; width: number; moved: boolean } | undefined
     let earlyRelease: { event: PointerEvent; received: number } | undefined
     grip.addEventListener('pointerdown', (event) => {
-      if (!isImageTap(event) || drag) return
+      if (!view.editable || !isImageTap(event) || drag) return
       const release = earlyRelease
       earlyRelease = undefined
       if (release && isReorderedPointerRelease(event, release.event, now() - release.received)) {
@@ -273,7 +271,8 @@ export function editorImage(node: Node, view: EditorView, getPos: () => number |
 
   return {
     dom,
-    stopEvent: (event) => event.target === expand || (event.target instanceof Element && !!event.target.closest('.editor-image-resize')),
+    stopEvent: (event) => event.target === expand
+      || (event.target instanceof Element && !!event.target.closest('.editor-image-resize')),
     update(next) {
       if (next.type !== current.type || next.attrs.src !== src || next.attrs.alt !== alt || next.attrs.title !== title) return false
       const dimensions = assets.dimensions.get(current)

@@ -9,19 +9,28 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
   trigger.type = 'button'
   trigger.className = 'code-language'
   trigger.dataset.activateOnRelease = ''
-  trigger.dataset.languageId = current.id
-  trigger.textContent = current.label
-  trigger.setAttribute('aria-label', '代码语言：' + current.label)
   trigger.setAttribute('aria-haspopup', 'listbox')
   trigger.setAttribute('aria-expanded', 'false')
   let popup: HTMLElement | undefined
   let closeListeners: (() => void) | undefined
+  let renderOptions: (() => void) | undefined
+
+  function setCurrent(language: Language) {
+    const changed = language.id !== current.id || language.label !== current.label
+    current = language
+    trigger.dataset.languageId = current.id
+    trigger.textContent = current.label
+    trigger.setAttribute('aria-label', '代码语言：' + current.label)
+    if (changed) renderOptions?.()
+  }
+  setCurrent(current)
 
   function close(restoreFocus = false) {
     closeListeners?.()
     popup?.remove()
     popup = undefined
     closeListeners = undefined
+    renderOptions = undefined
     trigger.setAttribute('aria-expanded', 'false')
     if (restoreFocus) trigger.focus({ preventScroll: true })
   }
@@ -62,8 +71,9 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
     })
     const render = () => {
       const query = search.value.trim().toLowerCase()
+      const orderedLanguages = [current, ...languages.filter((language) => language.id !== current.id)]
       list.replaceChildren()
-      for (const language of languages) {
+      for (const language of orderedLanguages) {
         if (!`${language.label} ${language.id}`.toLowerCase().includes(query)) continue
         const option = document.createElement('button')
         option.type = 'button'
@@ -80,6 +90,7 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
         empty.textContent = '没有匹配的语言'
         list.append(empty)
       }
+      list.scrollTop = 0
     }
     search.oninput = render
     const pointer = trackMenuPress(document, () => close())
@@ -120,14 +131,15 @@ export function codeLanguageMenu(document: Document, languages: readonly Languag
       pointer.destroy()
     }
     popup = menu
+    renderOptions = () => {
+      if (document.activeElement === search && !pointer.active(menu)) render()
+    }
     trigger.setAttribute('aria-expanded', 'true')
     render()
     document.body.append(menu)
-    const selected = list.querySelector('[aria-selected="true"]')
-    if (selected) list.scrollTop = Math.max(0, selected.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom)
     search.focus({ preventScroll: true })
   }
 
   trigger.onclick = () => popup ? close(true) : open()
-  return { trigger, close }
+  return { trigger, close, setCurrent }
 }

@@ -33,10 +33,12 @@ export function codeLanguage(info: string | null | undefined) {
   const label = name.toLowerCase() === 'html' ? 'HTML'
     : name.toLowerCase() === 'c' ? 'C'
     : id ? languages[id].label
-    : plain ? '纯文本'
+    : plain ? 'TXT'
     : name
-  return { name, id, label, plain }
+  const automatic = !name || name.toLowerCase() === 'auto'
+  return { name, id, label, plain, automatic }
 }
 
 export type CodeTone = 'comment' | 'keyword' | 'string' | 'number' | 'name' | 'meta' | 'addition' | 'deletion'
 export type CodeToken = [from: number, to: number, tone: CodeTone]
+export type CodeHighlightResult = { detected?: CodeLanguage; tokens: CodeToken[] }

@@ -56,16 +56,15 @@ function insertFence(chain: ChainedCommands, language: string, source: string) {
   })
 }
 
-export const diagramCommands: readonly CommandItem[] = [
-  ...chartTemplates.map(({ label, key, option }): CommandItem => ({
-    label, search: `图表 chart echarts ${key}`, icon: key,
-    run: (chain) => insertFence(chain, 'echarts', JSON.stringify(option, null, 2)),
-  })),
-  {
-    label: '流程图', search: '流程图 图表 时序 甘特 思维导图 mermaid diagram', icon: 'flowchart',
-    run: (chain) => insertFence(chain, 'mermaid', 'flowchart LR\n  A[开始] --> B[处理] --> C[完成]'),
-  },
-]
+export const chartCommands: readonly CommandItem[] = chartTemplates.map(({ label, key, option }) => ({
+  label, search: `图表 chart echarts ${key}`, icon: key,
+  run: (chain) => insertFence(chain, 'echarts', JSON.stringify(option, null, 2)),
+}))
+
+export const mermaidCommand: CommandItem = {
+  label: 'Mermaid 图', search: '流程图 时序 甘特 思维导图 diagram', icon: 'flowchart',
+  run: (chain) => insertFence(chain, 'mermaid', 'flowchart LR\n  A[开始] --> B[处理] --> C[完成]'),
+}
 
 export const insertCommands: readonly CommandItem[] = [
   {

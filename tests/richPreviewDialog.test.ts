@@ -54,16 +54,22 @@ it('zooms around the pointer and allows dragging at and below the default scale'
     Object.defineProperty(viewport, 'setPointerCapture', { value: vi.fn() })
     const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     const pointer = (type: string, x: number, y: number) => viewport.dispatchEvent(new PointerEvent(type, {
-      pointerId: 1, isPrimary: true, button: 0, clientX: x, clientY: y,
+      pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, clientX: x, clientY: y,
     }))
     const drag = () => {
       pointer('pointerdown', 200, 150)
       pointer('pointermove', 240, 175)
       pointer('pointerup', 240, 175)
     }
-    const translation = () => image.style.transform.match(/translate3d\(([^p]+)px, ([^p]+)px/)!.slice(1).map(Number)
+    const translation = () => image.parentElement!.style.transform.match(/translate3d\(([^p]+)px, ([^p]+)px/)!.slice(1).map(Number)
 
     pointer('pointerdown', 200, 150)
+    const delayed = new PointerEvent('pointermove', { pointerId: 1, clientX: 210, clientY: 152 })
+    Object.defineProperty(delayed, 'timeStamp', { value: 0 })
+    viewport.dispatchEvent(new MouseEvent('mousemove', { buttons: 1, clientX: 240, clientY: 175 }))
+    expect(translation()).toEqual([40, 25])
+    viewport.dispatchEvent(delayed)
+    expect(translation()).toEqual([40, 25])
     pointer('pointermove', 240, 175)
     expect(translation()).toEqual([40, 25])
     pointer('pointermove', 232, 171)
@@ -81,12 +87,15 @@ it('zooms around the pointer and allows dragging at and below the default scale'
     await frame()
 
     expect(reset.textContent).toBe('79%')
+    const zoomTransform = image.style.transform
+    expect(zoomTransform).toMatch(/^scale\(/)
     const [left, top] = translation()
     expect(left).toBeCloseTo(100 * (1 - Math.exp(-0.24)))
     expect(top).toBeCloseTo(50 * (1 - Math.exp(-0.24)))
     drag()
     await frame()
     expect(translation()).toEqual([left + 40, top + 25])
+    expect(image.style.transform).toBe(zoomTransform)
 
     viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
     await frame()

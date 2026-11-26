@@ -86,12 +86,23 @@ async function diagram(source: string, isCurrent: () => boolean, target: HTMLEle
           startOnLoad: false, securityLevel: 'strict', htmlLabels: false, suppressErrorRendering: true,
           maxTextSize: 32_000, maxEdges: 400,
           theme: dark ? 'redux-dark-color' : 'redux-color', look: 'neo',
+          // Gantt derives its width from the hidden render container by default.
+          gantt: { useWidth: 900 },
           themeCSS: reduxPalette.map(([stroke, lightFill], index) => {
             const fill = dark ? `color-mix(in srgb, ${stroke} 16%, #111113)` : lightFill
             const slot = `:nth-of-type(4n+${index + 1})`
             return `.nodes > ${flowchartNode}${slot} > .label-container,
               .nodes > ${stateNode}${slot} rect:is(.basic, .title-state) { fill: ${fill}; stroke: ${stroke}; }`
-          }).join('\n') + `\n.nodes > ${flowchartNode} > rect.label-container:is(:not([rx]), [rx="0"]) { rx: 5px; ry: 5px; }`,
+          }).join('\n') + `
+            .nodes > ${flowchartNode} > rect.label-container:is(:not([rx]), [rx="0"]) { rx: 5px; ry: 5px; }
+            .root:has(> .edgePaths .flowchart-link) > .edgeLabels .edgeLabel rect.background {
+              fill: ${dark ? '#27252e' : '#fffdfa'};
+              opacity: 1;
+              rx: 4px;
+            }
+            .grid .tick line { opacity: 0.25; }
+            line.today { stroke: ${dark ? '#a5b4fc' : '#5163a3'}; stroke-width: 1px; stroke-dasharray: 4 3; }
+          `,
         })
         mermaidDark = dark
       }
@@ -116,7 +127,7 @@ async function diagram(source: string, isCurrent: () => boolean, target: HTMLEle
   }
 }
 
-export function watchRichBlock(target: HTMLElement, language: RichLanguage, initial: string, expand: HTMLButtonElement, mermaid?: {
+export function watchRichBlock(target: HTMLElement, language: RichLanguage, initial: string, previewTrigger: HTMLButtonElement, mermaid?: {
   visibilityTarget: HTMLElement
   report: (message: string) => void
 }) {
@@ -131,17 +142,15 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
   let closeExpanded: (() => void) | undefined
   const setExpandedDrawing = (draw?: typeof drawExpanded) => {
     drawExpanded = draw
-    expand.disabled = !draw
-    if (target instanceof HTMLButtonElement) target.disabled = !draw
+    previewTrigger.disabled = !draw
     target.toggleAttribute('data-expandable', !!draw)
   }
-  const openExpanded = (trigger: HTMLButtonElement) => {
+  const openExpanded = () => {
     if (!drawExpanded || closeExpanded) return
-    closeExpanded = showExpandedPreview(trigger, language, drawExpanded, () => { closeExpanded = undefined })
+    closeExpanded = showExpandedPreview(previewTrigger, language, drawExpanded, () => { closeExpanded = undefined })
   }
   setExpandedDrawing()
-  expand.onclick = () => openExpanded(expand)
-  if (target instanceof HTMLButtonElement) target.onclick = () => openExpanded(target)
+  previewTrigger.onclick = openExpanded
   const stop = () => {
     revision++
     clearTimeout(timer)
@@ -194,7 +203,7 @@ export function watchRichBlock(target: HTMLElement, language: RichLanguage, init
           if (!isCurrent()) return
           clear()
           // Reuse the name for this chart's inline GeoJSON between edits.
-          disposeChart = drawChart(target, option, target.id, () => openExpanded(expand))
+          disposeChart = drawChart(target, option, target.id, openExpanded)
           setExpandedDrawing((content) => drawChart(content, option, `${target.id}-expanded`))
         }, target)
       }

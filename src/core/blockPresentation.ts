@@ -11,7 +11,7 @@ const selectableLanguages = [...codeLanguageIds, 'html', 'c']
   .map((id) => ({ id, label: codeLanguage(id).label }))
   .sort((a, b) => a.label.localeCompare(b.label, 'en'))
 const languageChoices = [
-  { id: '', label: '纯文本' }, { id: 'echarts', label: 'ECharts' }, { id: 'mermaid', label: 'Mermaid' },
+  { id: '', label: 'TXT' },
   ...selectableLanguages,
 ]
 const selectableIds = new Set(languageChoices.map(({ id }) => id))
@@ -129,25 +129,33 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     toolbar.className = 'code-toolbar'
     toolbar.contentEditable = 'false'
     toolbar.dataset.activateOnRelease = ''
-    const picker = document.createElement('div')
-    picker.className = 'code-language-picker'
-    const lowerName = language.name.toLowerCase()
-    const selected = selectableIds.has(lowerName) ? lowerName
-      : language.id ?? (language.plain ? '' : language.name)
-    const selectedLanguage = languageChoices.find(({ id }) => id === selected) ?? { id: selected, label: language.label }
-    const options = selectableIds.has(selected) ? languageChoices : [...languageChoices, selectedLanguage]
-    const menu = codeLanguageMenu(document, options, selectedLanguage, (id) => {
-      const pos = getPos()
-      if (id === selected || !view.editable || pos === undefined || view.state.doc.nodeAt(pos) !== current) return
-      const suffix = info.slice(language.name.length)
-      const nextInfo = (id || (suffix ? 'text' : '')) + suffix
-      view.dispatch(view.state.tr.setNodeAttribute(pos, 'language', nextInfo || null))
-      const block = view.nodeDOM(pos)
-      if (block instanceof HTMLElement) block.querySelector<HTMLButtonElement>('.code-language')?.focus({ preventScroll: true })
-    })
-    menu.trigger.disabled = !view.editable
-    picker.append(menu.trigger)
-    languageMenus.add(menu)
+    let menu: ReturnType<typeof codeLanguageMenu> | undefined
+    if (rich) {
+      const badge = document.createElement('span')
+      badge.className = 'code-language-label'
+      badge.textContent = rich === 'mermaid' ? 'Mermaid' : 'ECharts'
+      toolbar.append(badge)
+    } else {
+      const picker = document.createElement('div')
+      picker.className = 'code-language-picker'
+      const lowerName = language.name.toLowerCase()
+      const selected = language.automatic ? '' : selectableIds.has(lowerName) ? lowerName
+        : language.id ?? (language.plain ? '' : language.name)
+      const selectedLanguage = languageChoices.find(({ id }) => id === selected) ?? { id: selected, label: language.label }
+      const options = selectableIds.has(selected) ? languageChoices : [...languageChoices, selectedLanguage]
+      menu = codeLanguageMenu(document, options, selectedLanguage, (id) => {
+        const pos = getPos()
+        if ((!language.automatic && id === selected) || !view.editable || pos === undefined || view.state.doc.nodeAt(pos) !== current) return
+        const suffix = info.slice(language.name.length)
+        view.dispatch(view.state.tr.setNodeAttribute(pos, 'language', (id || 'text') + suffix))
+        const block = view.nodeDOM(pos)
+        if (block instanceof HTMLElement) block.querySelector<HTMLButtonElement>('.code-language')?.focus({ preventScroll: true })
+      })
+      menu.trigger.disabled = !view.editable
+      picker.append(menu.trigger)
+      toolbar.append(picker)
+      languageMenus.add(menu)
+    }
 
     const actions = document.createElement('div')
     actions.className = 'code-actions'
@@ -158,14 +166,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     copy.setAttribute('aria-label', copy.title)
     copy.hidden = !document.defaultView?.navigator.clipboard?.writeText
     actions.append(copy)
-    const next = document.createElement('button')
-    next.type = 'button'
-    next.className = 'code-next'
-    next.textContent = '↵'
-    next.title = '在代码块后继续写正文'
-    next.setAttribute('aria-label', next.title)
-    actions.append(next)
-    toolbar.append(picker, actions)
+    toolbar.append(actions)
     const continueButton = document.createElement('button')
     continueButton.type = 'button'
     continueButton.className = 'code-continue'
@@ -174,7 +175,7 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
     continueButton.tabIndex = -1
     continueButton.setAttribute('aria-hidden', 'true')
     continueButton.onmousedown = (event) => { if (event.button === 0) event.preventDefault() }
-    next.onclick = continueButton.onclick = () => {
+    continueButton.onclick = () => {
       const pos = getPos()
       if (pos !== undefined) continueAfterBlock(view, pos)
     }
@@ -188,29 +189,27 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       preview.dataset.engine = rich
       preview.id = `onebox-chart-${++nextRichBlock}`
       preview.contentEditable = 'false'
-      const label = rich === 'mermaid' ? 'Mermaid 图' : 'ECharts 图表'
-      const expand = document.createElement('button')
-      expand.type = 'button'
-      expand.className = 'code-expand'
-      expand.textContent = '⤢'
-      expand.title = `放大${label}`
-      expand.setAttribute('aria-label', expand.title)
-      actions.prepend(expand)
-      preview.setAttribute('aria-label', preview instanceof HTMLButtonElement ? expand.title : label)
+      preview.textContent = '正在载入预览…'
       if (preview instanceof HTMLButtonElement) {
         preview.type = 'button'
         preview.dataset.activateOnRelease = ''
-      }
-      preview.textContent = '正在载入预览…'
-      if (rich === 'mermaid') {
+        preview.setAttribute('aria-label', '放大Mermaid 图')
         mermaidEditor = mountMermaidEditor(frame, dom, preview, view, getPos)
         mermaidEditors.add(mermaidEditor)
         actions.prepend(mermaidEditor.button)
-        richPreview = watchRichBlock(preview, rich, node.textContent, expand, {
+        richPreview = watchRichBlock(preview, rich, node.textContent, preview, {
           visibilityTarget: mermaidEditor.workspace,
           report: mermaidEditor.report,
         })
       } else {
+        preview.setAttribute('aria-label', 'ECharts 图表')
+        const expand = document.createElement('button')
+        expand.type = 'button'
+        expand.className = 'code-expand'
+        expand.textContent = '⤢'
+        expand.title = '放大ECharts 图表'
+        expand.setAttribute('aria-label', expand.title)
+        actions.prepend(expand)
         frame.append(preview)
         richPreview = watchRichBlock(preview, rich, node.textContent, expand)
         const source = document.createElement('button')
@@ -251,7 +250,11 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
       }, 1_200)
     }
 
-    const syntax = rich ? undefined : highlight?.watch(frame, contentDOM, node)
+    const syntax = rich ? undefined : highlight?.watch(frame, contentDOM, node, (detected) => {
+      if (!language.automatic) return
+      frame.dataset.language = detected ?? 'plain'
+      menu?.setCurrent(detected ? { id: detected, label: codeLanguage(detected).label } : languageChoices[0])
+    })
     return {
       dom: frame,
       contentDOM,
@@ -264,8 +267,10 @@ export function createBlockPresentation(highlight: ReturnType<typeof createCodeH
         || (event.target as Element)?.closest?.('.rich-preview') != null || mermaidEditor?.stopEvent(event) === true,
       destroy() {
         disposed = true
-        menu.close()
-        languageMenus.delete(menu)
+        if (menu) {
+          menu.close()
+          languageMenus.delete(menu)
+        }
         if (mermaidEditor) mermaidEditors.delete(mermaidEditor)
         clearTimeout(copyStatus)
         syntax?.destroy()
