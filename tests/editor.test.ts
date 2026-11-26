@@ -670,7 +670,7 @@ describe('createEditor', () => {
     const preview = document.querySelector('dialog')!
     expect(preview.querySelector('img')?.alt).toBe('山雾')
     expect(preview.open).toBe(true)
-    preview.querySelector('button')!.click()
+    preview.querySelector<HTMLButtonElement>('[aria-label="关闭放大预览"]')!.click()
 
     expect(document.querySelector('dialog')).toBeNull()
     expect(wrapper.style.getPropertyValue('--editor-image-width')).toBe('90%')

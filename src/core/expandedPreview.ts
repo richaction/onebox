@@ -1,3 +1,5 @@
+import { enableExpandedPreviewZoom } from './expandedPreviewZoom'
+
 export function showExpandedPreview(
   trigger: HTMLButtonElement, kind: 'mermaid' | 'echarts' | 'image',
   draw: (target: HTMLElement) => (() => void) | void, onClose: () => void,
@@ -11,19 +13,21 @@ export function showExpandedPreview(
   bar.className = 'rich-preview-dialog-bar'
   const title = document.createElement('span')
   title.textContent = label
+  title.tabIndex = -1
+  title.autofocus = true
   const close = document.createElement('button')
   close.type = 'button'
+  close.className = 'rich-preview-close'
   close.dataset.activateOnRelease = ''
   close.setAttribute('aria-label', '关闭放大预览')
   close.title = '关闭（Esc）'
-  close.textContent = '×'
-  close.autofocus = true
   close.onclick = () => dialog.close()
   bar.append(title, close)
 
   const viewport = document.createElement('div')
   viewport.className = 'rich-preview-dialog-viewport'
   viewport.tabIndex = 0
+  viewport.setAttribute('role', 'region')
   viewport.setAttribute('aria-label', '放大预览区域')
   const content = document.createElement('div')
   content.className = 'rich-preview-dialog-content'
@@ -32,7 +36,10 @@ export function showExpandedPreview(
   dialog.append(bar, viewport)
 
   let dispose: (() => void) | void
+  let navigation: ReturnType<typeof enableExpandedPreviewZoom> | undefined
   const destroy = () => {
+    navigation?.destroy()
+    navigation = undefined
     const cleanup = dispose
     dispose = undefined
     cleanup?.()
@@ -55,6 +62,11 @@ export function showExpandedPreview(
   dialog.showModal()
   try {
     dispose = draw(content)
+    const media = content.firstElementChild
+    if (media instanceof SVGSVGElement || media instanceof HTMLImageElement) {
+      navigation = enableExpandedPreviewZoom(viewport, content, media)
+      bar.insertBefore(navigation.toolbar, close)
+    }
   } catch (error) {
     content.textContent = '预览失败 · ' + (error instanceof Error ? error.message : String(error))
   }
