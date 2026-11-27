@@ -8,6 +8,7 @@ import FileName from '../src/ui/FileName'
 import { desktopWorkspace } from '../src/io/tauri'
 import { enableButtonClickTolerance } from '../src/core/buttonClickTolerance'
 import WorkspaceSelectionPreview from '../src/ui/WorkspaceSelectionPreview'
+import ViewerFrame from '../src/ui/ViewerFrame'
 import { customizeArchivePreview } from '../src/ui/archivePreview'
 
 function tapToolbar(button: HTMLButtonElement) {
@@ -17,6 +18,27 @@ function tapToolbar(button: HTMLButtonElement) {
       pointerType: 'mouse', isPrimary: true, pointerId: 1, buttons: type === 'pointerdown' ? 1 : 0 })))
   }
 }
+
+it.each(['document.typ', 'document.typst', 'artwork.PSD', 'layout.idml'])('offers external opening for %s without loading the preview frame', (name) => {
+  const host = document.createElement('div')
+  const onSettled = vi.fn()
+  const prepare = vi.spyOn(desktopWorkspace, 'preparePreview')
+  document.body.append(host)
+  const dispose = render(() => createComponent(ViewerFrame, {
+    entry: { name, path: name, directory: false, markdown: false },
+    onClose: vi.fn(), onSaveHint: vi.fn(), onInteract: vi.fn(), onImageState: vi.fn(), onSettled, pdfOutlineOpen: false,
+  }), host)
+  try {
+    expect(host.querySelector('iframe')).toBeNull()
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('可以使用「打开方式」')
+    expect(onSettled).toHaveBeenCalledWith(false)
+    expect(prepare).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+    prepare.mockRestore()
+    host.remove()
+  }
+})
 
 it('cuts and copies from the multiselection preview on release', () => {
   const host = document.createElement('div')

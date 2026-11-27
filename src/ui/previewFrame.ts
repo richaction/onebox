@@ -360,6 +360,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       toolbar: false,
       search: false,
       ai: false,
+      drawing: { preferOfficial: false },
       zoomGestures: imagePreview && { wheel: false },
       image: imagePreview ? { handTool: true } : undefined,
       pdf: {

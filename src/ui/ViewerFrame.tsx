@@ -5,6 +5,9 @@ import { desktopWorkspace, type WorkspaceEntry } from '../io/tauri'
 import PreviewLoading from './PreviewLoading'
 import type { ImagePreviewAction, ImagePreviewState } from './previewImage'
 
+const unsupportedPreview = /\.(typ(?:st)?|ai|ait|psd|psb|abr|asl|csh|grd|pat|ase|aco|indd|indt|idml|icml|idms|inx|eps[fi]?|ps|fla|xfl|xd)$/iu
+const unavailableMessage = '无法预览此文件。可以使用「打开方式」。'
+
 export default function ViewerFrame(props: {
   root?: string
   entry: WorkspaceEntry
@@ -16,16 +19,17 @@ export default function ViewerFrame(props: {
   onImageState: (state?: ImagePreviewState) => void
   pdfOutlineOpen: boolean
 }) {
+  const name = props.entry.name
+  const supported = !unsupportedPreview.test(name)
   let frame!: HTMLIFrameElement
-  const [loading, setLoading] = createSignal(true)
+  const [loading, setLoading] = createSignal(supported)
   const [visible, setVisible] = createSignal(false)
-  const [error, setError] = createSignal('')
+  const [error, setError] = createSignal(supported ? '' : unavailableMessage)
   let disposed = false
   let connected = false
   let sent = false
   let savingArchiveEntry = false
   let url: string | undefined
-  const name = props.entry.name
 
   createEffect(() => props.imageCommand, (command) => {
     if (command && visible()) frame.contentWindow?.postMessage({ type: 'onebox-preview-image-command', ...command }, '*')
@@ -36,6 +40,10 @@ export default function ViewerFrame(props: {
   }, { defer: true })
 
   onSettled(() => {
+    if (!supported) {
+      props.onSettled(false)
+      return
+    }
     const timeout = setTimeout(() => finish('预览未能加载'), 30000)
     const finish = (message = '') => {
       clearTimeout(timeout)
@@ -82,7 +90,7 @@ export default function ViewerFrame(props: {
           break
         case 'onebox-preview-error':
           props.onImageState()
-          finish('无法预览此文件。可以使用「打开方式」。')
+          finish(unavailableMessage)
           break
         case 'onebox-preview-close':
           props.onClose()
@@ -112,9 +120,11 @@ export default function ViewerFrame(props: {
 
   return (
     <div class={['preview-surface', { 'preview-surface-text': /\.txt$/iu.test(props.entry.name) }]}>
-      <iframe ref={frame} title={`只读预览：${props.entry.name}`}
-        class={{ 'preview-frame-ready': visible() }} inert={!visible()}
-        src={`${import.meta.env.BASE_URL}preview-frame.html`} sandbox="allow-scripts allow-same-origin" />
+      <Show when={supported}>
+        <iframe ref={frame} title={`只读预览：${name}`}
+          class={{ 'preview-frame-ready': visible() }} inert={!visible()}
+          src={`${import.meta.env.BASE_URL}preview-frame.html`} sandbox="allow-scripts allow-same-origin" />
+      </Show>
       <Show when={loading()}><PreviewLoading label="正在打开预览…" /></Show>
       <Show when={error()}>
         <div class="preview-status" role="status">
